@@ -1,0 +1,52 @@
+Causal-TS Third-Party Code Notice
+==================================
+
+This project contains modified code from the following open source packages.
+Original authorship and licensing are preserved in per-file headers.
+
+tigramite
+---------
+  Author: Jakob Runge <jakob@jakob-runge.com>
+  License: GNU General Public License v3.0
+  URL: https://github.com/jakobrunge/tigramite
+
+  Modified files:
+    - causalts/plotting/_core.py
+    - causalts/ci_tests/cmiknn.py
+    - causalts/ci_tests/independence_tests_base.py
+    - causalts/ci_tests/parcorr.py
+    - causalts/synthetic_data/structural_causal_processes.py
+
+  All modifications made by Mohammad Fesanghary (July 28, 2025).
+
+causal-learn
+------------
+  License: MIT License
+  URL: https://github.com/py-why/causal-learn
+
+  Modified files:
+    - causalts/cdnots/meek.py
+    - causalts/cdnots/phase3_utils.py
+    - causalts/cdnots/skeleton_discovery.py
+    - causalts/cdnots/uc_sepset.py
+
+  All modifications made by Mohammad Fesanghary (July 28, 2025).
+
+lges
+----
+  Authors: Juan L. Gamella, Adiba Ejaz, Elias Bareinboim
+  License: BSD-3-Clause
+  URL: https://github.com/CausalAILab/lges
+
+  Modified files:
+    - causalts/lges.py
+
+  All modifications made by Mohammad Fesanghary (2026).
+
+Licensing Note
+--------------
+Because this project includes modified GPL-3.0 code from tigramite, the
+combined work is distributed under GPL-3.0-or-later. The MIT-licensed
+components from causal-learn and the BSD-3-Clause code from lges are
+compatible with this license. Original Bloomberg code is also distributed
+under GPL-3.0-or-later.

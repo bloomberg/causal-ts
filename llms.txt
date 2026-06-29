@@ -1,0 +1,345 @@
+# Causal-TS
+
+> A Python framework for causal discovery in nonstationary time series data. Implements CDNOTS, CEDAR, and GRACE algorithms with GPU acceleration via PyTorch. Install with `pip install causalts`.
+
+## Algorithms
+
+- **CDNOTS** — Constraint-based causal discovery for nonstationary time series. Detects nonstationarity via a time-index variable C. Fast with linear CI tests, works well for small-to-medium dimensionality.
+- **CEDAR** — Causal Edge Discovery for AutoRegressive processes. Uses lag selection (distance correlation) followed by pairwise CI testing. Most scalable algorithm (linear in d). Includes MCI pruning.
+- **GRACE** — Hybrid method: CDNOTS skeleton + neural gated refinement with L0 regularization (Hard Concrete gates). Best for high-dimensional data (d >= 20). Automatically prunes false positives.
+- **GRACE-SS** — GRACE with stability selection. Sweeps L0 penalties and keeps edges that appear consistently. Experimental — not suitable for large dimensions, use `run_cdnots_gated()` (GRACE) instead for high-d problems.
+
+## CLI Usage
+
+After `pip install`, the `causal-ts` command is available:
+
+```bash
+# Generate synthetic data with known ground truth
+causal-ts -s 42 generate --dataset ex1 -T 500
+
+# Run causal discovery (choose algorithm and CI test with -a / --ci-test)
+causal-ts -s 42 -d cpu discover data.csv -a cdnots --ci-test parcorr-gpu --max-lag 3
+causal-ts -s 42 -d cpu discover data.csv -a cdnots --ci-test splitkci --max-lag 3
+causal-ts -s 42 -d cpu discover data.csv -a cdnots --ci-test dfcit --max-lag 3
+causal-ts -s 42 -d cpu discover data.csv -a cdnots --ci-test sigkci --max-lag 3
+causal-ts -s 42 -d cpu discover data.csv -a cedar --lag-method dcor --max-lag 5
+
+# Print CI test selection guide
+causal-ts ci-test-info
+causal-ts -s 42 discover data.csv -a grace --max-lag 3 --gate-threshold 0.5
+causal-ts -s 42 discover data.csv -a grace-ss --max-lag 3 --stability-threshold 0.6  # experimental
+
+# Evaluate discovered graph against ground truth
+causal-ts evaluate ground_truth.npy discovered_graph.npy
+
+# Plot a saved graph
+causal-ts plot graph.npy --type network --var-names X0,X1,X2,X3,X4
+```
+
+Global options: `-o` output dir, `-s` seed, `-d` device (cpu/cuda/mps), `-v` verbose, `-q` quiet.
+
+## Python API
+
+### CDNOTS
+
+```python
+from causalts import run_cdnots
+from causalts.ci_tests.parcorr_gpu import ParCorrGPU
+import pandas as pd, numpy as np
+
+df = pd.read_csv("data.csv")
+ci_test = ParCorrGPU(np.zeros((2, 2)), device="cpu")
+
+result = run_cdnots(
+    df=df,
+    indep_test=ci_test,
+    num_lags=3,           # max lag
+    include_C=False,      # True to detect nonstationarity via C node
+    alpha=0.01,           # 0.01 recommended (0.05 produces noisier skeletons)
+    stable=True,
+    show_progress=True,
+    return_pvals=False,   # True to populate result.pvalue_matrix (uses more memory)
+)
+# result.cg_tig: numpy array shape (n_vars, n_vars, num_lags+1), 1=edge exists
+# result.graph: tigramite-format graph
+# result.plot()
+# result.pvalue_matrix: only populated when return_pvals=True
+```
+
+Parameters: `num_lags` (int), `lag_list` (list of ints, overrides num_lags), `include_C` (bool), `alpha` (float, recommended 0.01), `stable` (bool, default True), `max_degree` (int), `max_combinations` (int or None, default 20 — caps conditioning-set combinations per pair to prevent combinatorial explosion at hub nodes), `priority` (int 1–4), `return_pvals` (bool, default False).
+
+### CDNOTS+
+
+CDNOTS+ adds a two-phase MCI skeleton to CDNOTS. Phase 1 finds parent supersets; phase 2 re-tests each edge conditioning only on discovered parents instead of all neighbours. This restores statistical power at high-degree hub nodes.
+
+**When to use:** Scale-free (hub-structured) graphs benefit strongly (+0.12 mean F1 gain). Erdős–Rényi and small-world graphs show no gain. `alpha=0.01` is required — at `alpha=0.05`, CDNOTS+ is net negative.
+
+```python
+from causalts import run_cdnots_plus
+from causalts.ci_tests.parcorr_gpu import ParCorrGPU
+
+ci_test = ParCorrGPU(np.zeros((2, 2)), device="cpu")
+
+result = run_cdnots_plus(
+    df=df,
+    indep_test=ci_test,
+    num_lags=3,
+    include_C=False,
+    alpha=0.01,           # required — 0.05 makes CDNOTS+ worse
+    show_progress=True,
+)
+# Same CdnotsResult interface as run_cdnots
+```
+
+Parameters: same as `run_cdnots` plus `max_conds_py` and `max_conds_px` (max parents of Y/X in MCI phase 2).
+
+### CEDAR
+
+```python
+from causalts import run_cedar
+from causalts.ci_tests.parcorr_gpu import ParCorrGPU
+
+ci_test = ParCorrGPU(np.zeros((2, 2)), device="cpu")
+
+result = run_cedar(
+    df=df,
+    ci_test=ci_test,
+    max_lag=5,
+    lag_method="partial_dcor",  # or: dcor, pearson, granger
+    alpha_cond1=0.05,
+    alpha_cond2=0.05,
+    normalize="minmax",        # or "zscore", None
+    prune=True,
+    multi_lag=True,
+    multi_lag_keep="first",
+)
+# result.cg_tig: shape (n_vars, n_vars, max_lag+1)
+# result.val_matrix: edge strength
+# result.plot()
+# result.plot_lag_importance()
+```
+
+### GRACE
+
+```python
+from causalts.grace import run_cdnots_gated, run_stability_selection
+
+# Single-shot gated refinement
+G_hat, gate_values, info = run_cdnots_gated(
+    df=df,
+    max_lag=3,
+    gate_threshold=0.5,
+    device="cpu",       # or "cuda", "mps"
+    model_seed=42,
+)
+
+# With stability selection (more robust)
+G_hat, scores, selector = run_stability_selection(
+    df=df,
+    max_lag=3,
+    use_ci_skeleton=True,
+    stability_threshold=0.6,
+    device="cpu",
+    model_seed=42,
+)
+# G_hat: binary numpy array shape (n_vars, n_vars, max_lag+1)
+```
+
+## CI Tests — Choosing the Right Test
+
+All CI tests are in `causalts.ci_tests`. Run `causal-ts ci-test-info` for the full selection guide.
+The choice of CI test is the most important decision — it determines speed, accuracy, and what relationships can be detected.
+
+Benchmarks below come from CDNOTS on ex1 (5-var nonlinear), ex2 (6-var linear), ex3 (11-var linear).
+
+### ParCorrGPU — Partial Correlation (Linear only)
+
+```python
+from causalts.ci_tests.parcorr_gpu import ParCorrGPU
+ci = ParCorrGPU(np.zeros((2, 2)), device="cpu")
+```
+
+- **Detects:** Linear relationships only. Blind to nonlinear effects.
+- **Speed:** Near-instant. Analytic p-value, no permutation.
+- **Use when:** Data is approximately linear, or as a fast first pass at any scale.
+
+### GCMIGPU — Gaussian Copula + Partial Correlation (Monotone nonlinear)
+
+```python
+from causalts.ci_tests.gcmi_gpu import GCMIGPU
+ci = GCMIGPU(np.zeros((2, 2)), device="cpu")
+```
+
+- **Detects:** Linear and monotone nonlinear relationships. Cannot detect non-monotone (e.g. Y=X² centred).
+- **Note:** Despite the name, GCMI is NOT a true mutual information estimator. It rank-normalises variables to Gaussian marginals then runs partial correlation.
+- **Speed:** Near-instant. Analytic p-value.
+- **Use when:** Mild nonlinearity or skewed/heavy-tailed distributions; speed is critical.
+
+### KCIGPU — Kernel CI Test (Nonlinear)
+
+```python
+from causalts.ci_tests.kci_gpu import KCIGPU
+ci = KCIGPU(np.zeros((2, 2)), device="cpu", approx="hbe")
+```
+
+- **Detects:** Arbitrary nonlinear dependencies. Uses all T points — no split bias.
+- **Speed:** O(T³). Slow at large T. GPU strongly recommended.
+- **Key params:** `approx='hbe'` (default, 3-moment gamma), `'gamma'` (2-moment), `'perm'` (permutation).
+- **Use when:** General nonlinear data; most robust to near-collinear conditioning sets.
+
+### SplitKCIGPU — Bias-Controlled Kernel CI (Nonlinear, fast)
+
+```python
+from causalts.ci_tests.splitkci_gpu import SplitKCIGPU
+ci = SplitKCIGPU(np.zeros((2, 2)), device="cpu", pval_method="gamma")
+```
+
+- **Detects:** Arbitrary nonlinear dependencies. Splits data: trains KRR on one half, tests on the other — eliminates KRR overfitting bias.
+- **Speed:** 10–20× faster than KCI. Good speed/F1 tradeoff.
+- **Key params:** `split_ratio=0.5`, `pval_method='gamma'` (default) or `'wild_bootstrap'`.
+- **Limitation:** Uses n/2 points for testing — power improves with larger T. Can be noisy under near-collinear conditioning.
+- **Use when:** Nonlinear data with sufficient samples. Best nonlinear speed/accuracy tradeoff.
+
+### DFCITGPU — Distribution-Free CI Test (Nonlinear, highest recall)
+
+```python
+from causalts.ci_tests.dfcit_gpu import DFCITGPU
+ci = DFCITGPU(np.zeros((2, 2)), device="cpu", n_perm=500)
+```
+
+- **Detects:** Arbitrary dependencies via empirical conditional CDFs. Fully distribution-free. Handles mixed discrete-continuous columns natively.
+- **Speed:** O(T²) per permutation. Moderate.
+- **Key params:** `n_perm=500`, `alpha=0.05`, `early_stop=True` (Wilson-score stopping), `whiten_z=False`, `residualize=False`.
+- **Limitation:** False-positive rate can rise under near-collinear conditioning at large T.
+- **Use when:** Nonlinear data when recall is the priority; distribution-free guarantee needed.
+
+### SigKCIGPU — Signature Kernel CI Test (Path-space / SDEs)
+
+```python
+from causalts.ci_tests.sigkci_gpu import SigKCIGPU
+ci = SigKCIGPU(np.zeros((2, 2)), device="cpu", sigma=2.0, time_delay_dim=2)
+```
+
+- **Detects:** Dependencies in path-space via signature kernels (Goursat PDE solver). Captures temporal trajectory structure beyond pointwise correlations.
+- **Speed:** Fast after vectorisation — O(T² × L²) where L is path length (typically 2–3). ~0.002–0.008s/test.
+- **Benchmarks:** ex1 F1=0.364–0.526 depending on params. Tends to over-discover on tabular lag-embedded data.
+- **Key params:** `sigma=2.0`, `time_delay_dim=2` (path window size), `approx='gamma'`, `lamda=0.001`.
+- **Use when:** Data comes from continuous-time stochastic processes or SDEs where the *path* of a variable matters, not just its pointwise value.
+
+### RCOTGPU — Randomized Conditional Correlation (Nonlinear, fast)
+
+```python
+from causalts.ci_tests.pyRcot_gpu import RCOTGPU
+ci = RCOTGPU(np.zeros((2, 2)), device="cpu")
+```
+
+- **Detects:** Nonlinear dependencies via Random Fourier Features approximation to kernel CI.
+- **Speed:** Fast. At T≤300, auto-averages 5 RFF draws to reduce variance.
+- **Limitation:** RFF approximation quality depends on bandwidth; can be inconsistent on strongly nonlinear data.
+- **Use when:** Fast nonlinear option; runtime-constrained settings.
+
+### CMIknnGPU — k-NN Conditional Mutual Information (Nonlinear, accurate)
+
+```python
+from causalts.ci_tests.cmiknn_gpu import CMIknnGPU
+ci = CMIknnGPU(np.zeros((2, 2)), device="cpu", k=0.2, early_stop=True)
+```
+
+- **Detects:** Arbitrary nonlinear dependencies via k-NN density estimation. No bandwidth tuning.
+- **Speed:** O(T²) k-NN search. Slow at large T.
+- **Use when:** Nonparametric baseline; sensitive to many dependency types.
+
+### Decision Guide
+
+```
+Is data approximately linear?
+  YES → parcorr-gpu (instant). Mild nonlinearity / skewed? → gcmi (instant).
+  NO  ↓
+
+Need speed or have limited compute?
+  YES → splitkci (best speed/F1 tradeoff) or rcot (fastest nonlinear)
+  NO  ↓
+
+High collinearity in conditioning sets?
+  YES → kci (uses all data, most robust)
+  NO  → splitkci or dfcit (high recall)
+
+Special cases:
+  Stochastic processes / SDEs → sigkci
+  Runtime-constrained         → parcorr-gpu or gcmi
+```
+
+**Key tradeoffs:**
+- Large variable sets: kernel tests lose power as conditioning sets grow; parcorr-gpu and gcmi scale better.
+- Weak edges: nonlinear tests need more data than linear tests to detect low-coefficient edges.
+- Near-collinear conditioning: kci is most robust; dfcit can over-discover; splitkci can be noisy.
+- gcmi is NOT a true MI estimator: cannot detect non-monotone relationships.
+
+GPU tests accept `device="cpu"/"cuda"/"mps"`. CDNOTS and CEDAR overwrite CI test data internally, so pass placeholder data at construction: `ParCorrGPU(np.zeros((2,2)), device="cpu")`.
+
+## Choosing an Algorithm
+
+- **CDNOTS** — Constraint-based discovery for time series. Works well for d < 20 variables. Use `alpha=0.01` for best results.
+- **CDNOTS+** (`run_cdnots_plus`) — Adds MCI two-phase skeleton. Strongly recommended for scale-free (hub-structured) graphs: +0.12 mean F1 on scale-free vs plain CDNOTS. Neutral or slightly negative on Erdős–Rényi and small-world. Requires `alpha=0.01`. At `alpha=0.05`, CDNOTS+ is net negative.
+- **CEDAR** — Most scalable algorithm. Linear complexity in d. Best when you have many variables with pairwise relationships. Includes lag selection to find the most important lags automatically.
+- **GRACE** (`run_cdnots_gated`) — Use for d >= 10-20 variables where CDNOTS produces too many false positives. The neural gated refinement prunes spurious edges. Recommended over GRACE-SS for practical use.
+- **GRACE-SS** (`run_stability_selection`) — Experimental. Multi-lambda sweep for more robust edge selection, but computationally expensive and not suitable for large dimensions. Use GRACE instead for high-d.
+- **Quick rule:** d < 10 → CDNOTS or CDNOTS+. d = 10-20 → CDNOTS+ (if hub-structured) or GRACE. d > 20 → GRACE or CEDAR.
+
+### CDNOTS vs CDNOTS+
+
+| Graph type | Recommendation | Expected ΔF1 |
+|---|---|---|
+| Scale-free / hub-structured (max/mean degree > 2.5) | **CDNOTS+** | +0.08 to +0.20 |
+| Erdős–Rényi (random uniform) | CDNOTS | ≈ 0 or negative |
+| Small-world (clustered ring) | CDNOTS | ≈ 0 |
+| Unknown topology | Run CDNOTS first; if max/mean degree > 2.5 → CDNOTS+ | — |
+
+The improvement from CDNOTS+ comes from **recovering true edges** (↑ TPR), not removing false ones. At hub nodes with degree 22+, PC-style conditioning at depth 5 generates C(21,5) = 20,000+ conditioning sets per pair, collapsing statistical power and causing true edges to be wrongly removed. CDNOTS+ MCI phase re-tests with parent-based conditioning sets (size 2–5), restoring power.
+
+## Synthetic Data
+
+```python
+from causalts.synthetic_data.synthetic_datasets import load_dataset, SCPGraphGenerator
+
+# Built-in datasets: ex1 (5 vars, nonlinear), ex2 (6 vars), ex3 (11 vars), henon (chain)
+result = load_dataset("ex1", seed=42, T=500)
+df, ground_truth = result["df"], result["ground_truth"]
+
+# Random generation
+gen = SCPGraphGenerator(n_vars=10, max_lag=3, density="sparse")
+result = gen.sample(seed=42, T=1000)
+df, ground_truth = result["df"], result["ground_truth"]
+```
+
+## Evaluation and Plotting
+
+```python
+from causalts.grace import evaluate_graph
+from causalts.plotting._core import plot_graph, plot_time_series_graph
+from causalts.plotting.compare import compare_graphs, plot_metrics_summary
+
+# Evaluate: returns dict with Precision, Recall, F1, SHD, TPR, FPR, pair-level metrics
+metrics = evaluate_graph(G_estimated, G_true, exclude_self_loops=False)
+
+# Plot
+plot_graph(graph, var_names=["X0", "X1", "X2"], node_layout="circular")
+plot_time_series_graph(graph, var_names=["X0", "X1", "X2"])
+compare_graphs(G_true, G_estimated, var_names=["X0", "X1", "X2"])
+plot_metrics_summary(G_true, G_estimated)
+```
+
+## Graph Format
+
+All algorithms output graphs as numpy arrays with shape `(n_vars, n_vars, max_lag+1)` where `graph[i, j, tau]` = 1 means variable i at time t-tau causes variable j at time t. Lag index 0 = contemporaneous.
+
+## Practical Tips and Common Pitfalls
+
+- **MPS (Apple Silicon):** ParCorrGPU with `device="mps"` may fail on `linalg_lstsq` — use `device="cpu"` or set `PYTORCH_ENABLE_MPS_FALLBACK=1`. GRACE auto-detects and falls back.
+- **CDNOTS output includes C:** When `include_C=True`, the output graph has shape `(n_vars+1, n_vars+1, ...)`. The last row/column is the time-index variable C. For evaluation against ground truth, trim: `graph[:n_vars, :n_vars, :]`.
+- **Start simple:** Run ParCorrGPU first — it takes seconds. If the graph looks sparse and you suspect nonlinear effects, re-run with SplitKCI or DFCIT. Run `causal-ts ci-test-info` for a full decision guide.
+- **Significance level (alpha):** Use `alpha=0.01` as the default. At `alpha=0.05` the skeleton is noisier, and CDNOTS+ becomes net negative. For small samples (T < 300), consider `alpha=0.1` to improve recall. The CLI default is 0.05 for backward compatibility — override with `--alpha 0.01`.
+- **max_lag:** Setting this too high inflates the search space and increases false positives. Use domain knowledge. If unsure, start with max_lag=3-5 and increase if important lags are missed.
+- **Sample size vs variables:** As a rule of thumb, you need T >> d * max_lag for reliable results. With T=500 and d=5, max_lag=5, you have 500 samples for 25 possible lagged relationships — workable. With T=500 and d=20, max_lag=5, you have 500 samples for 400 relationships — use GRACE.
+- **Reproducibility:** Always pass `seed` (or `-s` in CLI). Both numpy and torch are seeded. GRACE additionally accepts `model_seed`.
+- **Caching:** CI tests support p-value caching via `cache_dir` parameter. Useful when re-running with different alpha or when iterating on analysis.

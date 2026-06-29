@@ -1,0 +1,592 @@
+/* ═══════════════════════════════════════════════════════════════
+   Causal-TS Custom Styles
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Brand color tokens ──────────────────────────────────────── */
+:root {
+  --ct-indigo:        #4B44B8;
+  --ct-indigo-light:  #6C63FF;
+  --ct-indigo-pale:   #EEEDF9;
+  --ct-teal:          #00B5AD;
+  --ct-amber:         #F59E0B;
+  --ct-text:          #1a1a2e;
+  --ct-text-muted:    #555577;
+  --ct-surface:       #F8F8FD;
+  --ct-shadow:        rgba(75, 68, 184, 0.10);
+  --ct-shadow-hover:  rgba(75, 68, 184, 0.18);
+}
+
+html[data-theme="dark"] {
+  --ct-indigo:        #7B74E0;
+  --ct-indigo-light:  #9D97F5;
+  --ct-indigo-pale:   #1e1b3a;
+  --ct-teal:          #00CEC9;
+  --ct-amber:         #FBB834;
+  --ct-text:          #E8E6FF;
+  --ct-text-muted:    #9990CC;
+  --ct-surface:       #16132b;
+  --ct-shadow:        rgba(0,0,0,0.3);
+  --ct-shadow-hover:  rgba(0,0,0,0.45);
+}
+
+/* ── Layout ──────────────────────────────────────────────────── */
+:root {
+  --pst-sidebar-secondary: 12rem;   /* right "On this page" sidebar */
+}
+
+.bd-sidebar-primary {
+  width: 22% !important;
+  min-width: 210px;
+}
+
+/* ── PyData theme color overrides ────────────────────────────── */
+:root {
+  --pst-color-primary:           var(--ct-indigo);
+  --pst-color-primary-highlight: var(--ct-indigo-light);
+  --pst-color-link:              var(--ct-indigo);
+  --pst-color-link-hover:        var(--ct-indigo-light);
+  --pst-color-accent:            var(--ct-teal);
+}
+
+/* ── Smooth scroll ───────────────────────────────────────────── */
+html { scroll-behavior: smooth; }
+
+/* ── Search box: hide platform-specific keyboard shortcut hint ── */
+.bd-search .search-button__kbd-shortcut {
+  display: none !important;
+}
+
+/* ── Navbar ──────────────────────────────────────────────────── */
+.bd-header .search-button-field {
+  max-width: 10rem;
+  font-size: 0.85rem;
+}
+
+.bd-header .navbar-header-items {
+  flex-wrap: nowrap;
+}
+
+.bd-header .navbar-nav li a {
+  white-space: nowrap;
+  font-size: 0.88rem;
+}
+
+.bd-header {
+  border-bottom: 2px solid var(--ct-indigo-pale);
+  backdrop-filter: blur(8px);
+}
+
+.navbar-brand img {
+  height: 34px;
+  width: auto;
+  border-radius: 8px;
+}
+
+/* Amber "TS" in navbar brand and hero h1 */
+.ct-logo-ts {
+  color: var(--ct-amber) !important;
+}
+
+/* ── Hero section ────────────────────────────────────────────── */
+.ct-hero {
+  background: linear-gradient(135deg, var(--ct-indigo) 0%, var(--ct-indigo-light) 100%);
+  color: white;
+  border-radius: 14px;
+  padding: 3rem 2.5rem;
+  margin: 0.5rem 0 0;
+  box-shadow: 0 12px 40px rgba(75, 68, 184, 0.30);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Subtle dot pattern overlay */
+.ct-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, rgba(255,255,255,0.08) 1px, transparent 1px);
+  background-size: 28px 28px;
+  pointer-events: none;
+}
+
+/* Two-column inner layout: icon left, text right */
+.ct-hero-inner {
+  display: flex;
+  align-items: center;
+  gap: 2.5rem;
+  position: relative;
+}
+
+.ct-hero-icon {
+  flex-shrink: 0;
+  width: 140px;
+  height: 140px;
+  border-radius: 22px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
+  object-fit: contain;
+}
+
+.ct-hero-text {
+  flex: 1;
+  text-align: left;
+}
+
+.ct-hero h1 {
+  font-size: 2.8rem;
+  font-weight: 800;
+  margin-bottom: 0.6rem;
+  color: white !important;
+  border: none !important;
+}
+
+.ct-hero p.tagline {
+  font-size: 1.1rem;
+  opacity: 0.92;
+  max-width: 560px;
+  margin: 0 0 1.8rem;
+  line-height: 1.7;
+}
+
+.ct-hero .btn-group {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+/* Responsive: stack vertically on small screens */
+@media (max-width: 680px) {
+  .ct-hero-inner {
+    flex-direction: column;
+    text-align: center;
+  }
+  .ct-hero-icon {
+    width: 100px;
+    height: 100px;
+  }
+  .ct-hero-text {
+    text-align: center;
+  }
+  .ct-hero p.tagline {
+    margin: 0 auto 1.5rem;
+  }
+  .ct-hero .btn-group {
+    justify-content: center;
+  }
+}
+
+.ct-btn {
+  display: inline-block;
+  padding: 0.62rem 1.6rem;
+  border-radius: 7px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  text-decoration: none !important;
+  transition: all 0.2s ease;
+  letter-spacing: 0.01em;
+}
+
+.ct-btn-primary {
+  background: white;
+  color: var(--ct-indigo) !important;
+  border: 2px solid white;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+.ct-btn-primary:hover {
+  background: var(--ct-indigo-pale);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+.ct-btn-secondary {
+  background: rgba(255,255,255,0.12);
+  color: white !important;
+  border: 2px solid rgba(255,255,255,0.55);
+  backdrop-filter: blur(4px);
+}
+
+.ct-btn-secondary:hover {
+  background: rgba(255,255,255,0.22);
+  border-color: white;
+  transform: translateY(-1px);
+}
+
+/* ── Stats strip ─────────────────────────────────────────────── */
+.ct-stats-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  background: var(--ct-surface);
+  border: 1px solid var(--ct-indigo-pale);
+  border-radius: 10px;
+  padding: 1.1rem 2rem;
+  margin: 1rem 0 0;
+  flex-wrap: wrap;
+}
+
+.ct-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 2rem;
+}
+
+.ct-stat-num {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: var(--ct-indigo);
+  line-height: 1.1;
+}
+
+.ct-stat-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--ct-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 0.15rem;
+}
+
+.ct-stat-div {
+  width: 1px;
+  height: 2.5rem;
+  background: var(--ct-indigo-pale);
+}
+
+/* ── sphinx-design card enhancements ────────────────────────── */
+.sd-card {
+  border: 1px solid var(--ct-indigo-pale) !important;
+  border-radius: 10px !important;
+  transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease !important;
+  background: var(--pst-color-background) !important;
+}
+
+.sd-card:hover {
+  box-shadow: 0 8px 24px var(--ct-shadow-hover) !important;
+  transform: translateY(-3px);
+}
+
+.sd-card.sd-card-hover:hover {
+  border-color: var(--ct-indigo) !important;
+  cursor: pointer;
+}
+
+.sd-card-header {
+  border-radius: 9px 9px 0 0 !important;
+  font-weight: 700;
+  padding: 0.7rem 1.1rem !important;
+}
+
+.sd-card-header.sd-bg-primary {
+  background: var(--ct-indigo) !important;
+  color: white !important;
+}
+
+.sd-card-body {
+  padding: 1rem 1.1rem !important;
+}
+
+.sd-card-footer {
+  background: var(--ct-surface) !important;
+  border-top: 1px solid var(--ct-indigo-pale) !important;
+  border-radius: 0 0 9px 9px !important;
+  padding: 0.6rem 1.1rem !important;
+  font-size: 0.85rem;
+}
+
+/* Quick pick cards */
+.ct-quickpick {
+  font-size: 0.92rem;
+}
+
+/* ── Inline icon colors ──────────────────────────────────────── */
+.sd-text-primary  { color: var(--ct-indigo)  !important; }
+.sd-text-secondary{ color: var(--ct-teal)    !important; }
+.sd-text-warning  { color: var(--ct-amber)   !important; }
+.sd-text-success  { color: #22c55e           !important; }
+.sd-text-danger   { color: #ef4444           !important; }
+
+/* ── Badge colours ───────────────────────────────────────────── */
+.sd-badge.sd-bg-primary,
+span.sd-badge.sd-bg-primary {
+  background-color: var(--ct-indigo) !important;
+}
+
+.sd-badge.sd-bg-secondary,
+span.sd-badge.sd-bg-secondary {
+  background-color: var(--ct-teal) !important;
+}
+
+/* ── Admonition overrides ────────────────────────────────────── */
+div.admonition,
+.admonition {
+  border-radius: 8px;
+  border-left-width: 4px;
+}
+
+.admonition.tip,   div.tip   { border-left-color: var(--ct-teal)   !important; }
+.admonition.note,  div.note  { border-left-color: var(--ct-indigo) !important; }
+.admonition.caution, div.caution { border-left-color: var(--ct-amber) !important; }
+.admonition.warning, div.warning { border-left-color: #ef4444       !important; }
+
+/* Admonition title weight */
+.admonition-title {
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+/* ── Code blocks ─────────────────────────────────────────────── */
+div[class*="highlight"] {
+  border-radius: 8px;
+  border: 1px solid var(--ct-indigo-pale);
+  overflow: hidden;
+}
+
+.highlight pre {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  padding: 1rem 1.1rem;
+}
+
+/* Language label chip on code blocks */
+div[class*="highlight"]::before {
+  display: block;
+  background: var(--ct-surface);
+  border-bottom: 1px solid var(--ct-indigo-pale);
+  padding: 0.25rem 0.9rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ct-text-muted);
+}
+
+div.highlight-python::before  { content: "Python"; }
+div.highlight-bash::before    { content: "Shell"; }
+div.highlight-json::before    { content: "JSON"; }
+div.highlight-rst::before     { content: "RST"; }
+
+.copybtn {
+  top: 0.4rem !important;
+  right: 0.5rem !important;
+  opacity: 0.6;
+}
+.copybtn:hover { opacity: 1; }
+
+/* ── Tables ──────────────────────────────────────────────────── */
+.bd-article-container table.docutils {
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+table.docutils {
+  border-collapse: collapse;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--ct-indigo-pale);
+  width: 100%;
+  font-size: 0.9rem;
+}
+
+table.docutils th {
+  background: var(--ct-indigo) !important;
+  color: white !important;
+  padding: 0.6rem 1rem;
+  font-weight: 600;
+}
+
+table.docutils td {
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--ct-indigo-pale);
+}
+
+table.docutils tr:last-child td { border-bottom: none; }
+
+table.docutils tr:nth-child(even) td {
+  background: var(--ct-surface);
+}
+
+/* ── Article: cap line length for readability (like sklearn/pandas) ──── */
+.bd-main .bd-content .bd-article-container {
+  max-width: 52rem;
+  flex: 1 1 0;
+  padding-inline: 2rem;
+}
+
+.bd-main .bd-content {
+  justify-content: flex-start;
+}
+
+/* Homepage needs full width for hero/grid sections */
+.bd-main .bd-content .bd-article-container:has(.ct-hero) {
+  max-width: 100%;
+}
+
+/* ── Section headings ────────────────────────────────────────── */
+h2 {
+  border-bottom: 2px solid var(--ct-indigo-pale);
+  padding-bottom: 0.4rem;
+  margin-top: 2.5rem;
+}
+
+/* ── Footer ──────────────────────────────────────────────────── */
+.bd-footer {
+  border-top: 2px solid var(--ct-indigo-pale);
+  margin-top: 2rem;
+}
+
+/* ── Sidebar active link ─────────────────────────────────────── */
+.bd-sidenav .current > a,
+.bd-sidenav .current > a:hover {
+  color: var(--ct-indigo) !important;
+  font-weight: 600;
+}
+
+/* ── Back-to-top button ──────────────────────────────────────── */
+.pst-back-to-top {
+  background: var(--ct-indigo) !important;
+  color: white !important;
+  border-radius: 50% !important;
+  box-shadow: 0 4px 12px var(--ct-shadow) !important;
+}
+
+/* ── Version switcher ────────────────────────────────────────── */
+.version-switcher__menu {
+  border: 1px solid var(--ct-indigo-pale) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 16px var(--ct-shadow) !important;
+}
+
+/* ── Responsive stats strip ──────────────────────────────────── */
+@media (max-width: 768px) {
+  .ct-stats-strip { gap: 0; padding: 0.9rem 1rem; }
+  .ct-stat { padding: 0 1rem; }
+  .ct-stat-num { font-size: 1.3rem; }
+  .ct-stat-div { height: 2rem; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Example Gallery — NetworkX-style thumbnail + tooltip overlay
+   ═══════════════════════════════════════════════════════════════ */
+
+.ct-gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: flex-start;
+}
+
+.ct-gallery-item {
+  position: relative;
+  box-sizing: border-box;
+  width: 180px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  box-shadow: 0 0 8px var(--ct-shadow);
+  background: var(--pst-color-background);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  text-decoration: none !important;
+  color: inherit !important;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.ct-gallery-item:hover {
+  border-color: var(--ct-indigo);
+  box-shadow: 0 0 12px var(--ct-shadow-hover);
+}
+
+.ct-gallery-item img {
+  max-height: 112px;
+  max-width: 160px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.ct-gallery-item .ct-gallery-title {
+  display: block;
+  margin-top: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ct-text);
+}
+
+/* ── Tooltip overlay (::before = backdrop, ::after = text) ─── */
+.ct-gallery-item::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  background: rgba(250, 250, 250, 0.92);
+  backdrop-filter: blur(3px);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.ct-gallery-item::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  inset: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--ct-text);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+  z-index: 2;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 7;
+  -webkit-box-orient: vertical;
+}
+
+.ct-gallery-item:hover::before,
+.ct-gallery-item:hover::after {
+  opacity: 1;
+}
+
+/* ── Dark mode ──────────────────────────────────────────────── */
+html[data-theme="dark"] .ct-gallery-item::before {
+  background: rgba(22, 19, 43, 0.92);
+}
+
+html[data-theme="dark"] .ct-gallery-item img {
+  opacity: 0.9;
+}
+
+/* ── Responsive ─────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .ct-gallery {
+    justify-content: center;
+  }
+  .ct-gallery-item {
+    width: 150px;
+  }
+  .ct-gallery-item img {
+    max-height: 90px;
+    max-width: 130px;
+  }
+}
+
+/* ── Accessibility: reduced motion ──────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .ct-gallery-item::before,
+  .ct-gallery-item::after {
+    transition: none;
+  }
+}
