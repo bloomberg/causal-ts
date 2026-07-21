@@ -8,14 +8,14 @@
 
 ## About the Project
 
-Causal-TS is a Python framework for causal discovery in time series data. It implements four discovery algorithms and eight GPU-accelerated conditional independence tests, with built-in visualization and evaluation tools.
+Causal-TS is a Python framework for causal discovery in time series data. It implements four discovery algorithms and eight GPU-accelerated conditional independence tests, along with built-in visualization and evaluation tools.
 
 **Algorithms:**
 
-- **CDNOTS** — Constraint-based discovery handling nonstationarity via a time-index node.
-- **CDNOTS+** — PCMCI+-style two-phase skeleton (MCI conditioning) for improved precision on dense graphs.
+- **CD-NOTS** — Constraint-based discovery handling nonstationarity via a time-index node.
+- **CD-NOTS+** — PCMCI+-style two-phase skeleton (MCI conditioning) for improved precision on dense graphs.
 - **CEDAR** — Scalable pairwise discovery using minimum-lag selection. O(d²) complexity.
-- **GRACE** — Hybrid: CDNOTS skeleton + neural gated refinement with L0 regularization for high-dimensional data.
+- **GRACE** — Hybrid: CD-NOTS skeleton + neural gated refinement with L0 regularization for high-dimensional data.
 
 **CI Tests:** Run `causal-ts ci-test-info` for a full selection guide.
 
@@ -64,7 +64,7 @@ from causalts.plotting import compare_graphs
 data = load_dataset("ex1", seed=42, T=500)
 df, ground_truth = data["df"], data["ground_truth"]
 
-# 2. Run CDNOTS causal discovery
+# 2. Run CD-NOTS causal discovery
 ci_test = SplitKCIGPU(np.zeros((2, 2)), device="cpu")
 res = run_cdnots(
     df=df, indep_test=ci_test, num_lags=data["max_lag"],
@@ -110,13 +110,13 @@ Project Link:
 
 ## Acknowledgements
 
-We thank the open-source contributors to tigramite and causal-learn whose implementations informed parts of Causal-TS’s design. This template was adapted from [Best-README-Template](https://github.com/othneildrew/Best-README-Template).
+We thank the open source contributors to Tigramite and causal-learn whose implementations informed parts of Causal-TS’s design. This template was adapted from [Best-README-Template](https://github.com/othneildrew/Best-README-Template).
 
 ## Citations
 
 If you use causal-ts in your research, please cite the following papers:
 
-1. Agathe Sadeghi, Achintya Gopal, Mohammad Fesanghary, "Causal Discovery from Nonstationary Time Series." *International Journal of Data Science and Analytics*, 19, pp. 33–59, 2025. [doi:10.1007/s41060-024-00679-7](https://doi.org/10.1007/s41060-024-00679-7)
+1. Agathe Sadeghi, Achintya Gopal, Mohammad Fesanghary, "Causal Discovery from Nonstationary Time Series." *International Journal of Data Science and Analytics*, 19, pp. 33-59, 2025. [doi:10.1007/s41060-024-00679-7](https://doi.org/10.1007/s41060-024-00679-7)
 
 2. Mohammad Fesanghary, Achintya Gopal, "Efficient Causal Discovery for Autoregressive Time Series." arXiv preprint [arXiv:2507.07898](https://arxiv.org/abs/2507.07898), 2025.
 
@@ -128,7 +128,7 @@ BibTeX entries:
   author={Sadeghi, Agathe and Gopal, Achintya and Fesanghary, Mohammad},
   journal={International Journal of Data Science and Analytics},
   volume={19},
-  pages={33--59},
+  pages={33-59},
   year={2025},
   publisher={Springer},
   doi={10.1007/s41060-024-00679-7}
@@ -139,5 +139,6 @@ BibTeX entries:
   author={Fesanghary, Mohammad and Gopal, Achintya},
   journal={arXiv preprint arXiv:2507.07898},
   year={2025}
+  doi={10.48550/arXiv.2507.07898}
 }
 ```
