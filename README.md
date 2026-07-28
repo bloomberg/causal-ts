@@ -25,7 +25,7 @@ Causal-TS is a Python framework for causal discovery in time series data. It imp
 | `gcmi` | Monotone nonlinear | instant |
 | `splitkci` | Nonlinear (kernel) | fast |
 | `rcot` | Nonlinear (RFF) | fast |
-| `sigkci` | Path-space (signature) | moderate |
+| `linsig` | Path-space (signature) | moderate |
 | `kci` | Nonlinear (kernel) | slow |
 | `dfcit` | Distribution-free | moderate |
 | `cmiknn-gpu` | Nonparametric (k-NN) | slow |
@@ -116,29 +116,58 @@ We thank the open source contributors to Tigramite and causal-learn whose implem
 
 If you use causal-ts in your research, please cite the following papers:
 
-1. Agathe Sadeghi, Achintya Gopal, Mohammad Fesanghary, "Causal Discovery from Nonstationary Time Series." *International Journal of Data Science and Analytics*, 19, pp. 33-59, 2025. [doi:10.1007/s41060-024-00679-7](https://doi.org/10.1007/s41060-024-00679-7)
+1. **Causal-TS: A Python Library for Causal Discovery in High-Dimensional and Nonstationary Time Series**
+   Mohammad Fesanghary
+   arXiv preprint [arXiv:2607.24673](https://arxiv.org/abs/2607.24673), 2026.
 
-2. Mohammad Fesanghary, Achintya Gopal, "Efficient Causal Discovery for Autoregressive Time Series." arXiv preprint [arXiv:2507.07898](https://arxiv.org/abs/2507.07898), 2025.
+2. **CEDAR: Causal Edge Discovery for Autoregressive Processes**
+   Mohammad Fesanghary, Achintya Gopal
+   arXiv preprint [arXiv:2607.20696](https://arxiv.org/abs/2607.20696), 2026.
 
-BibTeX entries:
+3. **GRACE: Gated Refinement for Accurate Causal Edge Discovery in High-Dimensional Time Series**
+   Mohammad Fesanghary, Abhinav Havaldar
+   arXiv preprint [arXiv:2606.23880](https://arxiv.org/abs/2606.23880), 2026.
+
+4. **Causal Discovery from Nonstationary Time Series**
+   Agathe Sadeghi, Achintya Gopal, Mohammad Fesanghary
+   *International Journal of Data Science and Analytics*, 19, pp. 33–59, 2025.
+   [doi:10.1007/s41060-024-00679-7](https://doi.org/10.1007/s41060-024-00679-7)
+
+<details>
+<summary>BibTeX entries</summary>
 
 ```bibtex
+@article{fesanghary2026causalts,
+  title={Causal-TS: A Python Library for Causal Discovery in High-Dimensional and Nonstationary Time Series},
+  author={Fesanghary, Mohammad},
+  journal={arXiv preprint arXiv:2607.24673},
+  year={2026}
+}
+
+@article{fesanghary2026cedar,
+  title={CEDAR: Causal Edge Discovery for Autoregressive Processes},
+  author={Fesanghary, Mohammad and Gopal, Achintya},
+  journal={arXiv preprint arXiv:2607.20696},
+  year={2026}
+}
+
+@article{fesanghary2026grace,
+  title={GRACE: Gated Refinement for Accurate Causal Edge Discovery in High-Dimensional Time Series},
+  author={Fesanghary, Mohammad and Havaldar, Abhinav},
+  journal={arXiv preprint arXiv:2606.23880},
+  year={2026}
+}
+
 @article{sadeghi2025cdnots,
   title={Causal Discovery from Nonstationary Time Series},
   author={Sadeghi, Agathe and Gopal, Achintya and Fesanghary, Mohammad},
   journal={International Journal of Data Science and Analytics},
   volume={19},
-  pages={33-59},
+  pages={33--59},
   year={2025},
   publisher={Springer},
   doi={10.1007/s41060-024-00679-7}
 }
-
-@article{fesanghary2025sypi,
-  title={Efficient Causal Discovery for Autoregressive Time Series},
-  author={Fesanghary, Mohammad and Gopal, Achintya},
-  journal={arXiv preprint arXiv:2507.07898},
-  year={2025}
-  doi={10.48550/arXiv.2507.07898}
-}
 ```
+
+</details>
