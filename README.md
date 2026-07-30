@@ -15,10 +15,10 @@ Causal-TS is a Python framework for causal discovery in time series data. It imp
 
 **Algorithms:**
 
-- **CD-NOTS** — Constraint-based discovery handling nonstationarity via a time-index node.
-- **CD-NOTS+** — PCMCI+-style two-phase skeleton (MCI conditioning) for improved precision on dense graphs.
+- **CDNOTS** — Constraint-based discovery handling nonstationarity via a time-index node.
+- **CDNOTS+** — PCMCI+-style two-phase skeleton (MCI conditioning) for improved precision on dense graphs.
 - **CEDAR** — Scalable pairwise discovery using minimum-lag selection. O(d²) complexity.
-- **GRACE** — Hybrid: CD-NOTS skeleton + neural gated refinement with L0 regularization for high-dimensional data.
+- **GRACE** — Hybrid: CDNOTS skeleton + neural gated refinement with L0 regularization for high-dimensional data.
 
 **CI Tests:** Run `causal-ts ci-test-info` for a full selection guide.
 
@@ -67,7 +67,7 @@ from causalts.plotting import compare_graphs
 data = load_dataset("ex1", seed=42, T=500)
 df, ground_truth = data["df"], data["ground_truth"]
 
-# 2. Run CD-NOTS causal discovery
+# 2. Run CDNOTS causal discovery
 ci_test = SplitKCIGPU(np.zeros((2, 2)), device="cpu")
 res = run_cdnots(
     df=df, indep_test=ci_test, num_lags=data["max_lag"],
