@@ -1,12 +1,15 @@
 # Causal-TS
 
 [![Release](https://img.shields.io/github/v/release/bloomberg/causal-ts?display_name=tag)](CHANGELOG.md)
+[![Documentation](https://readthedocs.org/projects/causal-ts/badge/?version=latest)](https://causal-ts.readthedocs.io/en/latest/)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/bloomberg/causal-ts/badge)](https://scorecard.dev/viewer/?uri=github.com/bloomberg/causal-ts)
 [![Lint](https://github.com/bloomberg/causal-ts/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/marketplace/actions/super-linter)
 [![Tests](https://github.com/bloomberg/causal-ts/actions/workflows/test.yml/badge.svg)](https://github.com/bloomberg/causal-ts/actions/workflows/test.yml)
 [![Contributor-Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-fbab2c.svg)](CODE_OF_CONDUCT.md)
 
 ## About the Project
+
+📚 **[Full documentation is on Read the Docs](https://causal-ts.readthedocs.io/en/latest/)** — algorithm deep-dives, CI test guide, CLI reference, and worked example notebooks.
 
 Causal-TS is a Python framework for causal discovery in time series data. It implements four discovery algorithms and eight GPU-accelerated conditional independence tests, along with built-in visualization and evaluation tools.
 

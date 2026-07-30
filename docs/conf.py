@@ -63,7 +63,7 @@ html_favicon = "_static/img/favicon_.png"
 html_show_sourcelink = False
 
 html_theme_options = {
-    "announcement": "🚀 Causal-TS v0.17 released — CEDAR, partial_dcor lag selection, C-node nonstationarity support, and 20+ example notebooks. "
+    "announcement": "🚀 Causal-TS v0.25 — four discovery algorithms, eight GPU-accelerated CI tests, and 20+ example notebooks. "
     "<a href='getting_started/index.html'>Get started →</a>",
     "logo": {
         "text": "Causal-TS",

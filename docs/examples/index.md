@@ -18,7 +18,7 @@ Hands-on notebooks covering algorithms, CI tests, and the full discovery-to-esti
   <span class="ct-gallery-title">Getting Started Tutorial</span>
 </a>
 
-<a href="api_reference.html" class="ct-gallery-item" data-tooltip="Interactive reference for all CI tests, discovery algorithms, and plotting utilities with runnable examples.">
+<a href="api_reference.html" class="ct-gallery-item" data-tooltip="Interactive reference for all CI tests, discovery algorithms, and plotting utilities with worked examples.">
   <img src="../_static/img/thumbnails/api_reference_thumb.png" alt="API Reference Notebook" />
   <span class="ct-gallery-title">API Reference Notebook</span>
 </a>

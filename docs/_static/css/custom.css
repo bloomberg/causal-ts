@@ -66,6 +66,13 @@ html { scroll-behavior: smooth; }
   flex-wrap: nowrap;
 }
 
+/* Prevent the icon-links list (GitHub/PyPI) from being squeezed narrower
+   than its two icons, which otherwise wrap it onto two lines. */
+.bd-header .navbar-icon-links {
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+
 .bd-header .navbar-nav li a {
   white-space: nowrap;
   font-size: 0.88rem;

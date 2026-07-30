@@ -4,21 +4,41 @@ default: true
 # Path to configuration file to extend
 extends: null
 
-# MD013/line-length
+# MD013/line-length — disabled: generated hero/gallery HTML in docs/ (badges,
+# data-tooltip attributes) routinely runs 200-400 chars on a single line.
 # https://github.com/DavidAnson/markdownlint/blob/v0.34.0/doc/md013.md
-MD013:
-  # Number of characters
-  line_length: 80
-  # Include code blocks
-  code_blocks: false
-  # Include tables
-  tables: false
-  # Include headings
-  headings: false
-  # Strict length checking
-  strict: false
-  # Stern length checking
-  stern: false
+MD013: false
+
+# MD033/no-inline-html — Sphinx/MyST docs (docs/index.md, README.md) rely on
+# raw HTML for hero sections, badges, and collapsible <details> blocks.
+# https://github.com/DavidAnson/markdownlint/blob/v0.34.0/doc/md033.md
+MD033: false
+
+# MD031/blanks-around-fences — MyST admonition/grid directives commonly omit
+# blank lines around fenced code blocks.
+# https://github.com/DavidAnson/markdownlint/blob/v0.34.0/doc/md031.md
+MD031: false
+
+# MD041/first-line-heading/first-line-h1 — Sphinx pages often start with a
+# {toctree} directive or html_meta front matter instead of an H1.
+# https://github.com/DavidAnson/markdownlint/blob/v0.34.0/doc/md041.md
+MD041: false
+
+# MD036/no-emphasis-as-heading — docs/algorithms.md uses bold run-in labels
+# (e.g. "**CDNOTS**") by design, not as a heading substitute.
+# https://github.com/DavidAnson/markdownlint/blob/v0.34.0/doc/md036.md
+MD036: false
+
+# MD022/blanks-around-headings, MD032/blanks-around-lists — docs/ci_tests.md
+# uses a dense heading+list format without blank-line padding by design.
+# https://github.com/DavidAnson/markdownlint/blob/v0.34.0/doc/md022.md
+# https://github.com/DavidAnson/markdownlint/blob/v0.34.0/doc/md032.md
+MD022: false
+MD032: false
+
+# MD012/no-multiple-blanks
+# https://github.com/DavidAnson/markdownlint/blob/v0.34.0/doc/md012.md
+MD012: false
 
 # MD024/no-duplicate-heading
 # https://github.com/DavidAnson/markdownlint/blob/v0.34.0/doc/md024.md
@@ -29,11 +49,5 @@ MD024:
 # MD025/single-title/single-h1
 # https://github.com/DavidAnson/markdownlint/blob/v0.34.0/doc/md025.md
 MD025:
-  # RegExp for matching title in front matter
-  front_matter_title: ""
-
-# MD041/first-line-heading/first-line-h1
-# https://github.com/DavidAnson/markdownlint/blob/v0.34.0/doc/md041.md
-MD041:
   # RegExp for matching title in front matter
   front_matter_title: ""
