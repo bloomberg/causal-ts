@@ -44,7 +44,7 @@ def dependent_data():
 def small_df():
     """Small 3-variable DataFrame for algorithm smoke tests."""
     rng = np.random.default_rng(42)
-    T, K = 80, 3
+    T = 80
     x0 = rng.standard_normal(T)
     x1 = np.zeros(T)
     x2 = np.zeros(T)

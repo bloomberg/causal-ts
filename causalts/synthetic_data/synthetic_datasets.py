@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 
 from .structural_causal_processes import (
-    check_stationarity,
     generate_structural_causal_process,
     structural_causal_process,
 )

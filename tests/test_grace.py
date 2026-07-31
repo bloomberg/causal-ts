@@ -4,7 +4,6 @@
 """Tests for GRACE (gated causal discovery) algorithm."""
 
 import numpy as np
-import pandas as pd
 import torch
 
 from causalts.grace.gated_discovery import (

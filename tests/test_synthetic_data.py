@@ -10,7 +10,6 @@ from causalts.synthetic_data.synthetic_datasets import (
     SCPGraphGenerator,
     ex1_nl,
     ex2,
-    ex3,
     henon_chain,
     load_dataset,
 )

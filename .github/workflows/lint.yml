@@ -34,6 +34,19 @@ jobs:
           YAML_CONFIG_FILE: ".yamllint.yml"
           VALIDATE_ALL_CODEBASE: false
           MULTI_STATUS: false
+          # Python is linted by the dedicated python-lint job below.
+          VALIDATE_PYTHON_BLACK: false
+          VALIDATE_PYTHON_FLAKE8: false
+          VALIDATE_PYTHON_ISORT: false
+          VALIDATE_PYTHON_PYLINT: false
+          VALIDATE_PYTHON_MYPY: false
+          VALIDATE_PYTHON_RUFF: false
+          VALIDATE_PYTHON_PYINK: false
+          # Low-signal validators for a research codebase (copy-paste
+          # detector, prose style, competing markdown formatter).
+          VALIDATE_JSCPD: false
+          VALIDATE_NATURAL_LANGUAGE: false
+          VALIDATE_MARKDOWN_PRETTIER: false
 
   python-lint:
     runs-on: ubuntu-latest
@@ -50,10 +63,10 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install linting tools
-        run: pip install black==24.* isort flake8
+        run: pip install black==24.* isort flake8 Flake8-pyproject
       - name: black
-        run: black --check --line-length 88 --target-version py312 .
+        run: black --check .
       - name: isort
-        run: isort --check --profile black --line-length 88 .
+        run: isort --check .
       - name: flake8
-        run: flake8 --max-line-length 88 --ignore E203,E501,W503 .
+        run: flake8 .

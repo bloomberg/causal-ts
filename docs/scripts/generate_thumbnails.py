@@ -40,7 +40,7 @@ THUMBNAIL_INDEX: dict[str, int] = {
     # "tutorial": 2,           # use the 3rd image in tutorial.ipynb
     # "grace_high_dim": 1,     # use the 2nd image
     "multi_c_nonstationarity": 4,
-    "cedar_benchmark": 1,       # use the scaling line-plot (2nd image) instead of the compare_graphs
+    "cedar_benchmark": 1,  # use the scaling line-plot (2nd image) instead of the compare_graphs
 }
 
 BG_LIGHT = (248, 248, 253)

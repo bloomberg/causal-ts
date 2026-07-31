@@ -35,7 +35,6 @@ import matplotlib.transforms as transforms
 import networkx as nx
 import numpy as np
 from matplotlib import pyplot, ticker
-from mpl_toolkits.axisartist.axislines import Axes
 
 
 def _myround(x, base=5, round_mode="updown"):

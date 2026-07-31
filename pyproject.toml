@@ -87,7 +87,20 @@ line_length = 88
 
 [tool.flake8]
 max-line-length = 88
-extend-ignore = ["E203", "W503", "E501"]
+# E203, E226, W503 conflict with black's formatting; E501 is enforced by black.
+extend-ignore = ["E203", "E226", "E501", "W503"]
+exclude = [
+  ".git",
+  "__pycache__",
+  "build",
+  "dist",
+  "docs",
+  "experiments",
+  ".venv",
+  "venv",
+]
+# __init__.py modules re-export names to form the public API.
+per-file-ignores = ["__init__.py:F401"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

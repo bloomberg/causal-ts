@@ -55,8 +55,8 @@ def check_linearity(data, alpha=0.05, max_lag=1, pairs=None):
             # Align X_i(t-lag) with Y_j(t), always keeping Y_j(t-1) as a control.
             # Using t=1..T-lag so that Y_j(t-1) is always available.
             start = max(lag, 1)
-            x = data[start - lag : T - lag, i]   # X_i(t-lag), t = start..T-1
-            y = data[start:, j]                    # Y_j(t),     t = start..T-1
+            x = data[start - lag : T - lag, i]  # X_i(t-lag), t = start..T-1
+            y = data[start:, j]  # Y_j(t),     t = start..T-1
             y_lag1 = data[start - 1 : T - 1, j]  # Y_j(t-1),   t = start..T-1
 
             if len(x) < 10:

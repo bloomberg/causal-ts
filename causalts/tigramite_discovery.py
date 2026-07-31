@@ -55,8 +55,6 @@ class CITestAdapter:
     """
 
     def __init__(self, gpu_test, significance="analytic", verbosity=0):
-        from .ci_tests.independence_tests_base import CondIndTest
-
         self._gpu_test = gpu_test
         self._cached_pval = None
         self.significance = significance
@@ -796,9 +794,7 @@ def run_rpcmci(
     regime_graphs = {}
     for r in range(num_regimes):
         if r in causal_results and "graph" in causal_results[r]:
-            regime_graphs[r] = _tigramite_graph_to_binary(
-                causal_results[r]["graph"]
-            )
+            regime_graphs[r] = _tigramite_graph_to_binary(causal_results[r]["graph"])
         else:
             regime_graphs[r] = np.zeros((d, d, tau_max + 1), dtype=np.int8)
 
