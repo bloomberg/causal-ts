@@ -1,12 +1,17 @@
 import os
 import sys
+from importlib.metadata import PackageNotFoundError, version
 
 sys.path.insert(0, os.path.abspath(".."))
 
 project = "Causal-TS"
 copyright = "2025-2026, Mohammad Fesanghary"
 author = "Mohammad Fesanghary"
-release = "0.14.0"
+# Derive the version from the installed package so it never goes stale.
+try:
+    release = version("causalts")
+except PackageNotFoundError:
+    release = "0.0.0"
 
 extensions = [
     "myst_nb",
