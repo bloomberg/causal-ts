@@ -19,7 +19,8 @@ On <https://pypi.org>, sign in and add a **pending** publisher
 | Workflow filename | `release.yml` |
 | Environment name  | `pypi`        |
 
-`Owner` is the **GitHub org that owns the repo** (`github.com/bloomberg/...`),
+`Owner` is the **GitHub org that owns the repository**
+(`github.com/bloomberg/...`),
 not your PyPI username. The GitHub OIDC token asserts
 `repository_owner = bloomberg`, and PyPI matches it against this value.
 
