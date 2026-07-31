@@ -1,6 +1,7 @@
 import os
 import sys
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 
 sys.path.insert(0, os.path.abspath(".."))
 
@@ -8,10 +9,14 @@ project = "Causal-TS"
 copyright = "2025-2026, Mohammad Fesanghary"
 author = "Mohammad Fesanghary"
 # Derive the version from the installed package so it never goes stale.
+# NOTE: import the metadata helper under an alias — a bare ``version`` name
+# would shadow Sphinx's own ``version`` config value with a function object
+# and break the build (TypeError in inventory dump / smartquotes).
 try:
-    release = version("causalts")
+    release = _pkg_version("causalts")
 except PackageNotFoundError:
     release = "0.0.0"
+version = release
 
 extensions = [
     "myst_nb",
