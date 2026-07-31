@@ -13,7 +13,7 @@ import logging
 import math
 import os
 import warnings
-from typing import Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -23,6 +23,9 @@ import torch.nn.functional as F
 from pytorch_lightning import LightningModule, Trainer  # noqa: E402
 from pytorch_lightning.callbacks import EarlyStopping  # noqa: E402
 from torch.utils.data import DataLoader, TensorDataset
+
+if TYPE_CHECKING:
+    from .result import GraceResult
 
 EPS = 1e-6
 
@@ -330,7 +333,7 @@ def prepare_data(
     return TensorDataset(windows)
 
 
-from ..utils.helpers import evaluate_graph  # noqa: F401
+from ..utils.helpers import evaluate_graph  # noqa: E402,F401
 
 # ---------------------------------------------------------------------------
 # Self-contained MLP decoder
@@ -896,8 +899,8 @@ class StabilitySelector:
                     # Keep top-K by value, zero rest
                     ranked = sorted(
                         lags_on,
-                        key=lambda l: values[i, l, j],
-                        reverse=True,  # noqa: E741
+                        key=lambda lag: values[i, lag, j],
+                        reverse=True,
                     )
                     for lag_idx in ranked[k:]:
                         active[i, lag_idx, j] = 0
@@ -1292,12 +1295,10 @@ def run_ci_skeleton(
     """
     try:
         from ..cdnots.skeleton_discovery import (
-            c_lag_cnst,
             initialize_graph,
             skeleton_cnst,
             skeleton_discovery,
         )
-        from ..ci_tests.parcorr import PartialCorr
     except ImportError as e:
         raise ImportError(
             "causalts package required for CI skeleton. "
@@ -1679,8 +1680,6 @@ def _cdnots_graph_to_binary(cg_tig, n_vars: int, max_lag: int) -> np.ndarray:
         elif L > target_L:
             G = G[:, :, :target_L]
         return G
-
-
 
 
 def run_cdnots_gated(

@@ -69,7 +69,5 @@ def run_algorithm(name: str, df, ci_test, max_lag, **kwargs):
     CausalResult
     """
     if name not in _ALGO_REGISTRY:
-        raise ValueError(
-            f"Unknown algorithm {name!r}. Available: {list_algorithms()}"
-        )
+        raise ValueError(f"Unknown algorithm {name!r}. Available: {list_algorithms()}")
     return _ALGO_REGISTRY[name](df=df, ci_test=ci_test, max_lag=max_lag, **kwargs)

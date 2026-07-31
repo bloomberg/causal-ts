@@ -9,7 +9,10 @@ import pytest
 
 dowhy = pytest.importorskip("dowhy")
 
-from causalts.effects.graph_bridge import graph_to_networkx, make_lagged_df
+from causalts.effects.graph_bridge import (  # noqa: E402
+    graph_to_networkx,
+    make_lagged_df,
+)
 
 
 def _simple_graph_and_data():

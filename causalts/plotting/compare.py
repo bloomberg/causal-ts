@@ -403,9 +403,7 @@ def compare_graphs(
                     else:
                         parts.append(f"{l}\u2717")
                 label = ",".join(parts)
-                _draw_arrow(
-                    ax, i, j, edge_color, edge_style, edge_lw, label, zorder=0
-                )
+                _draw_arrow(ax, i, j, edge_color, edge_style, edge_lw, label, zorder=0)
 
             # Draw FN part as separate dashed arrow
             if lags_fn:
@@ -457,7 +455,7 @@ def compare_graphs(
 
 
 # Re-export from canonical location (causalts.cdnots) for backwards compatibility
-from ..cdnots.phase3_utils import build_pvalue_matrix  # noqa: F401
+from ..cdnots.phase3_utils import build_pvalue_matrix  # noqa: E402,F401
 
 # ======================================================================
 # Metrics summary bar chart

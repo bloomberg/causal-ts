@@ -141,21 +141,21 @@ def uc_sepset(
         # j is always the lag-0 endpoint (y is at lag 0 by _is_contemp_triple)
         # x and z may be lagged. Identify the lag-0 side (j) and the other (i).
         # PCMCI+ builds subsets from neighbors of j and (if i is also lag-0) of i.
-        j = z if z < no_of_inst_var else x   # the contemporaneous endpoint
-        i = x if z < no_of_inst_var else z   # could be lagged
+        j = z if z < no_of_inst_var else x  # the contemporaneous endpoint
+        i = x if z < no_of_inst_var else z  # could be lagged
 
         # Contemporaneous neighbors of j, excluding only the direct test partner i.
         # y is NOT excluded — PCMCI+ includes y in conditioning subsets.
         contemp_neighbors_j = [
-            p for p in cg_new.neighbors(j)
+            p
+            for p in cg_new.neighbors(j)
             if p < no_of_inst_var and p != (i if i < no_of_inst_var else -1)
         ]
         # If i is also lag-0, include its contemp neighbors too (excluding j)
         contemp_neighbors_i = []
         if i < no_of_inst_var:
             contemp_neighbors_i = [
-                p for p in cg_new.neighbors(i)
-                if p < no_of_inst_var and p != j
+                p for p in cg_new.neighbors(i) if p < no_of_inst_var and p != j
             ]
 
         # Build all unique subsets (union of both sides)

@@ -7,14 +7,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from causalts.ci_tests import ParCorrGPU
-from causalts.result import CausalResult
 from causalts.cedar import Cedar, CedarResult, run_cedar
 from causalts.cedar.lag_selection import (
     compute_lag_importance,
     compute_lag_pvalues,
     select_lags,
 )
+from causalts.ci_tests import ParCorrGPU
+from causalts.result import CausalResult
 
 DEVICE = "cpu"
 
@@ -194,8 +194,7 @@ def test_partial_dcor_scores_differ_from_dcor(ar_df):
     imp_pdcor = compute_lag_importance(data, max_lag=2, method="partial_dcor")
     # Scores should differ because partial_dcor residualises the target first
     assert not np.allclose(imp_dcor, imp_pdcor, atol=1e-6), (
-        "partial_dcor scores are identical to dcor — "
-        "residualization is not running"
+        "partial_dcor scores are identical to dcor — " "residualization is not running"
     )
 
 
@@ -223,12 +222,15 @@ def test_partial_dcor_regression_f1(ci_test):
     f1_values = []
     for seed in [42, 56, 45, 123]:
         gen = SCPGraphGenerator(
-            n_vars=10, max_lag=2, density="sparse",
+            n_vars=10,
+            max_lag=2,
+            density="sparse",
             dependency_funcs=("lin", "lin", "nl1", "nl2"),
         )
         res = gen.sample(seed=seed, T=300, max_tries=10000)
         df, gt = res["df"], res["ground_truth"]
         from causalts.ci_tests import PartialCorr
+
         ci = PartialCorr(df.values)
         r = run_cedar(df, ci, alpha_cond1=0.01, alpha_cond2=0.01, max_lag=2)
         f1_values.append(_eval(r.cg_tig, gt))

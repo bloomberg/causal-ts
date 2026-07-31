@@ -9,7 +9,7 @@ import pytest
 
 tigramite = pytest.importorskip("tigramite")
 
-from causalts.effects.tigramite_effects import (
+from causalts.effects.tigramite_effects import (  # noqa: E402
     TigramiteEffects,
     _to_tigramite_graph,
     tigramite_available,
@@ -177,7 +177,10 @@ def test_fit_required_before_effects():
 # pathwise_effects
 # ---------------------------------------------------------------------------
 
-from causalts.effects.tigramite_effects import _find_all_paths, pathwise_effects
+from causalts.effects.tigramite_effects import (  # noqa: E402
+    _find_all_paths,
+    pathwise_effects,
+)
 
 
 def test_find_all_paths_chain():

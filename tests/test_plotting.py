@@ -7,9 +7,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 
-import numpy as np
-
-from causalts.utils.helpers import evaluate_graph
+import numpy as np  # noqa: E402
 
 
 def _make_graph():
