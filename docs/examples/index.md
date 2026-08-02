@@ -156,6 +156,11 @@ Notebooks reproducing experiments from the GRACE paper (preprint forthcoming) wi
   <span class="ct-gallery-title">Regime Discovery</span>
 </a>
 
+<a href="subsampling.html" class="ct-gallery-item" data-tooltip="Detect temporal aggregation / subsampling via contemporaneous VAR-residual correlation (Gong 2015) — with a calibrated bootstrap null for short series and the non-separability caveat.">
+  <img src="../_static/img/thumbnails/subsampling_thumb.png" alt="Subsampling Detection" />
+  <span class="ct-gallery-title">Subsampling Detection</span>
+</a>
+
 </div>
 
 ---
@@ -188,4 +193,5 @@ weather_benchmark
 tigramite_integration
 custom_algorithm
 regime_discovery
+subsampling
 ```

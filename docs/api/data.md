@@ -52,4 +52,10 @@
 .. autofunction:: causalts.utils.linearity.check_linearity
 
 .. autofunction:: causalts.imputation.var_em_impute
+
+.. autofunction:: causalts.utils.subsampling.detect_subsampling
+
+.. autoclass:: causalts.utils.subsampling.DetectionResult
+   :members:
+   :undoc-members:
 ```
