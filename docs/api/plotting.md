@@ -12,6 +12,8 @@ from causalts.plotting import (
     plot_pvalue_distribution,
     plot_lagfuncs,
     setup_matrix,
+    corrplot,
+    compute_association_matrix,
 )
 ```
 
@@ -87,6 +89,29 @@ Histogram of CI test p-values split by true edges vs. non-edges.
 
 ```{eval-rst}
 .. autofunction:: causalts.plotting.compare.plot_pvalue_distribution
+```
+
+---
+
+## Association Matrix (Corrplot)
+
+### `corrplot`
+
+R-corrplot-style association matrix — 7 glyph methods (circle, square, ellipse,
+number, color, shade, pie), significance overlays, confidence intervals, and
+hierarchical variable ordering.
+
+```{eval-rst}
+.. autofunction:: causalts.plotting.corrplot.corrplot
+```
+
+### `compute_association_matrix`
+
+Pairwise association matrix from raw data (Pearson, Spearman, Kendall, dcor,
+or a custom callable) — the usual input to `corrplot`.
+
+```{eval-rst}
+.. autofunction:: causalts.plotting.corrplot.compute_association_matrix
 ```
 
 ---

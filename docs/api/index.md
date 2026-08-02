@@ -46,7 +46,7 @@ Full API documentation auto-generated from source docstrings (NumPy format).
 :link-type: doc
 :shadow: md
 
-`plot_graph` · `plot_time_series_graph` · `compare_graphs` · `plot_metrics_summary` · `plot_lag_metrics` · `plot_pvalue_distribution`
+`plot_graph` · `plot_time_series_graph` · `compare_graphs` · `plot_metrics_summary` · `plot_lag_metrics` · `plot_pvalue_distribution` · `corrplot`
 :::
 
 :::{grid-item-card} {fas}`terminal;1.2em;sd-text-primary` &nbsp; CLI Reference
