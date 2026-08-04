@@ -56,6 +56,12 @@ jobs:
           VALIDATE_JUPYTER_NBQA_MYPY: false
           VALIDATE_JUPYTER_NBQA_PYLINT: false
           VALIDATE_JUPYTER_NBQA_RUFF: false
+          # Biome (newly enabled in super-linter v8) duplicates the Prettier
+          # and Stylelint validators already in use and flags the hand-authored
+          # switcher.json / custom.css. Disable it to avoid conflicting
+          # formatters (super-linter itself warns about the overlap).
+          VALIDATE_BIOME_FORMAT: false
+          VALIDATE_BIOME_LINT: false
 
   python-lint:
     runs-on: ubuntu-latest
