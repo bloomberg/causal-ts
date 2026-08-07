@@ -1,0 +1,45 @@
+---
+name: docs
+
+# Trigger a Read the Docs build on every push to main and every version tag.
+# Read the Docs is not connected via its GitHub App (org policy), so it does
+# not receive push/tag events on its own — this workflow pokes RTD's generic
+# incoming webhook instead. Configure the two secrets from the RTD dashboard:
+#   Admin -> Integrations -> Add integration -> "Incoming webhook"
+#   RTD_WEBHOOK_URL   the integration URL
+#   RTD_WEBHOOK_TOKEN the integration's secret token
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+# Declare default permissions as read-only
+permissions: read-all
+
+jobs:
+  trigger-readthedocs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: 🔒 harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: 📡 trigger Read the Docs build
+        env:
+          RTD_WEBHOOK_URL: ${{ secrets.RTD_WEBHOOK_URL }}
+          RTD_WEBHOOK_TOKEN: ${{ secrets.RTD_WEBHOOK_TOKEN }}
+        run: |
+          if [ -z "${RTD_WEBHOOK_URL}" ] || [ -z "${RTD_WEBHOOK_TOKEN}" ]; then
+            echo "::error::RTD_WEBHOOK_URL / RTD_WEBHOOK_TOKEN secrets are not set."
+            exit 1
+          fi
+          # A bare POST makes RTD sync versions and build the default version;
+          # this also picks up newly pushed tags so `stable` refreshes.
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -d "token=${RTD_WEBHOOK_TOKEN}" \
+            "${RTD_WEBHOOK_URL}"

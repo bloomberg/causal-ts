@@ -9,6 +9,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.25.2]
+
+### Fixed
+
+* Documentation build: aliased the `importlib.metadata.version` import in
+  `docs/conf.py` so it no longer shadows Sphinx's `version` config (had failed
+  the Read the Docs build with a `TypeError` in the inventory dump)
+* Restored the API Reference example notebook link (moved the symlink to
+  `docs/examples/api_reference.ipynb`)
+* Version switcher now reports v0.25.2
+
 ### Added
 
 * CDNOTS algorithm — constraint-based causal discovery with nonstationarity-based orientation
@@ -22,6 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * Synthetic data generators (nonstationary, mixed discrete-continuous, Lorenz-96)
 
 
-[unreleased]: https://github.com/bloomberg/causal-ts/compare/main...HEAD
+[unreleased]: https://github.com/bloomberg/causal-ts/compare/v0.25.2...HEAD
+[0.25.2]: https://github.com/bloomberg/causal-ts/compare/v0.25.1...v0.25.2
 
 <!-- textlint-enable -->
