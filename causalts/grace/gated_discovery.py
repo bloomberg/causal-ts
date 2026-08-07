@@ -625,12 +625,17 @@ class GatedCausalDiscovery(LightningModule):
         else:
             encoded = x.unsqueeze(-1) * self.W.unsqueeze(0) + self.bias.unsqueeze(0)
 
-        # Apply gates and aggregate: sum over (cause, lag) per effect
-        # gates: [cause, lag, effect] -> [1, cause, lag, effect, 1]
-        # encoded: [B, cause, lag, hidden] -> [B, cause, lag, 1, hidden]
-        x_hat = (encoded.unsqueeze(-2) * gates.unsqueeze(0).unsqueeze(-1)).sum(
-            dim=[1, 2]
-        )
+        # Apply gates and aggregate: sum over (cause, lag) per effect.
+        # Done as a batched matmul over the flattened (cause, lag) axis instead
+        # of a dense [B, cause, lag, effect, hidden] broadcast-then-sum: at
+        # d=300 the dense form allocates ~17 GiB (B * d^2 * (L+1) * H) for a
+        # tensor that is >99.5% masked out by the skeleton. matmul only ever
+        # materializes O(B * d * (L+1) * H) intermediates.
+        K = m * Lp1
+        encoded_flat = encoded.reshape(B, K, self.hidden_size)  # [B, K, H]
+        gates_flat = gates.reshape(K, m)  # [K, effect]
+        x_hat = torch.matmul(encoded_flat.transpose(1, 2), gates_flat)  # [B, H, effect]
+        x_hat = x_hat.transpose(1, 2)  # [B, effect, hidden]
         # x_hat: [B, effect, hidden]
 
         # Decode: per-effect independent decoders
