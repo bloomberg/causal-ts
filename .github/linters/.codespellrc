@@ -3,5 +3,8 @@
 # spurious matches on random substrings inside that encoded data and fails the
 # lint job on any pull request that touches a notebook. Example notebooks are
 # worked demos with saved outputs, not prose to spell-check, so skip them.
+# ignore-words-list: legitimate domain acronyms codespell mistakes for typos
+# (GES = Greedy Equivalence Search; FPR = false-positive rate).
 [codespell]
 skip = *.ipynb
+ignore-words-list = ges,fpr
