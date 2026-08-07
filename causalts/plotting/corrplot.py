@@ -367,7 +367,14 @@ def corrplot(
         raise ValueError(f"Unknown plot_ci '{plot_ci}'. Use one of: {_VALID_PLOT_CI}")
 
     # --- Input handling ---
-    if _is_precomputed(data) and is_corr is not False:
+    # A precomputed matrix is used as-is. `is_corr=False` only affects the color
+    # range/colormap (sequential vs. diverging), NOT whether to treat the input
+    # as precomputed -- otherwise passing a precomputed non-correlation matrix
+    # (e.g. dcor) with is_corr=False would recompute Pearson of its columns.
+    # The escape hatch for the raw-vs-matrix ambiguity applies only to a
+    # symmetric square ndarray (a labeled DataFrame is always unambiguous).
+    force_raw = is_corr is False and isinstance(data, np.ndarray)
+    if _is_precomputed(data) and not force_raw:
         matrix = pd.DataFrame(data).copy()
     else:
         matrix = compute_association_matrix(data, metric)
