@@ -42,6 +42,7 @@ jobs:
           VALIDATE_PYTHON_PYLINT: false
           VALIDATE_PYTHON_MYPY: false
           VALIDATE_PYTHON_RUFF: false
+          VALIDATE_PYTHON_RUFF_FORMAT: false
           VALIDATE_PYTHON_PYINK: false
           # Low-signal validators for a research codebase (copy-paste
           # detector, prose style, competing markdown formatter).
