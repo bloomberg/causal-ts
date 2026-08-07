@@ -3,11 +3,11 @@ name: docs
 
 # Trigger a Read the Docs build on every push to main and every version tag.
 # Read the Docs is not connected via its GitHub App (org policy), so it does
-# not receive push/tag events on its own — this workflow pokes RTD's generic
-# incoming webhook instead. Configure the two secrets from the RTD dashboard:
-#   Admin -> Integrations -> Add integration -> "Incoming webhook"
-#   RTD_WEBHOOK_URL   the integration URL
-#   RTD_WEBHOOK_TOKEN the integration's secret token
+# not receive push/tag events on its own. This project's RTD account exposes
+# API tokens (not an "Incoming webhook" integration), so we call the RTD API v3
+# build endpoint directly. Configure one secret:
+#   RTD_TOKEN   a Read the Docs API token (RTD dashboard -> Settings -> Tokens)
+# and set RTD_PROJECT below to the project slug if it differs.
 on:
   push:
     branches:
@@ -30,16 +30,26 @@ jobs:
           egress-policy: audit
       - name: 📡 trigger Read the Docs build
         env:
-          RTD_WEBHOOK_URL: ${{ secrets.RTD_WEBHOOK_URL }}
-          RTD_WEBHOOK_TOKEN: ${{ secrets.RTD_WEBHOOK_TOKEN }}
+          RTD_TOKEN: ${{ secrets.RTD_TOKEN }}
+          RTD_PROJECT: causal-ts
         run: |
-          if [ -z "${RTD_WEBHOOK_URL}" ] || [ -z "${RTD_WEBHOOK_TOKEN}" ]; then
-            echo "::error::RTD_WEBHOOK_URL / RTD_WEBHOOK_TOKEN secrets are not set."
+          if [ -z "${RTD_TOKEN}" ]; then
+            echo "::error::RTD_TOKEN secret is not set."
             exit 1
           fi
-          # A bare POST makes RTD sync versions and build the default version;
-          # this also picks up newly pushed tags so `stable` refreshes.
+          api="https://app.readthedocs.org/api/v3/projects/${RTD_PROJECT}/versions"
+          # Always rebuild the default version (tracks the main branch).
+          echo "Triggering Read the Docs build for 'latest'..."
           curl --fail-with-body --silent --show-error \
-            -X POST \
-            -d "token=${RTD_WEBHOOK_TOKEN}" \
-            "${RTD_WEBHOOK_URL}"
+            -X POST -H "Authorization: Token ${RTD_TOKEN}" \
+            "${api}/latest/builds/"
+          # On a version tag, also refresh 'stable' (RTD's stable tracks the
+          # highest tag). Best-effort: don't fail the job if that version is not
+          # active yet on RTD -- it just needs a one-time activation there.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "Tag push: also triggering 'stable' build (best-effort)..."
+            curl --fail-with-body --silent --show-error \
+              -X POST -H "Authorization: Token ${RTD_TOKEN}" \
+              "${api}/stable/builds/" \
+              || echo "::warning::Could not trigger 'stable' build; activate the version on RTD."
+          fi
