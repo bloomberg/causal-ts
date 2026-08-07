@@ -1,0 +1,6 @@
+# codespell scans committed Jupyter notebooks, whose cells store executed
+# outputs as base64-encoded image blobs. codespell false-positives on random
+# substrings inside that base64 (e.g. "fO", "FPR", "jOO"). Example notebooks
+# are worked demos with saved outputs, not prose to spell-check, so skip them.
+[codespell]
+skip = *.ipynb
