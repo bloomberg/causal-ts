@@ -177,6 +177,36 @@ def ci_test_info(test):
 
 
 # ---------------------------------------------------------------------------
+# inspect
+# ---------------------------------------------------------------------------
+@main.command("inspect")
+@click.argument("data", type=click.Path(exists=True))
+@click.option(
+    "--var-names", type=str, default=None, help="Comma-separated variable names."
+)
+@click.option(
+    "--max-lag", type=int, default=None, help="Override the suggested max lag."
+)
+def inspect(data, var_names, max_lag):
+    """Inspect a time series (CSV/parquet/feather): data health + recommended config.
+
+    Emits a JSON report {schema_version, data, facts, recommendation, cost_class,
+    warnings} to stdout — the pre-flight for `discover`.
+    """
+    import json as _json
+
+    from .inspection import inspect_df
+    from .utils.io import read_dataframe
+
+    df = read_dataframe(data)
+    var_name_list = _parse_comma_list(var_names)
+    if var_name_list:
+        df.columns = var_name_list
+    report = inspect_df(df, max_lag=max_lag)
+    click.echo(_json.dumps(report, indent=2, default=str))
+
+
+# ---------------------------------------------------------------------------
 # discover
 # ---------------------------------------------------------------------------
 @main.command()
@@ -358,6 +388,46 @@ def ci_test_info(test):
     default=None,
     help='JSON dict of kwargs for the imputer, e.g. \'{"p": 2, "n_iter": 5}\'.',
 )
+@click.option(
+    "--json",
+    "output_json",
+    is_flag=True,
+    default=False,
+    help="Echo the run summary (incl. an edge list) as JSON to stdout.",
+)
+@click.option(
+    "--pvalues/--no-pvalues",
+    "want_pvalues",
+    default=False,
+    help=(
+        "Return per-edge p-values (CDNOTS family). Off by default as a "
+        "memory safeguard for very high-dimensional data; safe to enable on "
+        "low/moderate d."
+    ),
+)
+@click.option(
+    "--validate",
+    "do_validate",
+    is_flag=True,
+    default=False,
+    help=(
+        "After discovery, run a contiguous-window bootstrap-stability check and "
+        "annotate each edge with its persistence (fraction of windows it recurs). "
+        "Not supported for GRACE. Measures sampling robustness, not correctness."
+    ),
+)
+@click.option(
+    "--n-bootstrap",
+    type=int,
+    default=20,
+    help="Number of bootstrap windows for --validate (default 20).",
+)
+@click.option(
+    "--window-frac",
+    type=float,
+    default=0.6,
+    help="Window size as a fraction of T for --validate (default 0.6).",
+)
 @click.pass_context
 def discover(
     ctx,
@@ -396,8 +466,27 @@ def discover(
     var_names,
     impute,
     impute_kwargs,
+    output_json,
+    want_pvalues,
+    do_validate,
+    n_bootstrap,
+    window_frac,
 ):
-    """Run causal discovery on a CSV time series file."""
+    """Run causal discovery on a time series file (CSV, parquet, or feather)."""
+    if do_validate and algorithm in ("grace", "grace-ss"):
+        raise click.BadParameter(
+            "--validate is not supported for GRACE (bootstrapping neural-gate "
+            "training over many windows is impractical). Re-run the stability "
+            "check with --algorithm cdnots or cedar.",
+            param_hint="--validate",
+        )
+    if want_pvalues and algorithm in ("grace", "grace-ss"):
+        raise click.BadParameter(
+            "--pvalues is not supported for GRACE (it emits continuous gate "
+            "values, not a per-test p-value). Re-run with --algorithm cdnots "
+            "or cedar for p-values.",
+            param_hint="--pvalues",
+        )
     from matplotlib import pyplot as plt
 
     t0 = _time.time()
@@ -407,7 +496,9 @@ def discover(
     lag_list_parsed = _parse_comma_list(lag_list, int)
 
     _log(ctx, f"Reading data from {data}")
-    df = pd.read_csv(data)
+    from .utils.io import read_dataframe
+
+    df = read_dataframe(data)
     if var_name_list:
         df.columns = var_name_list
     var_name_list = list(df.columns)
@@ -443,39 +534,51 @@ def discover(
         "output_files": {},
     }
 
-    if impute is not None and algorithm not in ("cdnots", "cedar", "grace", "grace-ss"):
+    if impute is not None and algorithm not in (
+        "cdnots",
+        "cdnots+",
+        "cedar",
+        "grace",
+        "grace-ss",
+    ):
         _log(
             ctx,
             f"Warning: --impute is not supported for {algorithm}; ignoring.",
         )
         impute = None
 
-    if algorithm == "cdnots":
-        _log(ctx, "Running CDNOTS...")
+    if algorithm in ("cdnots", "cdnots+"):
+        label = "CDNOTS+" if algorithm == "cdnots+" else "CDNOTS"
+        _log(ctx, f"Running {label}...")
         if impute is not None and impute != "pairwise_complete":
             _log(ctx, f"Imputation strategy: {impute}")
-        from .cdnots.phase3_utils import run_cdnots
+        from .cdnots.phase3_utils import run_cdnots, run_cdnots_plus
 
-        res = run_cdnots(
+        fn = run_cdnots if algorithm == "cdnots" else run_cdnots_plus
+        extra_kwargs = {"stable": stable} if algorithm == "cdnots" else {}
+        res = fn(
             df=df,
             indep_test=ci,
             num_lags=max_lag,
             lag_list=lag_list_parsed,
             include_C=include_c,
+            c_preset=c_preset,
             alpha=alpha,
-            stable=stable,
             max_degree=max_degree,
+            return_pvals=want_pvalues,
             verbose=ctx.obj["verbose"] > 0,
             show_progress=not ctx.obj["quiet"],
             impute=impute,
             impute_kwargs=_impute_kwargs,
+            **extra_kwargs,
         )
 
         np.save(os.path.join(outdir, "estimated_graph.npy"), res.cg_tig)
         summary["output_files"]["graph"] = "estimated_graph.npy"
         summary["include_C"] = include_c
         summary["lag_list"] = lag_list_parsed
-        summary["stable"] = stable
+        if algorithm == "cdnots":
+            summary["stable"] = stable
         summary["impute"] = impute
         summary["impute_kwargs"] = _impute_kwargs
 
@@ -506,7 +609,7 @@ def discover(
         summary["n_edges"] = n_edges
         _log(
             ctx,
-            f"CDNOTS complete. Graph shape: {res.cg_tig.shape}, {n_edges} edges, {elapsed:.1f}s",
+            f"{label} complete. Graph shape: {res.cg_tig.shape}, {n_edges} edges, {elapsed:.1f}s",
         )
 
     elif algorithm == "cedar":
@@ -549,6 +652,10 @@ def discover(
         if cedar_result.val_matrix is not None:
             np.save(os.path.join(outdir, "val_matrix.npy"), cedar_result.val_matrix)
             summary["output_files"]["val_matrix"] = "val_matrix.npy"
+
+        if want_pvalues and cedar_result.pvalue_matrix is not None:
+            np.save(os.path.join(outdir, "pvalues.npy"), cedar_result.pvalue_matrix)
+            summary["output_files"]["pvalues"] = "pvalues.npy"
 
         summary["lag_method"] = lag_method
         summary["lag_pvalue_method"] = lag_pvalue_method
@@ -693,6 +800,98 @@ def discover(
             f"GRACE-SS complete. Graph shape: {grace_ss_res.cg_tig.shape}, {n_edges} edges, {elapsed:.1f}s",
         )
 
+    # Named edge list for interpretation (agent-legible). Load the graph back
+    # from disk so this works regardless of which algorithm branch ran.
+    _graph_path = os.path.join(outdir, "estimated_graph.npy")
+    if os.path.exists(_graph_path):
+        from .inspection import diagnostics_from_graph, edges_from_graph
+
+        _g = np.load(_graph_path)
+        _pv_path = os.path.join(outdir, "pvalues.npy")
+        _pv = np.load(_pv_path) if os.path.exists(_pv_path) else None
+        summary["edges"] = edges_from_graph(_g, var_name_list, _pv)
+        summary["diagnostics"] = diagnostics_from_graph(_g, var_name_list)
+
+        if do_validate:
+            _log(ctx, f"Validating: bootstrap stability over {n_bootstrap} windows...")
+            from .bootstrap import temporal_bootstrap
+
+            def _disc(sub):
+                # Fresh CI test per window; mirror the main run's exact config
+                # by closing over this command's parameters.
+                _ci = _make_ci_test(ci_test, sub.values, device)
+                if algorithm in ("cdnots", "cdnots+"):
+                    from .cdnots.phase3_utils import run_cdnots, run_cdnots_plus
+
+                    fn = run_cdnots if algorithm == "cdnots" else run_cdnots_plus
+                    _extra = {"stable": stable} if algorithm == "cdnots" else {}
+                    return fn(
+                        df=sub,
+                        indep_test=_ci,
+                        num_lags=max_lag,
+                        lag_list=lag_list_parsed,
+                        include_C=include_c,
+                        c_preset=c_preset,
+                        alpha=alpha,
+                        max_degree=max_degree,
+                        verbose=False,
+                        show_progress=False,
+                        **_extra,
+                    ).cg_tig
+                # cedar
+                from .cedar.discovery import run_cedar
+
+                return run_cedar(
+                    df=sub,
+                    ci_test=_ci,
+                    max_lag=max_lag,
+                    alpha_cond1=alpha_cond1,
+                    alpha_cond2=alpha_cond2,
+                    lag_method=lag_method,
+                    lag_pvalue_method=lag_pvalue_method,
+                    lag_alpha=lag_alpha,
+                    normalize=None if normalize == "none" else normalize,
+                    filter_children=filter_children,
+                    include_lag0=include_lag0,
+                    prune=not no_prune,
+                    multi_lag=multi_lag,
+                    multi_lag_keep=multi_lag_keep,
+                    target_var=target_var,
+                    verbose=False,
+                    include_C=include_c,
+                    c_preset=c_preset,
+                    include_autoreg=include_autoreg,
+                    assume_ar1=assume_ar1,
+                ).cg_tig
+
+            boot = temporal_bootstrap(
+                df,
+                _disc,
+                n_bootstrap=n_bootstrap,
+                window_frac=window_frac,
+                seed=ctx.obj["seed"] or 0,
+                show_progress=not ctx.obj["quiet"],
+            )
+            P = boot["persistence"]
+            np.save(os.path.join(outdir, "persistence.npy"), P)
+            summary["output_files"]["persistence"] = "persistence.npy"
+            # annotate each edge (same np.where order as edges_from_graph)
+            for e, (i, j, k) in zip(summary["edges"], zip(*np.where(_g))):
+                try:
+                    e["persistence"] = round(float(P[i, j, k]), 3)
+                except (IndexError, ValueError):
+                    e["persistence"] = None
+            summary["stability"] = {
+                "n_bootstrap": n_bootstrap,
+                "window_frac": window_frac,
+                "stable_threshold": 0.6,
+                "note": (
+                    "persistence = fraction of windows an edge recurs; measures "
+                    "robustness to sampling, NOT correctness (a systematic "
+                    "artifact can be stable yet wrong)."
+                ),
+            }
+
     _save_json(summary, os.path.join(outdir, "summary.json"))
     _log(ctx, f"Results saved to {outdir}")
 
@@ -714,10 +913,18 @@ def discover(
             os.path.join(outdir, "metrics.json"),
         )
         summary["output_files"]["metrics"] = "metrics.json"
+        summary["metrics"] = {
+            k: round(v, 6) if isinstance(v, float) else v for k, v in metrics.items()
+        }
         click.echo(
             f"  Precision={metrics['Precision']:.3f}  Recall={metrics['TPR']:.3f}"
             f"  F1={metrics['F1']:.3f}  SHD={metrics['SHD']}"
         )
+
+    if output_json:
+        import json as _json
+
+        click.echo(_json.dumps(summary, indent=2, default=str))
 
 
 # ---------------------------------------------------------------------------
@@ -1368,6 +1575,75 @@ def dowhy_drift(
         robust=robust,
     )
     click.echo(result.to_string(index=False))
+
+
+# ---------------------------------------------------------------------------
+# install-skill
+# ---------------------------------------------------------------------------
+@main.command("install-skill")
+@click.option(
+    "--copy",
+    "do_copy",
+    is_flag=True,
+    default=False,
+    help="Copy files instead of symlinking (for environments that reject symlinks).",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Replace an existing non-symlink target.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Print what would be done without changing anything.",
+)
+def install_skill(do_copy, force, dry_run):
+    """Install the causal-ts-discovery agent skill into the local harness dirs.
+
+    Symlinks (default) the packaged skill into ``~/.claude/skills/`` (Claude Code)
+    and ``~/.agents/skills/`` (Codex and other Agent-Skills harnesses) so an agent
+    can drive causal-ts.  Symlinks stay current on ``pip install -U``; pass
+    ``--copy`` for a static copy instead.
+    """
+    import shutil
+    from importlib.resources import files
+
+    skill_name = "causal-ts-discovery"
+    src_path = os.fspath(files("causalts") / "skills" / skill_name)
+    if not os.path.isdir(src_path):
+        raise click.ClickException(f"Packaged skill not found at {src_path}")
+
+    dests = [
+        os.path.expanduser(f"~/.claude/skills/{skill_name}"),
+        os.path.expanduser(f"~/.agents/skills/{skill_name}"),
+    ]
+
+    for dest in dests:
+        if dry_run:
+            verb = "copy" if do_copy else "symlink"
+            click.echo(f"[dry-run] would {verb} {src_path} -> {dest}")
+            continue
+
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+
+        if os.path.islink(dest):
+            os.unlink(dest)  # replace our own (or any) symlink idempotently
+        elif os.path.exists(dest):
+            if not force:
+                raise click.ClickException(
+                    f"{dest} exists and is not a symlink; re-run with --force to replace."
+                )
+            shutil.rmtree(dest) if os.path.isdir(dest) else os.remove(dest)
+
+        if do_copy:
+            shutil.copytree(src_path, dest)
+            click.echo(f"Copied {skill_name} -> {dest}")
+        else:
+            os.symlink(src_path, dest)
+            click.echo(f"Symlinked {skill_name} -> {dest}")
 
 
 if __name__ == "__main__":

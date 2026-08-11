@@ -3,6 +3,8 @@
 /papers/
 experiments/
 *.json
+!.claude-plugin/plugin.json
+!.claude-plugin/marketplace.json
 __pycache__/
 *.py[cod]
 *$py.class

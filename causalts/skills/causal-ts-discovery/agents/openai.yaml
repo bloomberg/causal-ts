@@ -1,0 +1,3 @@
+interface:
+  display_name: "Causal-TS Discovery"
+  short_description: "Discover causal structure in time series with causal-ts"

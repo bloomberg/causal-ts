@@ -9,6 +9,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.26.0]
+
+### Added
+
+* `causal-ts-discovery` agent skill (Claude Code / OpenAI Codex) shipped in the package for model-driven causal discovery
+* `causal-ts inspect <file>` — data-health facts plus an algorithm / CI-test / C-preset recommendation and a cost class (JSON)
+* `causal-ts discover --json` — echoes the run summary and a named edge list to stdout
+* `causal-ts discover --validate` (with `--n-bootstrap` / `--window-frac`) — temporal-bootstrap edge-stability check
+* `causal-ts discover --pvalues` — opt-in p-value matrix in the output (off by default as a high-dimensional memory safeguard)
+* `causal-ts install-skill` — install the skill into `~/.claude/skills` and `~/.agents/skills`
+* Public Python entry points `inspect_df`, `recommend_config`, `discover_df`
+* Observed-data (non)stationarity detection (ADF + KPSS) and trend-form detection for C-preset selection
+* Multi-format data reader (csv / parquet / feather) with an optional `parquet` extra
+* Correlation / association plots — `corrplot` and `compute_association_matrix` (`causalts.plotting`)
+* Temporal-subsampling detection — `detect_subsampling` and `DetectionResult` (`causalts.utils`)
+
+### Fixed
+
+* GRACE high-dimensional memory usage in `run_cdnots_gated`
+
 ## [0.25.2]
 
 ### Fixed
@@ -33,7 +53,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * Synthetic data generators (nonstationary, mixed discrete-continuous, Lorenz-96)
 
 
-[unreleased]: https://github.com/bloomberg/causal-ts/compare/v0.25.2...HEAD
+[unreleased]: https://github.com/bloomberg/causal-ts/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/bloomberg/causal-ts/compare/v0.25.2...v0.26.0
 [0.25.2]: https://github.com/bloomberg/causal-ts/compare/v0.25.1...v0.25.2
 
 <!-- textlint-enable -->

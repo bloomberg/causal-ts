@@ -1,0 +1,21 @@
+{
+  "name": "causal-ts",
+  "owner": {
+    "name": "Causal-TS authors",
+    "url": "https://github.com/bloomberg/causal-ts"
+  },
+  "description": "Causal discovery for nonstationary time series, as an installable Claude Code plugin.",
+  "plugins": [
+    {
+      "name": "causal-ts-discovery",
+      "source": "./",
+      "description": "Discover causal structure in nonstationary time series with causal-ts — data-health inspection, algorithm/CI-test selection, discovery, and graph interpretation.",
+      "category": "data-science",
+      "keywords": [
+        "causal-discovery",
+        "time-series",
+        "nonstationary"
+      ]
+    }
+  ]
+}

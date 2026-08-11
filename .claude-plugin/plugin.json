@@ -1,0 +1,21 @@
+{
+  "name": "causal-ts-discovery",
+  "version": "0.26.0",
+  "description": "Agent skill for causal discovery in nonstationary time series with causal-ts — inspects data health, auto-selects an algorithm (CDNOTS/Cedar/GRACE) and CI test, runs discovery, and interprets the causal graph.",
+  "author": {
+    "name": "Causal-TS authors"
+  },
+  "homepage": "https://github.com/bloomberg/causal-ts",
+  "repository": "https://github.com/bloomberg/causal-ts",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "causal-discovery",
+    "time-series",
+    "nonstationary",
+    "causal-inference",
+    "agent-skill"
+  ],
+  "skills": [
+    "./causalts/skills/causal-ts-discovery"
+  ]
+}
