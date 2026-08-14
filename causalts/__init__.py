@@ -21,6 +21,11 @@ from .cdnots.result import CdnotsResult  # noqa: F401
 from .cedar.discovery import Cedar, run_cedar  # noqa: F401
 from .cedar.legacy import SYPI  # noqa: F401
 from .cedar.result import CedarResult  # noqa: F401
+from .feature_selection import (  # noqa: F401
+    Feature,
+    FeatureSelectionResult,
+    select_features,
+)
 from .grace.gated_discovery import (  # noqa: F401
     run_cdnots_gated,
     run_stability_selection,

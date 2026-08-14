@@ -76,6 +76,11 @@ Notebooks reproducing experiments from the GRACE paper (preprint forthcoming) wi
 
 <div class="ct-gallery">
 
+<a href="feature_selection.html" class="ct-gallery-item" data-tooltip="Select one target's causal features (parents / Markov blanket) in O(d) — three backends (cedar, fastpc, cdnots). Covers interventional validity via backdoor adjustment and a predictor payoff (parsimony, robustness to distribution shift, nuisance rejection) vs Lasso.">
+  <img src="../_static/img/thumbnails/feature_selection_thumb.png" alt="Causal Feature Selection" />
+  <span class="ct-gallery-title">Causal Feature Selection</span>
+</a>
+
 <a href="effect_estimation.html" class="ct-gallery-item" data-tooltip="End-to-end DoWhy integration: estimate causal effects, fit SCMs, run counterfactuals, root cause analysis, and graph falsification.">
   <img src="../_static/img/thumbnails/effect_estimation_thumb.png" alt="Effect Estimation" />
   <span class="ct-gallery-title">Effect Estimation</span>
@@ -177,6 +182,7 @@ cedar_deep_dive
 cedar_lag_selection
 grace_high_dim
 grace_ablation
+feature_selection
 effect_estimation
 probabilistic_queries
 missing_values
