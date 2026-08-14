@@ -13,6 +13,11 @@ Hands-on notebooks covering algorithms, CI tests, and the full discovery-to-esti
   <span class="ct-gallery-title">Beginner's Guide</span>
 </a>
 
+<a href="guided_discovery.html" class="ct-gallery-item" data-tooltip="The guided inspect -> recommend -> discover -> interpret workflow (the one the causal-ts-discovery agent skill automates): from a DataFrame to a scored causal graph in four steps.">
+  <img src="../_static/img/thumbnails/guided_discovery_thumb.png" alt="Guided Discovery" />
+  <span class="ct-gallery-title">Guided Discovery</span>
+</a>
+
 <a href="../tutorial.html" class="ct-gallery-item" data-tooltip="Full walkthrough of CDNOTS, CDNOTS+, CEDAR, and GRACE — data generation, discovery, evaluation, and visualization.">
   <img src="../_static/img/thumbnails/tutorial_thumb.png" alt="Getting Started Tutorial" />
   <span class="ct-gallery-title">Getting Started Tutorial</span>
@@ -175,6 +180,7 @@ Notebooks reproducing experiments from the GRACE paper (preprint forthcoming) wi
 :maxdepth: 1
 
 beginers_guide
+guided_discovery
 ../tutorial
 api_reference
 cedar_benchmark

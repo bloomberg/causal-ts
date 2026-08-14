@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * Public Python entry points `inspect_df`, `recommend_config`, `discover_df`
 * Observed-data (non)stationarity detection (ADF + KPSS) and trend-form detection for C-preset selection
 * Multi-format data reader (csv / parquet / feather) with an optional `parquet` extra
+* `guided_discovery` example notebook — the inspect → recommend → discover → interpret workflow end to end
 * Correlation / association plots — `corrplot` and `compute_association_matrix` (`causalts.plotting`)
 * Temporal-subsampling detection — `detect_subsampling` and `DetectionResult` (`causalts.utils`)
 
