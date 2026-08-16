@@ -400,9 +400,9 @@ def inspect(data, var_names, max_lag):
     "want_pvalues",
     default=False,
     help=(
-        "Return per-edge p-values (CDNOTS family). Off by default as a "
-        "memory safeguard for very high-dimensional data; safe to enable on "
-        "low/moderate d."
+        "Return per-edge p-values (CDNOTS family and CEDAR). Off by default "
+        "as a memory safeguard for very high-dimensional data; safe to enable "
+        "on low/moderate d."
     ),
 )
 @click.option(
@@ -713,6 +713,8 @@ def discover(
             df=df,
             max_lag=max_lag,
             alpha=alpha,
+            include_C=include_c,
+            c_preset=c_preset,
             gate_threshold=gate_threshold,
             max_epochs=max_epochs,
             batch_size=batch_size,
@@ -729,6 +731,7 @@ def discover(
         summary["output_files"]["graph"] = "estimated_graph.npy"
         summary["output_files"]["gate_values"] = "gate_values.npy"
         summary["gate_threshold"] = gate_threshold
+        summary["include_C"] = include_c
         summary["max_epochs"] = max_epochs
 
         if save_plot:
@@ -760,6 +763,8 @@ def discover(
             max_lag=max_lag,
             use_ci_skeleton=True,
             ci_alpha=alpha,
+            include_C=include_c,
+            c_preset=c_preset,
             stability_threshold=stability_threshold,
             max_epochs=max_epochs,
             batch_size=batch_size,
@@ -778,6 +783,7 @@ def discover(
         summary["output_files"]["graph"] = "estimated_graph.npy"
         summary["output_files"]["stability_scores"] = "stability_scores.npy"
         summary["stability_threshold"] = stability_threshold
+        summary["include_C"] = include_c
         summary["max_epochs"] = max_epochs
 
         if save_plot:
@@ -836,6 +842,8 @@ def discover(
                         max_degree=max_degree,
                         verbose=False,
                         show_progress=False,
+                        impute=impute,
+                        impute_kwargs=_impute_kwargs,
                         **_extra,
                     ).cg_tig
                 # cedar
@@ -862,6 +870,8 @@ def discover(
                     c_preset=c_preset,
                     include_autoreg=include_autoreg,
                     assume_ar1=assume_ar1,
+                    impute=impute,
+                    impute_kwargs=_impute_kwargs,
                 ).cg_tig
 
             boot = temporal_bootstrap(

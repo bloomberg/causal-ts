@@ -14,8 +14,12 @@ Public API:
 - :func:`inspect_df` — full report ``{schema_version, data, facts, recommendation,
   cost_class, warnings}`` for an in-memory DataFrame.
 - :func:`recommend_config` — the pure facts → config decision function.
+- :func:`discover_df` — run discovery on an in-memory DataFrame (the Python twin
+  of ``causal-ts discover``).
 - :func:`edges_from_graph` — convert a ``(d, d, L+1)`` graph array into a list of
   named edge objects (used by ``discover --json``).
+- :func:`diagnostics_from_graph` — red-flag diagnostics (``empty``, ``saturated``,
+  hub in-degree, …) computed from a discovered graph.
 """
 
 from __future__ import annotations
@@ -289,7 +293,8 @@ def inspect_df(df, max_lag=None):
     df : pandas.DataFrame
         Time series of shape (T, d); columns are variables.
     max_lag : int, optional
-        Override the suggested max lag; otherwise it is inferred from the ACF.
+        Override the suggested max lag; otherwise it is inferred from the
+        partial autocorrelation (see :func:`_suggested_max_lag`).
 
     Returns
     -------
@@ -346,7 +351,7 @@ def discover_df(
     max_lag=3,
     include_C=False,
     c_preset="linear",
-    alpha=0.05,
+    alpha=None,
     device="cpu",
     **kwargs,
 ):
@@ -356,29 +361,57 @@ def discover_df(
     returns the algorithm's result object (all expose ``.cg_tig``). Extra
     keyword args pass through to the underlying ``run_*`` function. For files,
     prefer the CLI; this is the no-temp-file path for notebooks/sessions.
-    """
-    from .ci_tests import create_ci_test
 
-    ci = create_ci_test(ci_test, df.values, device=device)
+    Every argument is honoured by every algorithm, with one exception: GRACE
+    builds its CDNOTS skeleton with its own CI test, so ``ci_test`` applies to
+    the CDNOTS/Cedar paths only and is rejected for GRACE rather than silently
+    ignored (pass ``ci_test_class=<class>`` through ``**kwargs`` instead).
+
+    Parameters
+    ----------
+    alpha : float, optional
+        Significance level. ``None`` (default) means "use the algorithm's own
+        default" — 0.05 for the CDNOTS family and GRACE's skeleton, 0.01 for
+        Cedar's ``alpha_cond1`` / ``alpha_cond2``. Passing a float applies it
+        to all of them.
+    include_C : bool, default False
+        Add the C nonstationarity node. Applied uniformly here, so the default
+        is off for every algorithm — note that calling
+        :func:`~causalts.grace.gated_discovery.run_cdnots_gated` directly
+        defaults it to True instead. To put C into GRACE's gated model as well
+        as its skeleton, pass ``include_C_in_model=True`` through ``**kwargs``.
+
+    Raises
+    ------
+    ValueError
+        If ``algorithm`` is unknown, or if a non-default ``ci_test`` is
+        requested for GRACE.
+    """
     if algorithm in ("cdnots", "cdnots+"):
         from .cdnots.phase3_utils import run_cdnots, run_cdnots_plus
+        from .ci_tests import create_ci_test
 
         fn = run_cdnots if algorithm == "cdnots" else run_cdnots_plus
+        if alpha is not None:
+            kwargs["alpha"] = alpha
         return fn(
             df=df,
-            indep_test=ci,
+            indep_test=create_ci_test(ci_test, df.values, device=device),
             num_lags=max_lag,
             include_C=include_C,
             c_preset=c_preset,
-            alpha=alpha,
             **kwargs,
         )
     if algorithm == "cedar":
         from .cedar.discovery import run_cedar
+        from .ci_tests import create_ci_test
 
+        if alpha is not None:
+            kwargs.setdefault("alpha_cond1", alpha)
+            kwargs.setdefault("alpha_cond2", alpha)
         return run_cedar(
             df=df,
-            ci_test=ci,
+            ci_test=create_ci_test(ci_test, df.values, device=device),
             max_lag=max_lag,
             include_C=include_C,
             c_preset=c_preset,
@@ -387,6 +420,35 @@ def discover_df(
     if algorithm in ("grace", "grace-ss"):
         from .grace.gated_discovery import run_cdnots_gated, run_stability_selection
 
+        # GRACE instantiates a CI test class itself for the skeleton; a
+        # by-name instance has nowhere to go. Refuse rather than drop it.
+        if ci_test != "parcorr-gpu" and "ci_test_class" not in kwargs:
+            raise ValueError(
+                f"ci_test={ci_test!r} is not supported for {algorithm!r}: GRACE "
+                "builds its skeleton with its own CI test. Pass "
+                "ci_test_class=<class> instead, or use algorithm='cdnots'."
+            )
+        if algorithm == "grace":
+            if alpha is not None:
+                kwargs["alpha"] = alpha
+        else:
+            if alpha is not None:
+                kwargs.setdefault("ci_alpha", alpha)
+            # grace-ss reaches C only through its CI skeleton; without one
+            # there is nowhere to put the node.
+            if include_C and not kwargs.get("use_ci_skeleton", False):
+                raise ValueError(
+                    "include_C=True requires use_ci_skeleton=True for "
+                    "algorithm='grace-ss' (stability selection has no C node of "
+                    "its own). Pass use_ci_skeleton=True, or use "
+                    "algorithm='grace'."
+                )
         fn = run_cdnots_gated if algorithm == "grace" else run_stability_selection
-        return fn(df, max_lag=max_lag, **kwargs)
+        return fn(
+            df,
+            max_lag=max_lag,
+            include_C=include_C,
+            c_preset=c_preset,
+            **kwargs,
+        )
     raise ValueError(f"unknown algorithm {algorithm!r}")
