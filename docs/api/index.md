@@ -12,7 +12,7 @@ Full API documentation auto-generated from source docstrings (NumPy format).
 :link-type: doc
 :shadow: md
 
-`run_cdnots` · `run_cdnots_plus` · `run_cedar` · `Cedar` · `run_cdnots_gated` · `evaluate_graph`
+`inspect_df` · `recommend_config` · `discover_df` · `select_features` · `run_cdnots` · `run_cdnots_plus` · `run_cedar` · `Cedar` · `run_cdnots_gated` · `temporal_bootstrap` · `evaluate_graph`
 :::
 
 :::{grid-item-card} {fas}`vials;1.2em;sd-text-primary` &nbsp; CI Tests
@@ -54,7 +54,7 @@ Full API documentation auto-generated from source docstrings (NumPy format).
 :link-type: doc
 :shadow: md
 
-`discover` · `generate` · `evaluate` · `ci-test-info` — all flags and options documented.
+`inspect` · `discover` · `generate` · `evaluate` · `ci-test-info` · `plot` · `install-skill` · `dowhy` — all flags and options documented.
 :::
 
 ::::

@@ -28,7 +28,7 @@ Causal-TS is a Python framework for causal discovery in time series data. It imp
 | `gcmi` | Monotone nonlinear | instant |
 | `splitkci` | Nonlinear (kernel) | fast |
 | `rcot` | Nonlinear (RFF) | fast |
-| `linsig` | Path-space (signature) | moderate |
+| `sigkci` | Path-space (signature) | moderate |
 | `kci` | Nonlinear (kernel) | slow |
 | `dfcit` | Distribution-free | moderate |
 | `cmiknn-gpu` | Nonparametric (k-NN) | slow |
@@ -54,6 +54,9 @@ pip install -e ".[dev,dowhy,tigramite]"
 
 PyTorch is installed automatically. CUDA and Apple MPS are auto-detected at
 runtime; CPU is the fallback.
+
+To let a coding agent drive causal-ts, run `causal-ts install-skill` — see the
+[CLI reference](https://causal-ts.readthedocs.io/en/latest/cli.html#install-skill).
 
 ## Quick Start
 

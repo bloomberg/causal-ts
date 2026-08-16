@@ -78,7 +78,7 @@ class AncestralKnowledge:
         """Require a directed path ancestor → … → descendant (any lags).
 
         During orientation, lag copies of *ancestor* at lag >= 1 are ranked by
-        AR(1)-residualized |Pearson r| and tried in that order.  Lag-0
+        AR(1)-residualized ``|Pearson r|`` and tried in that order.  Lag-0
         (contemporaneous) is never used — contemporaneous correlations in time
         series are often due to common causes, not direct causation.  Use
         ``add_required_edge(ancestor, descendant, cause_lag=0)`` to explicitly
@@ -296,7 +296,7 @@ def apply_ancestral_constraints(
     Required ancestors
     ------------------
     For each ``required_ancestor(A, D)`` the lag copy of A with the highest
-    |Pearson r| to D is used as the BFS start point.  If a semi-directed path
+    ``|Pearson r|`` to D is used as the BFS start point.  If a semi-directed path
     from that lag copy exists, undirected edges along it are oriented toward D
     and Meek is re-run.  Remaining lag copies are tried as fallback.  If no
     path exists from any lag copy a violation is recorded.
@@ -343,7 +343,7 @@ def apply_ancestral_constraints(
     def _best_lag_order(anc_name: str, desc_name: str) -> list[int]:
         """Return lag search order for required_ancestor BFS.
 
-        Lagged copies (lag >= 1) are ranked by |Pearson r| with the
+        Lagged copies (lag >= 1) are ranked by ``|Pearson r|`` with the
         AR(1)-residualized descendant — this isolates the ancestor's direct
         causal signal after removing the descendant's own autoregressive
         component.  Lag-0 is appended last as a fallback.

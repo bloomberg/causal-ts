@@ -116,7 +116,7 @@ def local_pc_skeleton(
     graph : np.ndarray, shape (d_all, d_all, num_lags+1)
         Incoming edges to the target: ``graph[v, target, tau] == 1``.
     val_matrix : np.ndarray, same shape
-        Edge strength (min |stat| across surviving conditioning sets).
+        Edge strength (min ``|stat|`` across surviving conditioning sets).
     var_names : list[str]
         Variable names including any trailing C columns.
     n_c : int

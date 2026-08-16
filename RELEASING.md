@@ -36,7 +36,15 @@ In the repository, go to **Settings → Environments → New environment**, name
 ## Cutting a release
 
 1. Bump `project.version` in `pyproject.toml` (e.g. `0.25.1` → `0.25.2`) and
-   merge it to `main`. Confirm the `test` matrix is green.
+   merge it to `main`. Confirm the `test` matrix is green. In the same PR, bump
+   the other version-bearing files — they are **not** derived from
+   `pyproject.toml` and go stale silently:
+   - `CHANGELOG.md` — a new section plus the compare links at the bottom
+   - `docs/_static/switcher.json` — `conf.py` matches the switcher on the
+     installed version, so a missing entry breaks the version dropdown
+   - `docs/conf.py` — the `announcement` ribbon, if the release is worth
+     advertising
+   - `.claude-plugin/plugin.json` — the packaged skill's own version
 2. Create and publish a **GitHub Release** whose tag is the version prefixed
    with `v` (e.g. `v0.25.2`). The tag must exactly match `pyproject.toml`;
    `release.yml` fails the build otherwise.

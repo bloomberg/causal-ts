@@ -5,6 +5,8 @@ experiments/
 *.json
 !.claude-plugin/plugin.json
 !.claude-plugin/marketplace.json
+# Default --output-dir for the CLI; test runs drop artifacts here.
+causal_ts_output/
 __pycache__/
 *.py[cod]
 *$py.class

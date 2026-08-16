@@ -1,6 +1,6 @@
 # CLI Reference
 
-The `causal-ts` command provides a full pipeline from the terminal: generate data, run discovery, evaluate results, and plot graphs.
+The `causal-ts` command provides a full pipeline from the terminal: inspect and generate data, run discovery, evaluate results, and plot graphs.
 
 ```bash
 causal-ts [OPTIONS] COMMAND [ARGS]...
@@ -18,9 +18,47 @@ causal-ts [OPTIONS] COMMAND [ARGS]...
 
 ---
 
+## `inspect`
+
+Pre-flight a dataset: measure its health and get a recommended discovery
+configuration. Emits a single JSON object to stdout, so it pipes straight into
+`jq` or an agent.
+
+```bash
+causal-ts inspect DATA.csv [OPTIONS]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--var-names TEXT` | from file | Comma-separated variable names |
+| `--max-lag INT` | inferred | Override the suggested max lag |
+
+The report has six blocks:
+
+| Key | Contents |
+|-----|----------|
+| `schema_version` | Integer, bumped on breaking changes to this contract |
+| `data` | `n_rows`, `n_vars`, `var_names`, `missing_by_col`, `constant_cols`, `discrete_cols` |
+| `facts` | Linearity fraction, per-column ADF+KPSS (non)stationarity and its `form`, PACF-suggested max lag |
+| `recommendation` | `algorithm`, `ci_test`, `include_C`, `c_preset`, `max_lag`, `rationale` |
+| `cost_class` | `cheap`, `moderate`, or `expensive` — how heavy the recommended run is |
+| `warnings` | Data-health flags (heavy missingness, constant columns, too few rows) |
+
+```bash
+# Inspect, then run exactly what it recommends
+causal-ts inspect data.csv | jq '.recommendation'
+```
+
+The same report is available in Python as
+{func}`causalts.inspection.inspect_df`, and the pure facts → config step as
+{func}`causalts.inspection.recommend_config`.
+
+---
+
 ## `discover`
 
-Run causal discovery on a CSV file.
+Run causal discovery on a `.csv`, `.parquet`/`.pq`, or `.feather` file.
+Parquet and feather need `pip install causalts[parquet]`.
 
 ```bash
 causal-ts discover DATA.csv [OPTIONS]
@@ -76,6 +114,15 @@ causal-ts discover DATA.csv [OPTIONS]
 | `--max-epochs INT` | `150` | Training epochs |
 | `--batch-size INT` | auto | Mini-batch size |
 | `--patience INT` | `20` | Early-stopping patience |
+| `--include-c / --no-c` | on | Include the C node in the CDNOTS/CI skeleton GRACE refines |
+| `--c-preset` | `linear` | C node basis for that skeleton |
+
+GRACE runs in two stages, and `--include-c` / `--c-preset` configure the first:
+the CDNOTS (or CI) skeleton. The second stage — the gated neural model — has a
+separate, opt-in C of its own; reach it by calling
+{func}`causalts.grace.gated_discovery.run_cdnots_gated` with
+`include_C_in_model=True` from Python. That option requires a skeleton built
+with C, since the skeleton masks the model's gates.
 
 ### Missing data
 
@@ -91,6 +138,31 @@ causal-ts discover DATA.csv [OPTIONS]
 | `--ground-truth PATH` | — | `.npy` ground truth for instant evaluation |
 | `--save-plot / --no-plot` | on | Save graph plot images |
 | `--plot-format` | `png` | `png`, `pdf`, or `svg` |
+| `--json` | off | Echo the run summary — including a named edge list and a `diagnostics` block — as JSON to stdout |
+| `--pvalues / --no-pvalues` | off | Include per-edge p-values (CDNOTS family and CEDAR). Off by default as a memory safeguard on very high-dimensional data; safe to enable at low/moderate `d`. Not available for GRACE, which emits gate values rather than per-test p-values. |
+
+With `--json`, the `edges` list gives `{source, target, lag, pvalue}` per edge
+(`pvalue` is `null` unless `--pvalues` was passed), and `diagnostics` carries
+`n_edges`, `density`, `self_loops`, `contemporaneous`/`lagged`,
+`max_in_degree` + `hub`, and the `empty` / `saturated` flags.
+
+### Stability check
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--validate` | off | Re-run discovery on contiguous bootstrap windows and annotate every edge with its `persistence` (fraction of windows it recurs). Not supported for GRACE. |
+| `--n-bootstrap INT` | `20` | Number of bootstrap windows |
+| `--window-frac FLOAT` | `0.6` | Window size as a fraction of `T` |
+
+Windows are re-run with the same algorithm, CI test, C-node, and imputation
+settings as the main run. Persistence measures robustness to **sampling**, not
+correctness — a systematic artifact (a lag-`k` echo of a true lag-`k−1` edge,
+say) recurs in every window and still scores high. Treat `>= 0.6` as "not a
+sampling fluke," not as proof of a causal link.
+
+```bash
+causal-ts -o out discover data.csv --json --validate --n-bootstrap 30
+```
 
 **Example — full pipeline in one command:**
 ```bash
@@ -186,6 +258,31 @@ causal-ts plot GRAPH [options]
 | `--figsize` | — | Figure size as `W,H` (e.g. `10,8`) |
 | `--plot-format` | `png` | Output format: `png`, `pdf`, or `svg` |
 | `--save-name` | — | Custom output filename (without extension) |
+
+---
+
+## `install-skill`
+
+Install the packaged `causal-ts-discovery` agent skill so a coding agent can
+drive causal-ts for you: it inspects the data, picks an algorithm and CI test,
+checkpoints with you before an expensive run, and reads the resulting graph back
+in plain English.
+
+```bash
+causal-ts install-skill [OPTIONS]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--copy` | off | Copy the skill instead of symlinking (for environments that reject symlinks) |
+| `--force` | off | Replace an existing non-symlink target |
+| `--dry-run` | off | Print what would happen without changing anything |
+
+The skill is installed into `~/.claude/skills/` (Claude Code) and
+`~/.agents/skills/` (Codex and other Agent-Skills harnesses). The default
+symlink stays current across `pip install -U causalts`; `--copy` pins a static
+snapshot. The repository also ships a `.claude-plugin/` manifest, so the same
+skill can be added as a Claude Code plugin from a checkout.
 
 ---
 

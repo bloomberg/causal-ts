@@ -25,9 +25,13 @@ Identify what the user handed you:
 - **A file** (`.csv`, `.parquet`, `.feather`) → use the CLI path (steps 2–4).
 - **An in-memory pandas DataFrame** (notebook/session) → use the Python path:
   `from causalts import inspect_df; report = inspect_df(df)`, then jump to step 3
-  using `report`. For discovery, write it to a temp file
-  (`df.to_parquet("/tmp/ts.parquet")`) and use the CLI, or ask the user how
-  they'd like to proceed.
+  using `report`. For discovery, `discover_df(df, algorithm=..., ci_test=...,
+  max_lag=..., include_C=..., c_preset=...)` is the in-memory twin of the CLI —
+  it returns a result object whose `.cg_tig` you can pass to
+  `causalts.inspection.edges_from_graph` / `diagnostics_from_graph` to get the
+  same edge list and diagnostics §5 expects. It raises rather than silently
+  ignoring an argument the chosen algorithm can't honour. Otherwise write the
+  frame to a temp file (`df.to_parquet("/tmp/ts.parquet")`) and use the CLI.
 
 ## 2. Inspect (facts + recommendation, one call)
 
@@ -89,7 +93,8 @@ list**) to stdout — parse that directly. Artifacts (`estimated_graph.npy`,
 Read the `edges` list (`source → target @ lag`, with `pvalue` when present) and
 report it in plain English. Apply this diagnostic playbook.
 
-Note on `pvalue`: for the CDNOTS family it is **`null` unless you asked for it**.
+Note on `pvalue`: for the CDNOTS family and CEDAR it is **`null` unless you asked
+for it**.
 P-values are off by default as a memory safeguard for very high-dimensional data;
 pass **`--pvalues`** to `discover` to get them (safe on low/moderate `d` — i.e.
 when `cost_class` is `cheap`/`moderate`; skip it on very high `d`). So if the user
