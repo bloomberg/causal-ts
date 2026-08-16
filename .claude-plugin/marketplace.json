@@ -11,11 +11,7 @@
       "source": "./",
       "description": "Discover causal structure in nonstationary time series with causal-ts — data-health inspection, algorithm/CI-test selection, discovery, and graph interpretation.",
       "category": "data-science",
-      "keywords": [
-        "causal-discovery",
-        "time-series",
-        "nonstationary"
-      ]
+      "keywords": ["causal-discovery", "time-series", "nonstationary"]
     }
   ]
 }

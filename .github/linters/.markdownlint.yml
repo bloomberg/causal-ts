@@ -40,6 +40,15 @@ MD032: false
 # https://github.com/DavidAnson/markdownlint/blob/v0.34.0/doc/md012.md
 MD012: false
 
+# MD060/table-column-style — disabled: the docs use compact tables
+# (`|---|---|`) whose pipes are not padded or column-aligned. The rule wants one
+# consistent style repo-wide, and the existing tables predate it — docs/cli.md
+# alone trips it 59 times untouched. Since super-linter only lints changed
+# files, leaving it on means any PR that edits a page inherits an unrelated
+# table-reformatting diff.
+# https://github.com/DavidAnson/markdownlint/blob/main/doc/md060.md
+MD060: false
+
 # MD024/no-duplicate-heading
 # https://github.com/DavidAnson/markdownlint/blob/v0.34.0/doc/md024.md
 MD024:

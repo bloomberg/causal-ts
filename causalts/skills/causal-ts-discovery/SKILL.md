@@ -35,7 +35,7 @@ Identify what the user handed you:
 
 ## 2. Inspect (facts + recommendation, one call)
 
-```
+```bash
 causal-ts inspect <data-file>
 ```
 
@@ -66,18 +66,18 @@ rather than guessing.
   offer a concrete cheaper alternative — stay **inside causal-ts** (do NOT
   suggest external tools like PCMCI/tigramite; they are optional deps and may be
   absent). Pick the alternative by what makes it expensive:
-    - expensive from **GRACE / high `d`** → offer `cdnots` or `cedar` with
-      `parcorr-gpu` (same skeleton, no neural-gate training);
-    - expensive from the **CI test** (`kci` / `cmiknn-gpu`) → downshift to
-      `splitkci`;
-    - or lower `--max-lag`.
+  - expensive from **GRACE / high `d`** → offer `cdnots` or `cedar` with
+    `parcorr-gpu` (same skeleton, no neural-gate training);
+  - expensive from the **CI test** (`kci` / `cmiknn-gpu`) → downshift to
+    `splitkci`;
+  - or lower `--max-lag`.
   Then wait for the go-ahead.
 
 ## 4. Run discovery
 
 Use the recommended config. Example:
 
-```
+```bash
 causal-ts -o <out-dir> discover <data-file> --json \
   --algorithm <rec.algorithm> --ci-test <rec.ci_test> \
   --max-lag <rec.max_lag> [--include-c --c-preset <rec.c_preset>]
@@ -137,7 +137,7 @@ built-in stability check: add **`--validate`** to `discover` (tune with
 discovery on contiguous windows and annotates every edge in the JSON with
 `persistence` (fraction of windows it recurs) plus a `stability` block:
 
-```
+```bash
 causal-ts -o <dir> discover <data> --json --algorithm <rec.algorithm> \
   --ci-test <rec.ci_test> --max-lag <rec.max_lag> --validate
 ```

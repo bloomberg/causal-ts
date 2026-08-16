@@ -15,7 +15,5 @@
     "causal-inference",
     "agent-skill"
   ],
-  "skills": [
-    "./causalts/skills/causal-ts-discovery"
-  ]
+  "skills": ["./causalts/skills/causal-ts-discovery"]
 }
