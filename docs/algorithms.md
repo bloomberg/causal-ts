@@ -196,11 +196,12 @@ Two-stage hybrid: constraint-based skeleton (CDNOTS or CDNOTS+, high recall) + n
 ```python
 from causalts.grace import run_cdnots_gated
 
-G_hat, gate_values, info = run_cdnots_gated(
+res = run_cdnots_gated(
     df=df, max_lag=3, alpha=0.05,
     gate_threshold=0.5, max_epochs=150,
     device="cpu", verbose=False,
 )
+G_hat, gate_values = res.cg_tig, res.gate_values
 ```
 ::::
 
@@ -208,10 +209,11 @@ G_hat, gate_values, info = run_cdnots_gated(
 ```python
 from causalts.grace import run_stability_selection
 
-G_hat, scores, info = run_stability_selection(
+res = run_stability_selection(
     df=df, max_lag=3,
     n_subsamples=20, stability_threshold=0.6,
 )
+G_hat, scores = res.cg_tig, res.stability_scores
 ```
 
 :::{warning}
@@ -230,6 +232,9 @@ Stability selection runs GRACE on random subsamples without a pre-filtered skele
 | `max_epochs` | `150` | Training budget. Increase for complex data. |
 | `patience` | `20` | Early-stopping patience in epochs. |
 | `batch_size` | auto | Auto-set based on T. Set manually if OOM. |
+| `include_C` | `True` | Include the C nonstationarity node in the skeleton. Set `False` for already-detrended data. |
+| `c_preset` | `linear` | C basis for that skeleton — same presets as CDNOTS. |
+| `include_C_in_model` | `False` | Also feed C to the gated model (not just the skeleton). Requires `include_C=True`. |
 
 **Interpreting `gate_values`:** Values near 1.0 indicate high confidence edges; near 0.0 are pruned. Plot `gate_values` as a heatmap to visualize edge confidence.
 

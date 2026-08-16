@@ -73,8 +73,9 @@ html_favicon = "_static/img/favicon_.png"
 html_show_sourcelink = False
 
 html_theme_options = {
-    "announcement": "🚀 Causal-TS v0.25 — four discovery algorithms, eight GPU-accelerated CI tests, and 20+ example notebooks. "
-    "<a href='getting_started/index.html'>Get started →</a>",
+    "announcement": "🚀 New in v0.26 — the <code>causal-ts-discovery</code> agent skill, "
+    "a <code>causal-ts inspect</code> pre-flight, and causal feature selection. "
+    "<a href='examples/guided_discovery.html'>See the guided workflow →</a>",
     "logo": {
         "text": "Causal-TS",
         "image_light": "_static/img/cts_.png",

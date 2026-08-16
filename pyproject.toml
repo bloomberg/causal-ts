@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "causalts"
-version = "0.25.2"
+version = "0.26.0"
 description = "Causal Discovery for Time Series"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -62,6 +62,7 @@ Changelog = "https://github.com/bloomberg/causal-ts/blob/main/CHANGELOG.md"
 [project.optional-dependencies]
 dowhy = ["dowhy>=0.11"]
 tigramite = ["tigramite"]
+parquet = ["pyarrow>=10.0"]
 dev = [
   "pytest>=7.0",
   "black>=23.0",
@@ -75,7 +76,10 @@ include = ["causalts*"]
 exclude = ["tests*", "docs*"]
 
 [tool.setuptools.package-data]
-causalts = ["py.typed"]
+# Ship only the functional skill files in the wheel. Design rationale lives in
+# docs/skills/ (out of the skill dir) so it ships with neither the wheel nor the
+# plugin git-copy.
+causalts = ["py.typed", "skills/*/SKILL.md", "skills/*/agents/*"]
 
 [tool.black]
 line-length = 88

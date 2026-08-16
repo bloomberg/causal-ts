@@ -1256,6 +1256,7 @@ def run_ci_skeleton(
     normalize: bool = True,
     max_degree: int = 1,
     include_C: bool = True,
+    c_preset: str = "linear",
     cache_dir: str | None = None,
     verbose: bool = True,
     return_pvalues: bool = False,
@@ -1280,7 +1281,11 @@ def run_ci_skeleton(
     max_degree : int
         Maximum conditioning set size.
     include_C : bool
-        Include time index as a variable.
+        Include the C nonstationarity basis as extra variable(s).
+    c_preset : str, default ``'linear'``
+        C basis preset (same options as ``run_cdnots``). Multi-column presets
+        such as ``'linear+sin'`` add one variable per basis column; all of them
+        are trimmed from the returned skeleton.
     cache_dir : str
         Directory for caching CI test results.
     verbose : bool
@@ -1331,10 +1336,17 @@ def run_ci_skeleton(
     ci_data = np.ascontiguousarray(ci_data)
     ci_test = ci_test_class(ci_data, cache_dir=cache_dir, data_hash=data_hash)
 
-    # Add time index if requested
+    # Add the C nonstationarity basis if requested
     if include_C:
-        T = df_input.shape[0]
-        C = pd.DataFrame(np.arange(T).reshape(-1, 1), columns=["C"])
+        from ..cdnots.phase3_utils import _C_PRESET_LABELS, make_c_array
+
+        C_data = make_c_array(df_input.shape[0], c_preset)
+        C = pd.DataFrame(
+            C_data,
+            columns=_C_PRESET_LABELS.get(
+                c_preset, [f"C{i}" for i in range(C_data.shape[1])]
+            ),
+        )
         df_input = pd.concat([df_input.reset_index(drop=True), C], axis=1)
 
     # Create lagged data
@@ -1420,6 +1432,8 @@ def run_stability_selection(
     use_ci_skeleton: bool = False,
     ci_alpha: float = 0.05,
     ci_test_class=None,
+    include_C: bool = True,
+    c_preset: str = "linear",
     use_skeleton_mask: bool = False,
     stability_threshold: float = 0.6,
     normalize: bool = True,
@@ -1462,6 +1476,12 @@ def run_stability_selection(
         use_ci_skeleton=True).
     ci_test_class : class or None
         CI test class (only used if use_ci_skeleton=True).
+    include_C : bool, default True
+        Include the C nonstationarity node in the CI skeleton (only used
+        if use_ci_skeleton=True). True matches the historical behaviour.
+    c_preset : str, default ``'linear'``
+        C basis preset for the CI skeleton's nonstationarity node (same
+        options as ``run_cdnots``; only used if use_ci_skeleton=True).
     use_skeleton_mask : bool
         If True, hard-mask non-skeleton edges (cannot open). Default
         False: skeleton only used for initialization (recommended for
@@ -1568,6 +1588,8 @@ def run_stability_selection(
             max_lag=max_lag,
             alpha=ci_alpha,
             ci_test_class=ci_test_class,
+            include_C=include_C,
+            c_preset=c_preset,
             normalize=normalize,
             verbose=verbose,
             return_pvalues=True,
@@ -1703,7 +1725,9 @@ def run_cdnots_gated(
     verbose: bool = True,
     ground_truth: Optional[np.ndarray] = None,
     model_seed: Optional[int] = None,
+    include_C: bool = True,
     include_C_in_model: bool = False,
+    c_preset: str = "linear",
     lambda_cv: bool = False,
     impute: Optional[str] = None,
     impute_kwargs: Optional[dict] = None,
@@ -1751,10 +1775,25 @@ def run_cdnots_gated(
         Optional ground truth for evaluation.
     model_seed : int or None
         Seed for reproducibility.
+    include_C : bool, default True
+        Include the C nonstationarity node in the CDNOTS skeleton. True
+        matches the historical behaviour (the skeleton always had a C
+        node); set False for data you have already detrended or
+        differenced. Ignored when ``skeleton`` is supplied.
     include_C_in_model : bool
-        If True, append a time-index column C to the data before
+        If True, append the C nonstationarity basis to the data before
         training the gated model (mirrors CDNOTS nonstationarity
         handling). C-related edges are stripped from the output graph.
+        Requires ``include_C=True``, since the model's C columns are
+        masked by the skeleton's.
+    c_preset : str, default ``'linear'``
+        C basis preset for the nonstationarity node, applied to the CDNOTS
+        skeleton and, when ``include_C_in_model`` is True, to the columns
+        appended for gated training. Same options as ``run_cdnots``: ``'linear'``,
+        ``'linear+quad'``, ``'linear+sin'``, ``'linear+exp'``, ``'step'``,
+        ``'step+linear'``. Presets that expand to more than one basis
+        column (e.g. ``'linear+sin'``) add that many C columns; all of them
+        are stripped from the returned graph.
     lambda_cv : bool
         If True, select lambda via cross-validation instead of the
         closed-form formula (Eq. 11, arXiv:2507.07898). Slower but
@@ -1780,10 +1819,19 @@ def run_cdnots_gated(
     import time as _time
     import warnings
 
-    from ..cdnots.phase3_utils import run_cdnots
+    from ..cdnots.phase3_utils import _C_PRESET_LABELS, make_c_array, run_cdnots
 
     t0 = _time.time()
     num_vars = df.shape[1]
+    # Validate the preset up front (and learn its width) so a typo fails before
+    # the expensive skeleton run rather than after it.
+    n_c_cols = make_c_array(len(df), c_preset).shape[1] if include_C else 0
+    if include_C_in_model and not include_C:
+        raise ValueError(
+            "include_C_in_model=True requires include_C=True: the model's C "
+            "columns are masked by the skeleton's, so a skeleton without C "
+            "leaves them permanently closed."
+        )
 
     # ---- Pre-impute df so both skeleton and neural model use clean data ----
     if impute is not None and df.isna().any().any():
@@ -1820,25 +1868,26 @@ def run_cdnots_gated(
             df=df,
             indep_test=ci_test,
             num_lags=max_lag,
-            include_C=True,
+            include_C=include_C,
+            c_preset=c_preset,
             alpha=alpha,
             stable=True,
             show_progress=verbose,
             discrete_cols=discrete_cols,
         )
 
-        skel_vars = num_vars + 1 if include_C_in_model else num_vars
+        skel_vars = num_vars + n_c_cols if include_C_in_model else num_vars
         skeleton = _cdnots_graph_to_binary(cdnots_res.cg_tig, skel_vars, max_lag)
         t_skeleton = _time.time() - t0
 
-    # Optionally append a time-index column C to the model data
+    # Optionally append the C basis columns to the model data
     if include_C_in_model:
-        T_len = len(df)
-        C_col = pd.DataFrame(
-            np.arange(T_len, dtype=np.float64).reshape(-1, 1), columns=["C"]
+        C_cols = pd.DataFrame(
+            make_c_array(len(df), c_preset),
+            columns=_C_PRESET_LABELS.get(c_preset, [f"C{i}" for i in range(n_c_cols)]),
         )
-        df_model = pd.concat([df.reset_index(drop=True), C_col], axis=1)
-        model_num_vars = num_vars + 1
+        df_model = pd.concat([df.reset_index(drop=True), C_cols], axis=1)
+        model_num_vars = num_vars + n_c_cols
     else:
         df_model = df
         model_num_vars = num_vars

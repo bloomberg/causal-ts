@@ -31,6 +31,7 @@ from .grace.gated_discovery import (  # noqa: F401
     run_stability_selection,
 )
 from .grace.result import GraceResult  # noqa: F401
+from .inspection import discover_df, inspect_df, recommend_config  # noqa: F401
 from .result import CausalResult  # noqa: F401
 from .tigramite_discovery import (  # noqa: F401
     run_lpcmci,
