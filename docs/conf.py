@@ -89,7 +89,13 @@ html_theme_options = {
     "check_switcher": False,
     "switcher": {
         "json_url": "_static/switcher.json",
-        "version_match": release,
+        # Match on the Read the Docs version *slug*, not the package version.
+        # RTD serves exactly two versions here — /en/stable/ (built from the
+        # release tag) and /en/latest/ (built from main) — so those slugs are
+        # what switcher.json enumerates. Matching on ``release`` instead made
+        # both builds report "0.26.0", which collapsed the dropdown to a single
+        # entry with no route back from stable to latest.
+        "version_match": os.environ.get("READTHEDOCS_VERSION") or "stable",
     },
     "icon_links": [
         {
