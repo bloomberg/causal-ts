@@ -20,6 +20,26 @@ from __future__ import annotations
 
 _ALGO_REGISTRY: dict[str, callable] = {}
 
+# Algorithms whose module is expensive to import (GRACE pulls in
+# pytorch-lightning) are registered lazily: name -> (module path, function).
+# ``causalts.grace`` used to self-register at import time; registering here
+# keeps the names listed without paying for the import.  Mirrors the
+# _LAZY_REGISTRY pattern in causalts.ci_tests.
+_LAZY_ALGO_REGISTRY: dict[str, tuple[str, str]] = {
+    "grace": ("causalts.grace.gated_discovery", "run_cdnots_gated"),
+    "grace-ss": ("causalts.grace.gated_discovery", "run_stability_selection"),
+}
+
+
+def _resolve_lazy(name: str):
+    """Import a lazily-registered algorithm and cache it in the registry."""
+    import importlib
+
+    module_path, fn_name = _LAZY_ALGO_REGISTRY[name]
+    fn = getattr(importlib.import_module(module_path), fn_name)
+    _ALGO_REGISTRY[name] = fn
+    return fn
+
 
 def register_algorithm(name: str):
     """Decorator to register a discovery function under *name*.
@@ -45,7 +65,7 @@ def register_algorithm(name: str):
 
 def list_algorithms() -> list[str]:
     """Return sorted list of all registered algorithm names."""
-    return sorted(_ALGO_REGISTRY)
+    return sorted(set(_ALGO_REGISTRY) | set(_LAZY_ALGO_REGISTRY))
 
 
 def run_algorithm(name: str, df, ci_test, max_lag, **kwargs):
@@ -69,5 +89,10 @@ def run_algorithm(name: str, df, ci_test, max_lag, **kwargs):
     CausalResult
     """
     if name not in _ALGO_REGISTRY:
-        raise ValueError(f"Unknown algorithm {name!r}. Available: {list_algorithms()}")
+        if name in _LAZY_ALGO_REGISTRY:
+            _resolve_lazy(name)
+        else:
+            raise ValueError(
+                f"Unknown algorithm {name!r}. Available: {list_algorithms()}"
+            )
     return _ALGO_REGISTRY[name](df=df, ci_test=ci_test, max_lag=max_lag, **kwargs)

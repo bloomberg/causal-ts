@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import numpy as np
-import statsmodels.api as sm
-from statsmodels.stats.diagnostic import linear_reset
 
 
 def check_linearity(data, alpha=0.05, max_lag=1, pairs=None):
@@ -39,6 +37,11 @@ def check_linearity(data, alpha=0.05, max_lag=1, pairs=None):
         - fraction_nonlinear: fraction of tests rejecting linearity
         - summary: human-readable recommendation string
     """
+    # Imported here rather than at module scope: statsmodels costs ~0.25s to
+    # import and this is the only thing in causalts that needs it eagerly.
+    import statsmodels.api as sm
+    from statsmodels.stats.diagnostic import linear_reset
+
     if hasattr(data, "values"):
         data = data.values
     data = np.asarray(data, dtype=np.float64)
