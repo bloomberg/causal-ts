@@ -72,10 +72,22 @@ html_logo = "_static/img/cts_.png"
 html_favicon = "_static/img/favicon_.png"
 html_show_sourcelink = False
 
+# The announcement banner is raw HTML injected verbatim into *every* page, so a
+# relative href only resolves from the root document -- from examples/index.html
+# it pointed at examples/examples/... and 404'd. The link target is filled in
+# per page from ``pathto`` in ``_localize_announcement`` below; this literal is
+# the root-relative fallback for the (unused) case where no context is present.
+ANNOUNCEMENT_TARGET = "examples/agentic_discovery"
+ANNOUNCEMENT_LEAD = (
+    "🚀 New in v0.26 — the <code>causal-ts-discovery</code> agent skill, "
+    "a <code>causal-ts inspect</code> pre-flight, and causal feature selection."
+)
+ANNOUNCEMENT_HTML = (
+    ANNOUNCEMENT_LEAD + " <a href='{link}'>See the agentic workflow →</a>"
+)
+
 html_theme_options = {
-    "announcement": "🚀 New in v0.26 — the <code>causal-ts-discovery</code> agent skill, "
-    "a <code>causal-ts inspect</code> pre-flight, and causal feature selection. "
-    "<a href='examples/guided_discovery.html'>See the guided workflow →</a>",
+    "announcement": ANNOUNCEMENT_HTML.format(link=f"{ANNOUNCEMENT_TARGET}.html"),
     "logo": {
         "text": "Causal-TS",
         "image_light": "_static/img/cts_.png",
@@ -89,7 +101,13 @@ html_theme_options = {
     "check_switcher": False,
     "switcher": {
         "json_url": "_static/switcher.json",
-        "version_match": release,
+        # Match on the Read the Docs version *slug*, not the package version.
+        # RTD serves exactly two versions here — /en/stable/ (built from the
+        # release tag) and /en/latest/ (built from main) — so those slugs are
+        # what switcher.json enumerates. Matching on ``release`` instead made
+        # both builds report "0.26.0", which collapsed the dropdown to a single
+        # entry with no route back from stable to latest.
+        "version_match": os.environ.get("READTHEDOCS_VERSION") or "stable",
     },
     "icon_links": [
         {
@@ -129,3 +147,26 @@ html_context = {
     "github_version": "main",
     "doc_path": "docs",
 }
+
+
+def _localize_announcement(app, pagename, templatename, context, doctree):
+    """Rewrite the announcement link relative to the page being rendered.
+
+    ``theme_announcement`` is dropped into the template as-is on every page, so
+    the href has to be resolved per page rather than written once in the theme
+    options.  ``pathto`` is the same helper the theme uses for its own links.
+    """
+    pathto = context.get("pathto")
+    if pathto is None:
+        return
+    if pagename == ANNOUNCEMENT_TARGET:
+        # Already there -- ``pathto`` would render a dead "#" self-link.
+        context["theme_announcement"] = ANNOUNCEMENT_LEAD
+        return
+    context["theme_announcement"] = ANNOUNCEMENT_HTML.format(
+        link=pathto(ANNOUNCEMENT_TARGET)
+    )
+
+
+def setup(app):
+    app.connect("html-page-context", _localize_announcement)

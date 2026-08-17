@@ -9,6 +9,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+* The `guided_discovery` example notebook is now `agentic_discovery` ("Agentic
+  Causal Discovery"), naming it after the `causal-ts-discovery` agent skill whose
+  workflow it walks through. The old `examples/guided_discovery.html` URL is gone;
+  the page is at `examples/agentic_discovery.html`.
+
+### Fixed
+
+* Documentation: the "New in v0.26" banner linked to the example notebook with a
+  path relative to the site root, but the banner renders on every page — from
+  anything below the root (`examples/`, `api/`, `getting_started/`) it resolved to
+  a nonexistent nested path and 404'd. The link is now resolved per page.
+
 ## [0.26.0]
 
 ### Added
@@ -24,7 +38,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * Public Python entry points `inspect_df`, `recommend_config`, `discover_df`
 * Observed-data (non)stationarity detection (ADF + KPSS) and trend-form detection for C-preset selection
 * Multi-format data reader (csv / parquet / feather) with an optional `parquet` extra
-* `guided_discovery` example notebook — the inspect → recommend → discover → interpret workflow end to end
+* `guided_discovery` example notebook — the inspect → recommend → discover → interpret workflow end to end (renamed to `agentic_discovery` after release; see Unreleased)
 * Causal feature selection — `select_features` for O(d) single-target discovery (`causalts.feature_selection`)
 * Correlation / association plots — `corrplot` and `compute_association_matrix` (`causalts.plotting`)
 * Temporal-subsampling detection — `detect_subsampling` and `DetectionResult` (`causalts.utils`)

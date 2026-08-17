@@ -40,8 +40,9 @@ In the repository, go to **Settings → Environments → New environment**, name
    the other version-bearing files — they are **not** derived from
    `pyproject.toml` and go stale silently:
    - `CHANGELOG.md` — a new section plus the compare links at the bottom
-   - `docs/_static/switcher.json` — `conf.py` matches the switcher on the
-     installed version, so a missing entry breaks the version dropdown
+   - `docs/_static/switcher.json` — only the stable entry's `name` (the label
+     in the dropdown). Its `version` keys are Read the Docs slugs (`stable`,
+     `latest`), not release numbers, so no new entry is needed per release
    - `docs/conf.py` — the `announcement` ribbon, if the release is worth
      advertising
    - `.claude-plugin/plugin.json` — the packaged skill's own version

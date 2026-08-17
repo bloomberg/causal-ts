@@ -1,8 +1,13 @@
 [
   {
     "name": "v0.26 (stable)",
-    "version": "0.26.0",
+    "version": "stable",
     "url": "https://causal-ts.readthedocs.io/en/stable/",
     "preferred": true
+  },
+  {
+    "name": "dev (latest)",
+    "version": "latest",
+    "url": "https://causal-ts.readthedocs.io/en/latest/"
   }
 ]
