@@ -452,17 +452,13 @@ def corrplot(
             tl_pos = "lt"  # left + top for upper triangle
 
     # --- Default cl_pos ---
-    color_only_methods = {"color", "shade"}
-    active_methods = {method}
-    if upper is not None:
-        active_methods.add(upper)
-    if lower is not None:
-        active_methods.add(lower)
-    has_color_only = bool(active_methods & color_only_methods)
-
+    # ``colorbar=False`` suppresses the colorbar for every glyph method. It used
+    # to be ignored for the colour-only methods ('color', 'shade') on the theory
+    # that they are unreadable without a scale -- but that silently overrode an
+    # explicit argument, so the caller had to reach for ``cl_pos='n'`` instead.
     if cl_pos is None:
         cl_pos = "r"
-    if not colorbar and not has_color_only:
+    if not colorbar:
         cl_pos = "n"
 
     # --- Default grid_color ---

@@ -18,6 +18,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `corrplot(..., colorbar=False)` was ignored whenever the glyph method drew
+  colour only (`method="color"` or `"shade"`, or either as an `upper`/`lower`
+  half) — those panels kept their colorbar while every other method honoured the
+  flag. Callers had to reach for `cl_pos="n"` instead. `colorbar=False` now
+  suppresses the colorbar for every method.
 * Documentation: the "New in v0.26" banner linked to the example notebook with a
   path relative to the site root, but the banner renders on every page — from
   anything below the root (`examples/`, `api/`, `getting_started/`) it resolved to
