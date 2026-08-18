@@ -73,8 +73,6 @@ def uc_sepset(
 
     no_of_var = cg.G.num_vars
     assert no_of_var % (num_lags + 1) == 0
-    if num_lags > 0 and priority == 1:
-        raise NotImplementedError()
 
     no_of_inst_var = no_of_var // (num_lags + 1)
 
@@ -111,6 +109,56 @@ def uc_sepset(
 
             for i in range(num_lags - max(x_time_step, y_time_step)):
                 naive_add_edge(
+                    x + (i + 1) * no_of_inst_var, y + (i + 1) * no_of_inst_var
+                )
+
+    def naive_orient_or_bidirect(x, y):
+        """priority=1 handling for one pair: orient x --> y if the edge is
+        still undirected, or mark it x <-> y if y --> x is already there
+        (i.e. this collider conflicts with an earlier orientation)."""
+        edge = cg_new.G.get_edge(cg_new.G.nodes[x], cg_new.G.nodes[y])
+        if edge is None:
+            naive_add_edge(x, y)
+            return
+        if (
+            cg_new.G.graph[x, y] == Endpoint.TAIL.value
+            and cg_new.G.graph[y, x] == Endpoint.TAIL.value
+        ):
+            cg_new.G.remove_edge(edge)
+            cg_new.G.add_edge(
+                Edge(
+                    cg_new.G.nodes[x],
+                    cg_new.G.nodes[y],
+                    Endpoint.TAIL,
+                    Endpoint.ARROW,
+                )
+            )
+        elif (
+            cg_new.G.graph[x, y] == Endpoint.ARROW.value
+            and cg_new.G.graph[y, x] == Endpoint.TAIL.value
+        ):
+            cg_new.G.remove_edge(edge)
+            cg_new.G.add_edge(
+                Edge(
+                    cg_new.G.nodes[x],
+                    cg_new.G.nodes[y],
+                    Endpoint.ARROW,
+                    Endpoint.ARROW,
+                )
+            )
+
+    def orient_or_bidirect(x, y):
+        """Lag-aware wrapper: apply the priority=1 transform to the pair and
+        to every time-shifted copy, mirroring :func:`add_edge`. Each copy is
+        re-evaluated independently because their orientation states differ."""
+        naive_orient_or_bidirect(x, y)
+
+        if num_lags > 0:
+            x_time_step = x // no_of_inst_var
+            y_time_step = y // no_of_inst_var
+
+            for i in range(num_lags - max(x_time_step, y_time_step)):
+                naive_orient_or_bidirect(
                     x + (i + 1) * no_of_inst_var, y + (i + 1) * no_of_inst_var
                 )
 
@@ -224,67 +272,11 @@ def uc_sepset(
                 add_edge(z, y)
 
             elif priority == 1:  # 1: orient bi-directed
-                edge1 = cg_new.G.get_edge(cg_new.G.nodes[x], cg_new.G.nodes[y])
-                if edge1 is not None:
-                    if (
-                        cg_new.G.graph[x, y] == Endpoint.TAIL.value
-                        and cg_new.G.graph[y, x] == Endpoint.TAIL.value
-                    ):
-                        cg_new.G.remove_edge(edge1)
-                        cg_new.G.add_edge(
-                            Edge(
-                                cg_new.G.nodes[x],
-                                cg_new.G.nodes[y],
-                                Endpoint.TAIL,
-                                Endpoint.ARROW,
-                            )
-                        )
-                    elif (
-                        cg_new.G.graph[x, y] == Endpoint.ARROW.value
-                        and cg_new.G.graph[y, x] == Endpoint.TAIL.value
-                    ):
-                        cg_new.G.remove_edge(edge1)
-                        cg_new.G.add_edge(
-                            Edge(
-                                cg_new.G.nodes[x],
-                                cg_new.G.nodes[y],
-                                Endpoint.ARROW,
-                                Endpoint.ARROW,
-                            )
-                        )
-                else:
-                    add_edge(x, y)
-
-                edge2 = cg_new.G.get_edge(cg_new.G.nodes[z], cg_new.G.nodes[y])
-                if edge2 is not None:
-                    if (
-                        cg_new.G.graph[z, y] == Endpoint.TAIL.value
-                        and cg_new.G.graph[y, z] == Endpoint.TAIL.value
-                    ):
-                        cg_new.G.remove_edge(edge2)
-                        cg_new.G.add_edge(
-                            Edge(
-                                cg_new.G.nodes[z],
-                                cg_new.G.nodes[y],
-                                Endpoint.TAIL,
-                                Endpoint.ARROW,
-                            )
-                        )
-                    elif (
-                        cg_new.G.graph[z, y] == Endpoint.ARROW.value
-                        and cg_new.G.graph[y, z] == Endpoint.TAIL.value
-                    ):
-                        cg_new.G.remove_edge(edge2)
-                        cg_new.G.add_edge(
-                            Edge(
-                                cg_new.G.nodes[z],
-                                cg_new.G.nodes[y],
-                                Endpoint.ARROW,
-                                Endpoint.ARROW,
-                            )
-                        )
-                else:
-                    add_edge(z, y)
+                # Conflicting collider orientations become x <-> y
+                # (the analogue of PCMCI+'s 'x-x' conflict marker),
+                # propagated across time-shifted copies.
+                orient_or_bidirect(x, y)
+                orient_or_bidirect(z, y)
 
             elif priority == 2:  # 2: prioritize existing
                 if (not cg_new.is_fully_directed(y, x)) and (

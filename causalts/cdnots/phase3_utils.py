@@ -213,7 +213,14 @@ def infer_nonsta_dir(X, Y, c_indx, width="empirical"):
 
 
 def phase_three(
-    g, data, c_indx=None, num_lags=0, width="empirical", include_C=True, num_c_cols=1
+    g,
+    data,
+    c_indx=None,
+    num_lags=0,
+    width="empirical",
+    include_C=True,
+    num_c_cols=1,
+    orient_margin=0.0,
 ):
     """Estimate the adjacency matrix of phase 3, contemporaneous dependency.
 
@@ -233,6 +240,17 @@ def phase_three(
         Whether time index variable C is included.
     num_c_cols : int
         Number of C columns (nonstationarity indicators). Default 1.
+    orient_margin : float
+        Confidence gate on the sink search, in [0, 1). The loop below picks
+        the next sink as ``argmin`` over candidate scores and commits *all*
+        of that node's undirected neighbours to point into it. With the
+        default ``0.0`` it always commits, however close the scores are, so
+        no contemporaneous edge is ever left unresolved. When positive, the
+        search stops as soon as the best score is not separated from the
+        runner-up by at least this *relative* margin, leaving the remaining
+        contemporaneous edges undirected -- the analogue of PCMCI+ abstaining
+        on an ambiguous link. Callers that convert with
+        ``keep_undirected=False`` then drop them.
 
     Returns
     -------
@@ -308,7 +326,25 @@ def phase_three(
             )
             score.append(sc)
 
-        idd = np.argmin(score)
+        idd = int(np.argmin(score))
+
+        if orient_margin > 0.0:
+            _s = np.asarray(score, dtype=float)
+            if not np.isfinite(_s[idd]):
+                # Degenerate score: refuse to guess a sink.
+                break
+            if _s.size > 1:
+                _finite = np.sort(_s[np.isfinite(_s)])
+                if _finite.size < 2:
+                    break
+                best, runner_up = _finite[0], _finite[1]
+                scale = max(abs(best), abs(runner_up), 1e-300)
+                if (runner_up - best) / scale < orient_margin:
+                    # The next sink is not identifiable at the requested
+                    # confidence. Stop rather than commit: continuing would
+                    # compound this guess into every later orientation.
+                    break
+
         sink = Vns[idd]
         gns.G.graph[hypo_cau[idd], hypo_eff[idd]] = -1
         gns.G.graph[hypo_eff[idd], hypo_cau[idd]] = 1
@@ -505,6 +541,7 @@ def cdnots_discovery(
     knowledge=None,
     lag_verify=False,
     alpha_lv=None,
+    orient_margin=0.0,
 ):
     # --- Discrete column handling ---
     # discrete_cols=None  → auto-detect from df
@@ -702,6 +739,7 @@ def cdnots_discovery(
         width="median",
         include_C=include_C,
         num_c_cols=num_c_cols,
+        orient_margin=orient_margin,
     )
     if knowledge is not None and knowledge.has_path_constraints:
         from .ancestral import apply_ancestral_constraints
@@ -771,6 +809,7 @@ def run_cdnots(
     lag_verify=False,
     alpha_lv=None,
     return_pvals=False,
+    orient_margin=0.0,
 ):
     """CDNOTS causal discovery — returns a single :class:`CdnotsResult` object.
 
@@ -820,6 +859,10 @@ def run_cdnots(
     return_pvals : bool
         If True, stores all CI test p-values in the result object,
         enabling result.pvalue_matrix and result.plot_pvalues().
+    orient_margin : float
+        Confidence gate on the ``include_C`` nonstationarity orientation
+        (see :func:`phase_three`). ``0.0`` (default) preserves the existing
+        behaviour, which commits every contemporaneous edge to a direction.
 
     Returns
     -------
@@ -850,6 +893,7 @@ def run_cdnots(
         knowledge=knowledge,
         lag_verify=lag_verify,
         alpha_lv=alpha_lv,
+        orient_margin=orient_margin,
     )
     return disc_out[0]
 
@@ -867,7 +911,7 @@ def run_cdnots_plus(
     max_degree=None,
     max_conds_py=None,
     max_conds_px=None,
-    priority=2,
+    priority=1,
     verbose=False,
     show_progress=False,
     impute=None,
@@ -878,6 +922,8 @@ def run_cdnots_plus(
     lag_verify=False,
     alpha_lv=None,
     return_pvals=False,
+    legacy_mci_conds=False,
+    orient_margin=0.1,
 ):
     """CDNOTS+ causal discovery (PCMCI+-style two-phase skeleton).
 
@@ -907,7 +953,10 @@ def run_cdnots_plus(
     max_conds_px : int or None
         Maximum parents of X in phase 2 MCI conditioning.
     priority : int
-        Collider conflict resolution strategy (0-4).
+        Collider conflict resolution strategy (0-4). Default 1 (orient
+        bi-directed): contradictory collider orientations are marked
+        conflicting and dropped, matching PCMCI+'s ``x-x`` treatment, rather
+        than tie-broken into a committed direction.
     verbose : bool
         Print CI test results.
     show_progress : bool
@@ -928,6 +977,16 @@ def run_cdnots_plus(
     return_pvals : bool
         If True, stores all CI test p-values. Set to False for large
         d to save memory.
+    legacy_mci_conds : bool
+        Restore the pre-alignment phase-2 conditioning rule, which dropped
+        every lag-copy of a tested variable from the conditioning set rather
+        than only the exact tested node. Default False matches PCMCI+'s
+        ``_run_pcalg_test``.
+    orient_margin : float
+        Confidence gate on the ``include_C`` nonstationarity orientation
+        (see :func:`phase_three`). Default 0.1. ``0.0`` restores the
+        original behaviour, which commits every contemporaneous edge to a
+        direction. No effect when ``include_C=False``.
 
     Returns
     -------
@@ -1091,6 +1150,7 @@ def run_cdnots_plus(
         return_pvals=return_pvals,
         no_of_var_ext=no_of_var_ext,
         background_knowledge=background_knowledge,
+        legacy_mci_conds=legacy_mci_conds,
     )
     if return_pvals:
         cg_skel_mci, pvals_phase2 = mci_result
@@ -1151,6 +1211,7 @@ def run_cdnots_plus(
         width="median",
         include_C=include_C,
         num_c_cols=num_c_cols,
+        orient_margin=orient_margin,
     )
     if knowledge is not None and knowledge.has_path_constraints:
         from .ancestral import apply_ancestral_constraints
@@ -1219,18 +1280,32 @@ def cdnots_to_tigramite_graph(
         c_start  # = no_of_inst_var - num_c_cols when include_C, else no_of_inst_var
     )
 
+    # Decide from a snapshot of the incoming endpoints. The loop below visits
+    # both (i, j) and (j, i) and writes in place, so reading the live array
+    # would let one visit observe what the mirrored visit just wrote -- e.g.
+    # the o-o branch writes (1, 1) under keep_undirected, which the bi-directed
+    # branch would then mistake for a conflict marker and erase.
+    orig = g.G.graph.copy()
+
     for i in range(edge_vars):
         for j in range(edge_vars):
             if i == j:
                 continue
             else:
-                if g.G.graph[i, j] == -1 and g.G.graph[j, i] == 1:
+                if orig[i, j] == -1 and orig[j, i] == 1:
                     g.G.graph[i, j] = 0
                     g.G.graph[j, i] = 1
-                elif g.G.graph[i, j] == 1 and g.G.graph[j, i] == -1:
+                elif orig[i, j] == 1 and orig[j, i] == -1:
                     g.G.graph[i, j] = 1
                     g.G.graph[j, i] = 0
-                elif g.G.graph[i, j] == -1 and g.G.graph[j, i] == -1:
+                elif orig[i, j] == 1 and orig[j, i] == 1:
+                    # Bi-directed (i <-> j) from priority=1 conflict marking.
+                    # PCMCI+ records these as 'x-x' and excludes them from the
+                    # binary graph; drop them rather than emitting two
+                    # contradictory directed edges.
+                    g.G.graph[i, j] = 0
+                    g.G.graph[j, i] = 0
+                elif orig[i, j] == -1 and orig[j, i] == -1:
                     if keep_undirected:
                         g.G.graph[i, j] = 1
                         g.G.graph[j, i] = 1

@@ -664,6 +664,7 @@ def mci_skeleton(
     return_pvals: bool = False,
     no_of_var_ext: int | None = None,
     background_knowledge=None,
+    legacy_mci_conds: bool = False,
 ) -> CausalGraph:
     """MCI skeleton pruning (phase 2 of CDNOTS+).
 
@@ -705,6 +706,11 @@ def mci_skeleton(
         test data was extended by one extra lag (cdnotsplus_discovery does
         this), shifted parents beyond num_lags become accessible, matching
         PCMCI+'s ability to condition on variables beyond tau_max.
+    legacy_mci_conds : bool
+        If True, restore the pre-alignment conditioning rule that dropped
+        every lag-copy of X from Y's parent set and every lag-copy of Y
+        from X's shifted parent set. The default (False) matches PCMCI+,
+        which drops only the tested node itself.
 
     Returns
     -------
@@ -808,16 +814,31 @@ def mci_skeleton(
 
                 tested_any = True
 
-                base_for_this = [p for p in base_j if p % no_of_inst_var != parent_inst]
+                # Drop the tested node itself from Y's lagged parents. PCMCI+
+                # (tigramite ``_run_pcalg_test``) excludes only the exact node
+                # ``(i, -abstau)``; ``legacy_mci_conds`` restores the older
+                # CDNOTS+ behaviour of dropping every lag-copy of X's variable,
+                # which under-conditions on autocorrelated series.
+                if legacy_mci_conds:
+                    base_for_this = [
+                        p for p in base_j if p % no_of_inst_var != parent_inst
+                    ]
+                else:
+                    base_for_this = [p for p in base_j if p != parent]
 
                 base_conds_x = []
                 for p in lagged_parents.get(parent_inst, []):
                     p_inst = p % no_of_inst_var
                     p_lag = p // no_of_inst_var
                     shifted_lag = p_lag + parent_lag
-                    if p_inst != j and not _is_c_node(p_inst):
+                    # PCMCI+ keeps every shifted lagged parent of X, including
+                    # lag-copies of Y (the shift can never produce (j, 0)).
+                    # Legacy CDNOTS+ dropped them all.
+                    if legacy_mci_conds and p_inst == j:
+                        continue
+                    if not _is_c_node(p_inst):
                         shifted_idx = p_inst + shifted_lag * no_of_inst_var
-                        if shifted_idx < no_of_var_ext:
+                        if shifted_idx < no_of_var_ext and shifted_idx != j:
                             base_conds_x.append(shifted_idx)
                 if max_conds_px is not None:
                     base_conds_x = base_conds_x[:max_conds_px]
