@@ -4,7 +4,9 @@
 # lint job on any pull request that touches a notebook. Example notebooks are
 # worked demos with saved outputs, not prose to spell-check, so skip them.
 # ignore-words-list: legitimate domain acronyms codespell mistakes for typos
-# (GES = Greedy Equivalence Search; FPR = false-positive rate).
+# (GES = Greedy Equivalence Search; FPR = false-positive rate) and identifiers
+# that intentionally misspell a Python reserved word to use it as a name
+# (lamda = lambda, a regularization-coefficient parameter name in sigkci_gpu.py).
 [codespell]
 skip = *.ipynb
-ignore-words-list = ges,fpr
+ignore-words-list = ges,fpr,lamda
