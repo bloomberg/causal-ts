@@ -907,7 +907,7 @@ def run_cdnots_plus(
     include_C=True,
     c_array=None,
     c_preset=None,
-    alpha=0.05,
+    alpha=0.01,
     max_degree=None,
     max_conds_py=None,
     max_conds_px=None,
@@ -945,7 +945,9 @@ def run_cdnots_plus(
     include_C : bool
         Include the time-index nonstationarity node C.
     alpha : float
-        Significance level for both skeleton phases.
+        Significance level for both skeleton phases. Default 0.01, matching
+        PCMCI+'s default and the setting empirically better for CDNOTS+ (the
+        opposite is true for plain CDNOTS, which defaults to 0.05).
     max_degree : int or None
         Maximum conditioning-set size in phase 1.
     max_conds_py : int or None
