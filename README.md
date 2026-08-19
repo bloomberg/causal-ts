@@ -11,7 +11,7 @@
 
 📚 **[Full documentation is on Read the Docs](https://causal-ts.readthedocs.io/en/latest/)** — algorithm deep-dives, CI test guide, CLI reference, and worked example notebooks.
 
-Causal-TS is a Python framework for causal discovery in time series data. It implements four discovery algorithms and eight GPU-accelerated conditional independence tests, along with built-in visualization and evaluation tools.
+Causal-TS is a Python framework for causal discovery in time series data. It implements four discovery algorithms and a suite of GPU-accelerated conditional independence tests, both linear and nonlinear, along with built-in visualization and evaluation tools.
 
 **Algorithms:**
 

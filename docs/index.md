@@ -1,6 +1,6 @@
 ---
 html_meta:
-  "description": "Causal discovery for nonstationary time series — CDNOTS, CDNOTS+, CEDAR, GRACE, 8 GPU CI tests"
+  "description": "Causal discovery for nonstationary time series — CDNOTS, CDNOTS+, CEDAR, GRACE, GPU-accelerated CI tests"
 ---
 
 ```{toctree}
@@ -22,7 +22,7 @@ cli
       <h1>Causal-<span class="ct-logo-ts">TS</span></h1>
       <p class="tagline">
         Causal discovery for nonstationary time series.<br/>
-        Four discovery algorithms · Eight GPU-accelerated CI tests · Effect estimation.
+        Four discovery algorithms · GPU-accelerated CI tests, linear and nonlinear · Effect estimation.
       </p>
       <div class="btn-group">
         <a href="getting_started/index.html" class="ct-btn ct-btn-primary">Get Started</a>
@@ -113,7 +113,7 @@ Constraint-based skeleton + neural L0-gated refinement (Hard Concrete). Orientat
 ::::{grid} 3
 :gutter: 3
 
-:::{grid-item-card} {fas}`vials;1.1em;sd-text-primary` &nbsp; 8 GPU CI Tests
+:::{grid-item-card} {fas}`vials;1.1em;sd-text-primary` &nbsp; GPU-Accelerated CI Tests
 :link: ci_tests
 :link-type: doc
 :shadow: sm
