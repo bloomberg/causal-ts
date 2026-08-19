@@ -11,6 +11,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+* **`run_cdnots_plus` defaults changed — this can change results for existing
+  callers that don't pin these parameters explicitly.** `run_cdnots_plus` now
+  follows PCMCI+'s conventions more closely: colliders that conflict during
+  orientation are abstained on rather than tie-broken (`priority=1`, was `2`),
+  MCI conditioning excludes only the exact tested lag rather than every lag of
+  a variable (`legacy_mci_conds=False`), the nonstationarity sink search stops
+  when candidates aren't clearly separated rather than always committing
+  (`orient_margin=0.1`, was unconditional), and the default significance level
+  is `alpha=0.01` (was `0.05`), matching PCMCI+ and empirically better for
+  CDNOTS+ (plain `run_cdnots` is unaffected and keeps `alpha=0.05`). In
+  aggregate these changes track PCMCI+ much more closely on stationary and
+  latently-confounded data while widening CDNOTS+'s advantage over plain
+  CDNOTS where nonstationarity is real. Pin the old values explicitly
+  (`priority=2, legacy_mci_conds=True, orient_margin=0.0, alpha=0.05`) to
+  reproduce prior behavior.
+* `causalts.ci_tests.SigKCIGPU` no longer uses the optional `sigkernel`
+  package: it crashed with a buffer dtype mismatch whenever `sigkernel` was
+  installed, and measured slower than the existing pure-torch fallback at the
+  path lengths this test uses. `SigKCIGPU` now always uses that fallback.
+
 * The `guided_discovery` example notebook is now `agentic_discovery` ("Agentic
   Causal Discovery"), naming it after the `causal-ts-discovery` agent skill whose
   workflow it walks through. The old `examples/guided_discovery.html` URL is gone;
