@@ -17,13 +17,6 @@ from scipy.stats import gamma as gamma_distr
 from .cit_test import CIT_Base
 from .kci_gpu import apply_H, normalize_gpu
 
-try:
-    import sigkernel as _sigkernel
-
-    SIGKERNEL_AVAILABLE = True
-except ImportError:
-    SIGKERNEL_AVAILABLE = False
-
 
 def _time_delay_embedding(x, dim=3, lag=1):
     """Embed a 1D signal into a path via time-delay embedding.
@@ -271,16 +264,14 @@ def _compute_sig_gram_fast(paths, sigma=1.0, dyadic_order=0):
     For 1-point paths (time_delay_dim=1), falls back to RBF kernel
     since the signature kernel degenerates to a constant.
 
-    Uses the sigkernel library if available, otherwise falls back to
-    a vectorized PDE solver that batches all path pairs.
+    Uses a vectorized PDE solver that batches all path pairs. The
+    optional compiled ``sigkernel`` package was tried as a faster
+    alternative but measured slower at the path lengths and dyadic
+    orders used here, and requires float64 input where this class
+    stores float32, so it is not used.
     """
     if paths.shape[1] <= 1:
         return _rbf_gram(paths, sigma)
-
-    if SIGKERNEL_AVAILABLE:
-        static_kernel = _sigkernel.RBFKernel(sigma=sigma)
-        sk = _sigkernel.SigKernel(static_kernel, dyadic_order=dyadic_order)
-        return sk.compute_Gram(paths, paths, sym=True)
 
     return _compute_sig_gram_vectorized(paths, sigma, dyadic_order)
 
