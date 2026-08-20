@@ -129,7 +129,7 @@ If no significant nonlinearity is detected, `parcorr-gpu` is optimal.
 
 ::::
 
-See the full [CI Test Selection Guide](../ci_tests.md) for benchmarks across all 8 tests.
+See the full [CI Test Selection Guide](../ci_tests.md) for benchmarks across all available tests.
 
 ---
 
@@ -171,7 +171,7 @@ Understand CDNOTS, CDNOTS+, CEDAR, and GRACE in depth — when to use each and h
 :shadow: sm
 :text-align: center
 
-Strengths, limitations, and tradeoff analysis across all 8 GPU-accelerated CI tests.
+Strengths, limitations, and tradeoff analysis across all GPU-accelerated CI tests, linear and nonlinear.
 :::
 
 :::{grid-item-card} {fas}`book-open` Examples

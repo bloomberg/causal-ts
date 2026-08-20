@@ -8,5 +8,8 @@
 # that intentionally misspell a Python reserved word to use it as a name
 # (lamda = lambda, a regularization-coefficient parameter name in sigkci_gpu.py).
 [codespell]
-skip = *.ipynb
+# docs/_build is generated Sphinx output (HTML + a minified search index) and
+# is gitignored, so CI never scans it -- but a local run over the repo root
+# does, and reports spurious hits from the minified JS.
+skip = *.ipynb,./docs/_build
 ignore-words-list = ges,fpr,lamda

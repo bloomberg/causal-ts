@@ -1,6 +1,6 @@
 ---
 html_meta:
-  "description": "Causal discovery for nonstationary time series — CDNOTS, CDNOTS+, CEDAR, GRACE, 8 GPU CI tests"
+  "description": "Causal discovery for nonstationary time series — CDNOTS, CDNOTS+, CEDAR, GRACE, GPU-accelerated CI tests"
 ---
 
 ```{toctree}
@@ -22,7 +22,7 @@ cli
       <h1>Causal-<span class="ct-logo-ts">TS</span></h1>
       <p class="tagline">
         Causal discovery for nonstationary time series.<br/>
-        Four discovery algorithms · Eight GPU-accelerated CI tests · Effect estimation.
+        Four discovery algorithms · GPU-accelerated CI tests, linear and nonlinear · Effect estimation.
       </p>
       <div class="btn-group">
         <a href="getting_started/index.html" class="ct-btn ct-btn-primary">Get Started</a>
@@ -113,7 +113,7 @@ Constraint-based skeleton + neural L0-gated refinement (Hard Concrete). Orientat
 ::::{grid} 3
 :gutter: 3
 
-:::{grid-item-card} {fas}`vials;1.1em;sd-text-primary` &nbsp; 8 GPU CI Tests
+:::{grid-item-card} {fas}`vials;1.1em;sd-text-primary` &nbsp; GPU-Accelerated CI Tests
 :link: ci_tests
 :link-type: doc
 :shadow: sm
@@ -199,10 +199,16 @@ compare_graphs(ground_truth, res.cg_tig[:d, :d, :],
 
 If you use Causal-TS in your research, please cite:
 
-> Sadeghi, Gopal, Fesanghary. "Causal Discovery in Financial Markets: A Framework for Nonstationary Time-Series Data." [arXiv:2312.17375](https://arxiv.org/abs/2312.17375), 2023.
+> Fesanghary. "Causal-TS: A Python Library for Causal Discovery in High-Dimensional and Nonstationary Time Series." [arXiv:2607.24673](https://arxiv.org/abs/2607.24673), 2026.
 >
-> Fesanghary, Gopal. "Efficient Causal Discovery for Autoregressive Time Series." [arXiv:2507.07898](https://arxiv.org/abs/2507.07898), 2025.
+> Fesanghary. "CEDAR: Causal Edge Discovery for Autoregressive Processes." [arXiv:2607.20696](https://arxiv.org/abs/2607.20696), 2026.
+>
+> Fesanghary, Havaldar. "GRACE: Gated Refinement for Accurate Causal Edge Discovery in High-Dimensional Time Series." [arXiv:2606.23880](https://arxiv.org/abs/2606.23880), 2026.
+>
+> Sadeghi, Gopal, Fesanghary. "Causal Discovery from Nonstationary Time Series." *International Journal of Data Science and Analytics*, 19, pp. 33–59, 2025. [doi:10.1007/s41060-024-00679-7](https://doi.org/10.1007/s41060-024-00679-7)
 
 ---
 
-<p class="text-muted text-center" style="font-size: 0.85em; color: #888;">Last updated: May 2026</p>
+```{div} text-muted text-center small
+Last updated: {sub-ref}`today`
+```
