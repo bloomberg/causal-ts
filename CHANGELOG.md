@@ -28,6 +28,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   (`"color"`, `"shade"`), which silently overrode an explicit argument and
   forced callers to use `cl_pos="n"` instead. `colorbar=False` now suppresses
   the colorbar for every method.
+* Documentation: the "New in v0.26" banner linked to the example notebook with a
+  path relative to the site root, but the banner renders on every page — from
+  anything below the root (`examples/`, `api/`, `getting_started/`) it resolved to
+  a nonexistent nested path and 404'd. The link is now resolved per page.
 
 ### Changed
 
@@ -55,13 +59,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   Causal Discovery"), naming it after the `causal-ts-discovery` agent skill whose
   workflow it walks through. The old `examples/guided_discovery.html` URL is gone;
   the page is at `examples/agentic_discovery.html`.
-
-### Fixed
-
-* Documentation: the "New in v0.26" banner linked to the example notebook with a
-  path relative to the site root, but the banner renders on every page — from
-  anything below the root (`examples/`, `api/`, `getting_started/`) it resolved to
-  a nonexistent nested path and 404'd. The link is now resolved per page.
 
 ## [0.26.0]
 
