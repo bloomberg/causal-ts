@@ -23,7 +23,7 @@ from matplotlib.patches import (
 _VALID_METHODS = ("circle", "square", "ellipse", "number", "color", "shade", "pie")
 _VALID_INSIG = ("pch", "p-value", "blank", "n", "label_sig")
 _VALID_ORDER = ("original", "hclust", "AOE", "FPC", "alphabet")
-_VALID_DIAG = ("names", "values", "blank", "hist")
+_VALID_DIAG = ("names", "values", "blank", "hist", "glyph")
 _VALID_PLOT_CI = ("n", "square", "circle", "rect")
 _VALID_TL_POS = ("lt", "lb", "ld", "td", "l", "d", "n")
 _VALID_CL_POS = ("r", "b", "n")
@@ -246,10 +246,16 @@ def corrplot(
     type : str
         Display type: 'full', 'upper', 'lower'.
     diag : str
-        Diagonal display: 'names', 'values', 'blank', 'hist'. Note 'hist'
-        requires raw data; with a precomputed matrix it renders blank
+        Diagonal display: 'names', 'values', 'blank', 'hist', 'glyph'. Note
+        'hist' requires raw data; with a precomputed matrix it renders blank
         (variable names still appear on the tick labels) — use 'names' or
-        'values' for precomputed input.
+        'values' for precomputed input. Use 'glyph' to draw the diagonal as
+        an ordinary cell, with the same `method` and colormap as the rest of
+        the matrix; this is the right choice for a *directed* matrix (e.g. a
+        cause→effect adjacency or edge-stability matrix) where the diagonal
+        is real data — a self-loop — rather than the trivial 1.0 of a
+        correlation matrix. Significance markers and confidence-interval
+        overlays are still skipped on the diagonal.
     is_corr : bool or None
         If None, auto-detect whether data is correlation-like ([-1, 1]).
         If True, force [-1, 1] range with diverging cmap.
@@ -452,17 +458,13 @@ def corrplot(
             tl_pos = "lt"  # left + top for upper triangle
 
     # --- Default cl_pos ---
-    color_only_methods = {"color", "shade"}
-    active_methods = {method}
-    if upper is not None:
-        active_methods.add(upper)
-    if lower is not None:
-        active_methods.add(lower)
-    has_color_only = bool(active_methods & color_only_methods)
-
+    # ``colorbar=False`` suppresses the colorbar for every glyph method. It used
+    # to be ignored for the colour-only methods ('color', 'shade') on the theory
+    # that they are unreadable without a scale -- but that silently overrode an
+    # explicit argument, so the caller had to reach for ``cl_pos='n'`` instead.
     if cl_pos is None:
         cl_pos = "r"
-    if not colorbar and not has_color_only:
+    if not colorbar:
         cl_pos = "n"
 
     # --- Default grid_color ---
@@ -476,8 +478,9 @@ def corrplot(
 
     for i in range(n):
         for j in range(n):
-            # Skip diagonal for glyph rendering (handled separately)
-            if i == j:
+            # Skip diagonal for glyph rendering (handled separately), unless
+            # diag="glyph" asks for it to be drawn like any other cell.
+            if i == j and diag != "glyph":
                 continue
 
             # Determine if cell should be rendered
@@ -620,6 +623,7 @@ def corrplot(
             pvalues,
             sig_level,
             insig,
+            diag,
         )
 
     # --- Diagonal ---
@@ -1018,11 +1022,14 @@ def _draw_coefficients(
     pvalues,
     sig_level,
     insig,
+    diag="names",
 ):
     """Overlay coefficient numbers on glyphs."""
     for i in range(n):
         for j in range(n):
-            if i == j:
+            # diag="glyph" draws the diagonal as an ordinary cell, so it gets
+            # a coefficient like every other cell.
+            if i == j and diag != "glyph":
                 continue
             if has_split:
                 cell_method = _cell_method(i, j, None, upper, lower)
@@ -1076,7 +1083,9 @@ def _draw_diagonal(
     shrink,
 ):
     """Render diagonal cells."""
-    if diag == "blank":
+    # "glyph": the main glyph loop already drew the diagonal as an ordinary
+    # cell, so there is nothing to overlay here.
+    if diag in ("blank", "glyph"):
         return
 
     for i in range(n):
@@ -1155,9 +1164,24 @@ def _draw_cluster_rects(ax, matrix, addrect, hclust_method, n, rect_col, rect_lw
 def _draw_grid(ax, n, type_, upper, lower, has_split, grid_color):
     """Draw grid lines between cells, clipped to triangle for upper/lower."""
     if type_ == "full" or has_split:
-        for i in range(n + 1):
+        # Interior lines only. The outer boundary is drawn separately below:
+        # axhline/axvline sit exactly on the axis limits, so half their width
+        # falls outside the clip box and the right/bottom edges disappear.
+        for i in range(1, n):
             ax.axhline(i - 0.5, color=grid_color, linewidth=0.5, zorder=1)
             ax.axvline(i - 0.5, color=grid_color, linewidth=0.5, zorder=1)
+        ax.add_patch(
+            Rectangle(
+                (-0.5, -0.5),
+                n,
+                n,
+                fill=False,
+                edgecolor=grid_color,
+                linewidth=0.5,
+                zorder=1,
+                clip_on=False,
+            )
+        )
     elif type_ == "upper":
         for i in range(n + 1):
             ax.plot(

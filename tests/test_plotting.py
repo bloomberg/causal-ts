@@ -109,3 +109,108 @@ def test_compare_graphs_smoke():
     g2 = g.copy()
     g2[2, 0, 1] = 1
     compare_graphs(g, g2, var_names=["X", "Y", "Z"])
+
+
+def _make_frame():
+    import pandas as pd
+
+    rng = np.random.default_rng(0)
+    return pd.DataFrame(rng.standard_normal((60, 4)), columns=list("ABCD"))
+
+
+def _extra_axes(**kwargs):
+    """Axes added to a fresh figure by one corrplot call (1 = colorbar drawn)."""
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import corrplot
+
+    fig, ax = plt.subplots()
+    before = len(fig.axes)
+    corrplot(_make_frame(), fig_ax=(fig, ax), **kwargs)
+    added = len(fig.axes) - before
+    plt.close(fig)
+    return added
+
+
+def _glyph_path_count(ax):
+    from matplotlib.collections import PatchCollection
+
+    return sum(
+        len(c.get_paths()) for c in ax.collections if isinstance(c, PatchCollection)
+    )
+
+
+def test_corrplot_smoke():
+    from causalts.plotting import corrplot
+
+    corrplot(_make_frame())
+
+
+def test_corrplot_colorbar_false_suppresses_for_every_method():
+    # Regression: 'color' and 'shade' encode magnitude in the fill alone and
+    # used to draw a colorbar even when the caller passed colorbar=False.
+    for method in ("circle", "square", "ellipse", "number", "color", "shade", "pie"):
+        assert _extra_axes(method=method, colorbar=False) == 0, method
+
+
+def test_corrplot_colorbar_default_still_draws():
+    for method in ("circle", "color", "shade"):
+        assert _extra_axes(method=method) == 1, method
+
+
+def test_corrplot_diag_glyph_renders_the_diagonal():
+    """diag='glyph' draws the diagonal as an ordinary cell.
+
+    Needed for directed matrices, where the diagonal is real data (a
+    self-loop) rather than the trivial 1.0 of a correlation matrix.
+    """
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import corrplot
+
+    n = 4
+
+    fig, ax = plt.subplots()
+    corrplot(
+        _make_frame(), method="color", diag="blank", colorbar=False, fig_ax=(fig, ax)
+    )
+    without = _glyph_path_count(ax)
+    plt.close(fig)
+
+    fig, ax = plt.subplots()
+    corrplot(
+        _make_frame(), method="color", diag="glyph", colorbar=False, fig_ax=(fig, ax)
+    )
+    with_diag = _glyph_path_count(ax)
+    plt.close(fig)
+
+    assert with_diag == without + n
+
+
+def test_corrplot_grid_border_is_closed():
+    """All four edges of the grid border must be drawn.
+
+    The border used to be axhline/axvline at exactly the axis limits, so half
+    of each boundary line fell outside the clip box and the right and bottom
+    edges disappeared.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    from causalts.plotting import corrplot
+
+    n = 4
+    fig, ax = plt.subplots()
+    corrplot(_make_frame(), method="circle", colorbar=False, fig_ax=(fig, ax))
+
+    border = [
+        p
+        for p in ax.patches
+        if isinstance(p, Rectangle)
+        and not p.get_fill()
+        and np.isclose(p.get_width(), n)
+        and np.isclose(p.get_height(), n)
+    ]
+    assert border, "expected a full-extent unfilled border rectangle"
+    assert not border[0].get_clip_on(), "border must not be clipped at the axes edge"
+    plt.close(fig)

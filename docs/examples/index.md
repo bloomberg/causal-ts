@@ -19,8 +19,8 @@ Hands-on notebooks covering algorithms, CI tests, and the full discovery-to-esti
 </a>
 
 <a href="../tutorial.html" class="ct-gallery-item" data-tooltip="Full walkthrough of CDNOTS, CDNOTS+, CEDAR, and GRACE — data generation, discovery, evaluation, and visualization.">
-  <img src="../_static/img/thumbnails/tutorial_thumb.png" alt="Getting Started Tutorial" />
-  <span class="ct-gallery-title">Getting Started Tutorial</span>
+  <img src="../_static/img/thumbnails/tutorial_thumb.png" alt="Getting Started" />
+  <span class="ct-gallery-title">Getting Started</span>
 </a>
 
 <a href="api_reference.html" class="ct-gallery-item" data-tooltip="Interactive reference for all CI tests, discovery algorithms, and plotting utilities with worked examples.">
@@ -34,7 +34,7 @@ Hands-on notebooks covering algorithms, CI tests, and the full discovery-to-esti
 
 ## CEDAR Deep Dives
 
-CEDAR (Causal Edge Discovery for Autoregressive processes) is a scalable pairwise causal discovery algorithm for autoregressive time series. It uses minimum-lag selection to reduce the search to two CI tests per candidate edge — O(d²) overall — and supports single-target discovery at O(d). See [arXiv:2507.07898](https://arxiv.org/abs/2507.07898).
+CEDAR (Causal Edge Discovery for Autoregressive processes) is a scalable pairwise causal discovery algorithm for autoregressive time series. It uses minimum-lag selection to reduce the search to two CI tests per candidate edge — O(d²) overall — and supports single-target discovery at O(d). See [arXiv:2607.20696](https://arxiv.org/abs/2607.20696).
 
 <div class="ct-gallery">
 
@@ -197,7 +197,7 @@ Notebooks reproducing experiments from the GRACE paper (preprint forthcoming) wi
 
 ---
 
-## Integrations & Extending causal-ts
+## Integrations & Extending Causal-TS
 
 <div class="ct-gallery">
 
@@ -304,7 +304,7 @@ plotting
 ```{toctree}
 :hidden:
 :maxdepth: 1
-:caption: Integrations & Extending causal-ts
+:caption: Integrations & Extending Causal-TS
 
 tigramite_integration
 custom_algorithm

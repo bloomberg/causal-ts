@@ -129,7 +129,7 @@ If no significant nonlinearity is detected, `parcorr-gpu` is optimal.
 
 ::::
 
-See the full [CI Test Selection Guide](../ci_tests.md) for benchmarks across all 8 tests.
+See the full [CI Test Selection Guide](../ci_tests.md) for benchmarks across all available tests.
 
 ---
 

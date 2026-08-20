@@ -99,7 +99,7 @@ def _detect_accelerator() -> str:
 def compute_lambda(d: int, T: int, skeleton_density: float) -> float:
     """Auto-select L0 penalty lambda from problem dimensions and skeleton density.
 
-    Formula (Eq. 11 from arXiv:2507.07898)::
+    Formula (Eq. 11 from arXiv:2606.23880)::
 
         max(0.007 + 0.16*rho_S,  1/d + 4/T - 0.4*rho_S^0.8)
 
@@ -1796,7 +1796,7 @@ def run_cdnots_gated(
         are stripped from the returned graph.
     lambda_cv : bool
         If True, select lambda via cross-validation instead of the
-        closed-form formula (Eq. 11, arXiv:2507.07898). Slower but
+        closed-form formula (Eq. 11, arXiv:2606.23880). Slower but
         data-driven.
     impute : str or None
         Missing-value strategy applied before discovery.
@@ -1910,7 +1910,7 @@ def run_cdnots_gated(
     dataset = prepare_data(df_model, max_lag, normalize=normalize)
     N = len(dataset)
 
-    # Select lambda: cross-validation or closed-form formula (Eq. 11, arXiv:2507.07898)
+    # Select lambda: cross-validation or closed-form formula (Eq. 11, arXiv:2606.23880)
     if lambda_cv:
         lambda_l0 = compute_lambda_cv(
             dataset,

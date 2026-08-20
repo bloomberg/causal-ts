@@ -129,7 +129,7 @@ If you use causal-ts in your research, please cite the following papers:
    arXiv preprint [arXiv:2607.24673](https://arxiv.org/abs/2607.24673), 2026.
 
 2. **CEDAR: Causal Edge Discovery for Autoregressive Processes**
-   Mohammad Fesanghary, Achintya Gopal
+   Mohammad Fesanghary
    arXiv preprint [arXiv:2607.20696](https://arxiv.org/abs/2607.20696), 2026.
 
 3. **GRACE: Gated Refinement for Accurate Causal Edge Discovery in High-Dimensional Time Series**
@@ -154,7 +154,7 @@ If you use causal-ts in your research, please cite the following papers:
 
 @article{fesanghary2026cedar,
   title={CEDAR: Causal Edge Discovery for Autoregressive Processes},
-  author={Fesanghary, Mohammad and Gopal, Achintya},
+  author={Fesanghary, Mohammad},
   journal={arXiv preprint arXiv:2607.20696},
   year={2026}
 }

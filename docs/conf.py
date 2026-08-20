@@ -35,7 +35,15 @@ myst_enable_extensions = [
     "attrs_inline",
     "dollarmath",
     "amsmath",
+    # Enables the ``{sub-ref}`today``` role used for the front-page
+    # "Last updated" stamp, so the date tracks the build instead of
+    # being hand-edited (and going stale).
+    "substitution",
 ]
+
+# Format for the front-page "Last updated" stamp -> e.g. "August 2026".
+today_fmt = "%B %Y"
+
 myst_heading_anchors = 3
 
 # myst-nb: don't execute notebooks on build

@@ -9,6 +9,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+* `corrplot(..., diag="glyph")` — renders the diagonal as an ordinary cell,
+  using the same `method` and colormap as the rest of the matrix. Intended for
+  *directed* matrices (a cause→effect adjacency or an edge-stability matrix),
+  where the diagonal is real data such as a self-loop rather than the trivial
+  1.0 of a correlation matrix. Significance markers and confidence-interval
+  overlays are still skipped on the diagonal.
+
+### Fixed
+
+* `corrplot` dropped the right and bottom edges of its grid border. All axes
+  spines are hidden, and the border was drawn with `axhline`/`axvline` at
+  exactly the axis limits, so half of each boundary line fell outside the clip
+  box. The border is now an unclipped rectangle and all four edges render.
+* `corrplot(..., colorbar=False)` was ignored for the colour-only glyph methods
+  (`"color"`, `"shade"`), which silently overrode an explicit argument and
+  forced callers to use `cl_pos="n"` instead. `colorbar=False` now suppresses
+  the colorbar for every method.
+
 ### Changed
 
 * **`run_cdnots_plus` defaults changed — this can change results for existing

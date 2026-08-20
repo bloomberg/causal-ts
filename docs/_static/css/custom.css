@@ -597,3 +597,12 @@ html[data-theme="dark"] .ct-gallery-item img {
     transition: none;
   }
 }
+
+/* Front-page "Last updated" stamp. The date itself comes from
+   ``{sub-ref}`today``` (see ``today_fmt`` in conf.py) so it tracks the
+   build rather than being hand-edited. */
+.ct-last-updated {
+  font-size: 0.85em;
+  color: #888;
+  text-align: center;
+}
