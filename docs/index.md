@@ -209,6 +209,6 @@ If you use Causal-TS in your research, please cite:
 
 ---
 
-```{div} ct-last-updated
+```{div} text-muted text-center small
 Last updated: {sub-ref}`today`
 ```
