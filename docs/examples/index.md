@@ -129,6 +129,11 @@ Notebooks reproducing experiments from the GRACE paper (preprint forthcoming) wi
   <span class="ct-gallery-title">Causal Feature Selection</span>
 </a>
 
+<a href="latent_confounder_detection.html" class="ct-gallery-item" data-tooltip="LUCID: regime-adaptive deconfounding — diagnose whether latent confounding is sparse or pervasive from the residual spectrum, then apply the matching correction.">
+  <img src="../_static/img/thumbnails/latent_confounder_detection_thumb.png" alt="Unobserved Confounders and LUCID" />
+  <span class="ct-gallery-title">Unobserved Confounders (LUCID)</span>
+</a>
+
 </div>
 
 ---
@@ -270,6 +275,7 @@ multi_c_nonstationarity
 regime_discovery
 background_knowledge
 feature_selection
+latent_confounder_detection
 ```
 
 ```{toctree}

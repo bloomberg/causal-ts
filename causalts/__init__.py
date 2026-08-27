@@ -37,6 +37,12 @@ from .tigramite_discovery import (  # noqa: F401
 
 if TYPE_CHECKING:  # pragma: no cover - import for type checkers only
     from .cedar.legacy import SYPI  # noqa: F401
+    from .confounders import (  # noqa: F401
+        LucidResult,
+        deconfound,
+        routed_deconfound,
+        run_lucid,
+    )
     from .grace.gated_discovery import (  # noqa: F401
         run_cdnots_gated,
         run_stability_selection,
@@ -44,10 +50,15 @@ if TYPE_CHECKING:  # pragma: no cover - import for type checkers only
     from .grace.result import GraceResult  # noqa: F401
 
 # Served on demand so that ``import causalts`` stays cheap: cedar.legacy pulls
-# in dcor + statsmodels, grace pulls in pytorch-lightning, and neither is on the
-# common discovery path.  Maps attribute name -> module that defines it.
+# in dcor + statsmodels, grace pulls in pytorch-lightning, confounders pulls in
+# statsmodels + scikit-learn's cluster/linear_model, and none is on the common
+# discovery path.  Maps attribute name -> module that defines it.
 _LAZY_ATTRS = {
     "SYPI": "causalts.cedar.legacy",
+    "LucidResult": "causalts.confounders",
+    "deconfound": "causalts.confounders",
+    "routed_deconfound": "causalts.confounders",
+    "run_lucid": "causalts.confounders",
     "run_cdnots_gated": "causalts.grace.gated_discovery",
     "run_stability_selection": "causalts.grace.gated_discovery",
     "GraceResult": "causalts.grace.result",
