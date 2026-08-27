@@ -11,6 +11,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+* **LUCID** (`causalts.confounders`) — regime-adaptive deconfounding for causal discovery
+  under latent confounders. `run_lucid(df, max_lag)` diagnoses whether latent confounding
+  is sparse or pervasive from the residual spectrum (against a Marchenko–Pastur no-factor
+  null) and applies the matching correction, returning a `LucidResult`. Every
+  `CausalResult` now also exposes `.deconfound()`, `.tetrad_filter()`, and `.pds_filter()`
+  so LUCID (or a fixed-strategy comparator) can be applied to a graph already discovered
+  with any algorithm, without re-running the skeleton search. See the new
+  [Unobserved Confounders (LUCID)](examples/latent_confounder_detection) tutorial and the
+  `causalts.confounders` API page.
 * `corrplot(..., diag="glyph")` — renders the diagonal as an ordinary cell,
   using the same `method` and colormap as the rest of the matrix. Intended for
   *directed* matrices (a cause→effect adjacency or an edge-stability matrix),

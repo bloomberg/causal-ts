@@ -106,3 +106,72 @@ class CausalResult:
 
     def summary(self, mechanism_type="linear", top_k=5):
         return self._bridge().summary(mechanism_type=mechanism_type, top_k=top_k)
+
+    # ------------------------------------------------------------------
+    # Latent-confounding corrections
+    # ------------------------------------------------------------------
+
+    def _max_lag(self):
+        return int(self.cg_tig.shape[2] - 1)
+
+    def _obs_slice(self):
+        """``(graph, d, max_lag)`` restricted to observed variables.
+
+        ``cg_tig`` carries extra C-node rows/columns when discovery ran with
+        ``include_C=True``; the deconfounding layer works on observed variables only.
+        """
+        d = self._df.shape[1]
+        max_lag = self._max_lag()
+        return self.cg_tig[:d, :d, : max_lag + 1], d, max_lag
+
+    def deconfound(self, **kwargs):
+        """Apply LUCID to this already-discovered graph, returning a ``LucidResult``.
+
+        Reuses this result's skeleton instead of re-running discovery: LUCID runs the
+        same base engine on both branches, so the routing decision never changes what
+        would be discovered, making reuse exact. Equivalent to
+        ``run_lucid(df, max_lag, discovery=self)``.
+
+        Compatibility is checked where the information is recorded -- a ``num_lags``
+        mismatch raises, differing ``alpha``/``include_C`` warn. See
+        :func:`~causalts.confounders.run_lucid`.
+        """
+        from .confounders.routed_deconf import run_lucid
+
+        graph, _d, max_lag = self._obs_slice()
+        return run_lucid(self._df, max_lag, discovery=self, **kwargs)
+
+    def tetrad_filter(self, threshold=0.25):
+        """Drop lag-0 edges between variable pairs that share a latent factor.
+
+        A fixed (non-adaptive) deconfounding strategy, in contrast to
+        :meth:`deconfound`'s regime-adaptive routing. Returns a **new result of the
+        same type** with the pruned graph, so it chains:
+        ``res.tetrad_filter().deconfound()``.
+        """
+        from .utils.tetrad import apply_tetrad_lag0_filter
+
+        pruned = apply_tetrad_lag0_filter(
+            self.cg_tig, self._df, list(self._df.columns), threshold=threshold
+        )
+        return self._with_graph(pruned)
+
+    def pds_filter(self, alpha=1e-10):
+        """Prune edges that fail a post-double-selection test against observed controls.
+
+        Returns a **new result of the same type**. Note this conditions on *observed*
+        variables only -- it does not make an unobserved common cause observable.
+        """
+        from .confounders.routed_deconf import pds_filter as _pds
+
+        graph, _d, max_lag = self._obs_slice()
+        return self._with_graph(_pds(self._df, graph, max_lag, alpha=alpha))
+
+    def _with_graph(self, graph):
+        """Shallow copy of this result carrying a different graph."""
+        import copy
+
+        new = copy.copy(self)
+        new.cg_tig = np.asarray(graph)
+        new._scm_cache = {}
+        return new

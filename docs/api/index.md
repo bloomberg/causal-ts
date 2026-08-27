@@ -33,6 +33,14 @@ Full API documentation auto-generated from source docstrings (NumPy format).
 {bdg-warning-line}`requires dowhy`
 :::
 
+:::{grid-item-card} {fas}`shield-halved;1.2em;sd-text-primary` &nbsp; Confounders (LUCID)
+:link: confounders
+:link-type: doc
+:shadow: md
+
+`run_lucid` · `LucidResult` · `deconfound` · `tetrad_filter` · `pds_filter` · `routed_deconfound`
+:::
+
 :::{grid-item-card} {fas}`database;1.2em;sd-text-primary` &nbsp; Data Generation
 :link: data
 :link-type: doc
@@ -69,6 +77,7 @@ Full API documentation auto-generated from source docstrings (NumPy format).
 discovery
 ../ci_tests
 effects
+confounders
 data
 plotting
 autoapi/causalts/index
