@@ -6,10 +6,12 @@
 # ignore-words-list: legitimate domain acronyms codespell mistakes for typos
 # (GES = Greedy Equivalence Search; FPR = false-positive rate) and identifiers
 # that intentionally misspell a Python reserved word to use it as a name
-# (lamda = lambda, a regularization-coefficient parameter name in sigkci_gpu.py).
+# (lamda = lambda, a regularization-coefficient parameter name in sigkci_gpu.py),
+# plus "retuned" -- a real word ("re-tuned") that codespell mistakes for
+# "returned" (routed_deconf.py's research-history docstring).
 [codespell]
 # docs/_build is generated Sphinx output (HTML + a minified search index) and
 # is gitignored, so CI never scans it -- but a local run over the repo root
 # does, and reports spurious hits from the minified JS.
 skip = *.ipynb,./docs/_build
-ignore-words-list = ges,fpr,lamda
+ignore-words-list = ges,fpr,lamda,retuned
