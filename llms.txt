@@ -1,6 +1,6 @@
 # Causal-TS
 
-> A Python framework for causal discovery in nonstationary time series data. Implements CDNOTS, CEDAR, and GRACE algorithms with GPU acceleration via PyTorch. Install with `pip install causalts`.
+> A Python framework for causal discovery in nonstationary time series data. Implements CDNOTS, CEDAR, GRACE, and LUCID algorithms with GPU acceleration via PyTorch. Install with `pip install causalts`.
 
 ## Algorithms
 
@@ -8,6 +8,7 @@
 - **CEDAR** — Causal Edge Discovery for AutoRegressive processes. Uses lag selection (distance correlation) followed by pairwise CI testing. Most scalable algorithm (linear in d). Includes MCI pruning.
 - **GRACE** — Hybrid method: CDNOTS skeleton + neural gated refinement with L0 regularization (Hard Concrete gates). Best for high-dimensional data (d >= 20). Automatically prunes false positives.
 - **GRACE-SS** — GRACE with stability selection. Sweeps L0 penalties and keeps edges that appear consistently. Experimental — not suitable for large dimensions, use `run_cdnots_gated()` (GRACE) instead for high-d problems.
+- **LUCID** — Not a discovery algorithm but a *correction* applied to a discovered graph, for when the causal-sufficiency assumption fails (unobserved common causes). Infers from the VAR-residual spectrum whether latent confounding is **sparse** (few affected variables) or **pervasive** (a factor loading on everything), then applies the matching correction — the two need opposite treatments and the wrong one is damaging. Composes with any engine via `res.deconfound()`.
 
 ## CLI Usage
 
@@ -28,6 +29,11 @@ causal-ts -s 42 -d cpu discover data.csv -a cedar --lag-method dcor --max-lag 5
 causal-ts ci-test-info
 causal-ts -s 42 discover data.csv -a grace --max-lag 3 --gate-threshold 0.5
 causal-ts -s 42 discover data.csv -a grace-ss --max-lag 3 --stability-threshold 0.6  # experimental
+
+# Correct a discovered graph for latent confounders (LUCID)
+# GRAPH is the estimated_graph.npy that `discover` saved; --data is the same series.
+causal-ts deconfound estimated_graph.npy --data data.csv
+causal-ts deconfound estimated_graph.npy --data data.csv --strategy tetrad  # fixed comparator
 
 # Evaluate discovered graph against ground truth
 causal-ts evaluate ground_truth.npy discovered_graph.npy
@@ -125,16 +131,19 @@ result = run_cedar(
 from causalts.grace import run_cdnots_gated, run_stability_selection
 
 # Single-shot gated refinement
-G_hat, gate_values, info = run_cdnots_gated(
+res = run_cdnots_gated(
     df=df,
     max_lag=3,
     gate_threshold=0.5,
     device="cpu",       # or "cuda", "mps"
     model_seed=42,
 )
+res.cg_tig        # binary numpy array shape (n_vars, n_vars, max_lag+1)
+res.gate_values   # learned Hard-Concrete gate values
+res.skeleton      # the CDNOTS skeleton before gating
 
 # With stability selection (more robust)
-G_hat, scores, selector = run_stability_selection(
+res_ss = run_stability_selection(
     df=df,
     max_lag=3,
     use_ci_skeleton=True,
@@ -142,8 +151,36 @@ G_hat, scores, selector = run_stability_selection(
     device="cpu",
     model_seed=42,
 )
-# G_hat: binary numpy array shape (n_vars, n_vars, max_lag+1)
+res_ss.cg_tig, res_ss.stability_scores
+# Both return a GraceResult (a CausalResult subclass) — NOT a tuple. Like every other
+# result object it carries .plot() and the DoWhy bridge methods directly.
 ```
+
+### LUCID (latent confounders)
+
+```python
+from causalts.confounders import run_lucid
+
+res = run_lucid(df, max_lag=3)
+res.cg_tig        # corrected graph, shape (n_vars, n_vars, max_lag+1)
+res.regime        # "sparse" | "sf" | "pervasive" — which correction was applied
+res.spectral_ratio, res.tau   # router statistic vs the Marchenko-Pastur no-factor edge
+res.n_factors     # latent factors above the MP edge (0 on the sparse branch)
+res.top_factor_variables(0, 5)   # [(var_name, loading), ...] for factor 0
+
+# Reuse a graph you already discovered instead of re-running the skeleton search.
+# Available on EVERY result type (CdnotsResult, CedarResult, GraceResult, ...).
+res = run_cdnots(df, ci, num_lags=3)
+res.deconfound()        # -> LucidResult (regime-adaptive; the recommended path)
+res.tetrad_filter()     # fixed comparator: always assumes pervasive factors
+res.pds_filter()        # fixed comparator: post-double-selection on observed controls
+```
+
+`causal-ts inspect` reports `facts.latent_factor.detected` — `true` means one or more
+latent factors load broadly across the panel, so plan on deconfounding. Read negatives
+narrowly: `false` only rules out factor structure this test can see (a confounder
+touching two or three variables leaves no dominant eigenvalue and stays invisible), and
+`null` means the check could not run. Neither means "no confounding".
 
 ## CI Tests — Choosing the Right Test
 

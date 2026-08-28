@@ -1225,6 +1225,154 @@ def plot(ctx, graph, plot_type, val_matrix, var_names, figsize, plot_format, sav
 
 
 # ---------------------------------------------------------------------------
+# deconfound — LUCID latent-confounder corrections on a discovered graph
+# ---------------------------------------------------------------------------
+@main.command()
+@click.argument("graph_path", metavar="GRAPH", type=click.Path(exists=True))
+@click.option(
+    "--data",
+    "data_path",
+    required=True,
+    type=click.Path(exists=True),
+    help="Data file the graph was discovered from (CSV/parquet/feather).",
+)
+@click.option(
+    "--strategy",
+    type=click.Choice(["adaptive", "tetrad", "pds"]),
+    default="adaptive",
+    show_default=True,
+    help=(
+        "adaptive = LUCID (infers the regime, applies the matching correction); "
+        "tetrad/pds = fixed single-strategy comparators."
+    ),
+)
+@click.option(
+    "--threshold",
+    type=float,
+    default=None,
+    help="Tetrad factor-consistency threshold (--strategy tetrad only). Default 0.25.",
+)
+@click.option(
+    "--alpha",
+    type=float,
+    default=None,
+    help="Significance level for the PDS filter (--strategy pds only). Default 1e-10.",
+)
+@click.option(
+    "--var-names", type=str, default=None, help="Comma-separated variable names."
+)
+@click.option(
+    "--json",
+    "output_json",
+    is_flag=True,
+    default=False,
+    help="Echo the run summary as JSON to stdout.",
+)
+@click.pass_context
+def deconfound(
+    ctx, graph_path, data_path, strategy, threshold, alpha, var_names, output_json
+):
+    """Correct a discovered graph for latent confounders.
+
+    GRAPH is an .npy file produced by `discover` (e.g. estimated_graph.npy); --data
+    is the series it was discovered from. max_lag is read from the graph's shape.
+
+    The default `adaptive` strategy is LUCID: it infers from the residual spectrum
+    whether latent confounding is sparse or pervasive and applies the matching
+    correction. `tetrad` and `pds` always apply one fixed correction regardless of
+    the data, and exist mainly as comparators.
+    """
+    import json as _json
+
+    from .inspection import edges_from_graph
+    from .utils.io import read_dataframe
+
+    outdir = _make_output_dir(ctx.obj["output_dir"], f"deconfound_{strategy}")
+
+    graph = np.load(graph_path, allow_pickle=True)
+    df = read_dataframe(data_path)
+    var_name_list = _parse_comma_list(var_names)
+    if var_name_list:
+        df.columns = var_name_list
+
+    d = df.shape[1]
+    max_lag = int(graph.shape[2] - 1)
+    # discover saves the C-node rows/columns too when include_C was set; the
+    # deconfounding layer works on observed variables only.
+    graph_obs = np.asarray(graph)[:d, :d, : max_lag + 1]
+
+    for name, value, owner in (
+        ("--threshold", threshold, "tetrad"),
+        ("--alpha", alpha, "pds"),
+    ):
+        if value is not None and strategy != owner:
+            _log(ctx, f"Note: {name} only applies to --strategy {owner}; ignoring it.")
+
+    _log(ctx, f"Graph {graph.shape} -> observed slice {graph_obs.shape}, d={d}")
+    edges_before = int(graph_obs.sum())
+
+    summary = {
+        "command": "deconfound",
+        "strategy": strategy,
+        "graph": graph_path,
+        "data": data_path,
+        "n_vars": d,
+        "max_lag": max_lag,
+        "edges_before": edges_before,
+        "output_files": {},
+    }
+
+    if strategy == "adaptive":
+        from .confounders import run_lucid
+
+        res = run_lucid(df, max_lag, discovery=graph_obs)
+        out = np.asarray(res.cg_tig)
+        summary["regime"] = res.regime
+        summary["spectral_ratio"] = res.spectral_ratio
+        summary["tau"] = res.tau
+        summary["n_factors"] = res.n_factors
+        _log(
+            ctx,
+            f"Regime: {res.regime} (R={res.spectral_ratio:.3f} vs tau={res.tau:.3f})",
+        )
+    elif strategy == "tetrad":
+        from .confounders import tetrad_filter
+
+        kw = {} if threshold is None else {"threshold": threshold}
+        out = np.asarray(tetrad_filter(df, graph_obs, max_lag, **kw))
+        summary["threshold"] = threshold if threshold is not None else 0.25
+    else:  # pds
+        from .confounders import pds_filter
+
+        # pds_filter takes alpha positionally with no default; mirror the default
+        # CausalResult.pds_filter uses so the CLI and the method agree.
+        alpha_used = 1e-10 if alpha is None else alpha
+        out = np.asarray(pds_filter(df, graph_obs, max_lag, alpha_used))
+        summary["alpha"] = alpha_used
+
+    edges_after = int(out.sum())
+    summary["edges_after"] = edges_after
+    summary["edges_removed"] = edges_before - edges_after
+
+    np.save(os.path.join(outdir, "deconfounded_graph.npy"), out)
+    summary["output_files"]["graph"] = "deconfounded_graph.npy"
+
+    names = var_name_list or [str(c) for c in df.columns]
+    summary["edges"] = edges_from_graph(out, names)
+
+    _save_json(summary, os.path.join(outdir, "summary.json"))
+    _log(
+        ctx,
+        f"Edges: {edges_before} -> {edges_after} "
+        f"({edges_before - edges_after} removed)",
+    )
+    _log(ctx, f"Results saved to {outdir}")
+
+    if output_json:
+        click.echo(_json.dumps(summary, indent=2, default=str))
+
+
+# ---------------------------------------------------------------------------
 # dowhy — effect estimation, SCM fitting, root cause analysis
 # ---------------------------------------------------------------------------
 @main.group("dowhy")
