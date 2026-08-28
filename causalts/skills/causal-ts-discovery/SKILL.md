@@ -46,7 +46,14 @@ warnings}`. Read it — do **not** re-derive these facts yourself.
   too-few rows). If a column is heavily missing or constant, recommend fixing it
   (impute/drop) before trusting results.
 - **`facts`** — linearity, per-column (non)stationarity + its `form`, suggested
-  max lag.
+  max lag, and `latent_factor`.
+  - **`latent_factor`** — `{detected, spectral_ratio, tau}`. `detected: true` means
+    one or more latent factors load broadly across the panel; plan on deconfounding
+    (§5). Read the negatives narrowly: `false` only rules out factor structure this
+    test can see — a latent cause touching just two or three variables produces no
+    dominant eigenvalue and stays invisible — and `null` means the check could not run
+    (missing values, `d < 2`, too few rows). **Never report either as "no
+    confounding".**
 - **`recommendation`** — `{algorithm, ci_test, include_C, c_preset, max_lag,
   rationale}`. This is a deterministic default; you may **override it** with
   context the tool can't see (e.g. the user says "these are already
@@ -116,6 +123,15 @@ read it rather than eyeballing, then apply:
   differencing, or verifying the C-node preset matches the trend `form`.
 - **High `max_in_degree` at `hub`** → inspect whether that variable is a common
   effect or an artifact of a confounder/persistence.
+- **Many `contemporaneous` edges, especially with step-2 `latent_factor.detected`**
+  → a broadly-loading latent factor induces exactly this signature (lag-0 edges
+  among variables with no direct causal link). Offer to correct it:
+  `causal-ts deconfound <graph.npy> --data <data-file>` (or `res.deconfound()` in
+  Python), which infers whether the confounding is sparse or pervasive and applies
+  the matching correction. Report edges-before/after and be explicit that the
+  removed edges were **judged confounded, not disproven**. Which edges are eligible
+  depends on the inferred regime: the pervasive branch rewrites the lag-0 slice only,
+  while the sparse branch also tests lagged edges against observed controls.
 - **`lagged` == 0 (all edges contemporaneous)** → check that `max_lag` is
   adequate and the sampling rate isn't washing out dynamics.
 - **Self-loops** are autoregressive terms (a variable's own past), expected for

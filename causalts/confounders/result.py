@@ -28,14 +28,19 @@ class LucidResult(CausalResult):
         The router statistic ``R`` -- the share of residual correlation mass carried by
         the top ``router_k`` eigenvalues. ``None`` for routers that do not compute it.
     tau : float or None
-        Routing threshold ``R`` was compared against. ``R > tau`` selects the pervasive
-        branch.
+        Routing threshold ``R`` was compared against. ``R <= tau`` selects ``"sparse"``;
+        ``R > tau`` selects a confounded branch -- ``"sf"`` or, above a second
+        threshold, ``"pervasive"``. So ``R > tau`` alone does **not** imply the
+        ``"pervasive"`` regime; read :attr:`regime` for the branch actually taken.
     router : str
         Which router ran (``"auto"``, ``"spectral"`` or ``"mp"``).
     n_factors : int or None
-        Number of pervasive latent factors implied by the Marchenko-Pastur edge
-        (:func:`~causalts.confounders.mp_factor_count`). ``0`` means no pervasive
-        factor was detected.
+        Number of latent factors implied by the Marchenko-Pastur edge
+        (:func:`~causalts.confounders.mp_factor_count`) -- eigenvalues too large to
+        come from the no-factor bulk. ``0`` means no such factor was detected.
+        This counts *broadly loading* factors and is independent of the
+        :attr:`regime` label: an ``"sf"`` result typically reports a nonzero
+        ``n_factors`` too.
     factor_loadings : np.ndarray or None, shape (n_factors, d)
         Leading right singular vectors of the VAR residuals, one row per detected
         factor, columns aligned with ``var_names``.

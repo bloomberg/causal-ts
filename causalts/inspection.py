@@ -12,7 +12,10 @@ from the CLI and from Python.
 Public API:
 
 - :func:`inspect_df` — full report ``{schema_version, data, facts, recommendation,
-  cost_class, warnings}`` for an in-memory DataFrame.
+  cost_class, warnings}`` for an in-memory DataFrame.  ``facts["latent_factor"]``
+  reports broad latent-factor structure when it is present; it is positive evidence
+  only, so ``detected`` False/None never means "no confounding" (see
+  :func:`_latent_factor_block`).
 - :func:`recommend_config` — the pure facts → config decision function.
 - :func:`discover_df` — run discovery on an in-memory DataFrame (the Python twin
   of ``causal-ts discover``).
@@ -198,6 +201,53 @@ def _warnings(df, data):
     return warns
 
 
+def _latent_factor_block(arr):
+    """Marchenko-Pastur check for broad latent-factor structure.
+
+    Delegates to LUCID's own router (``causalts.confounders.routed_deconf._route``)
+    rather than re-deriving the statistic, so this can never drift from the routing
+    decision :func:`~causalts.confounders.run_lucid` actually makes, and inherits its
+    validated no-factor null instead of a fresh ad-hoc cutoff.
+
+    This yields **positive evidence only**:
+
+    - ``detected=True``  — the residual spectrum carries factor structure above the
+      no-factor null, i.e. one or more latent factors load broadly enough to see.
+      This covers both regimes LUCID treats as confounded (``"sf"`` and
+      ``"pervasive"``), so do not describe it as specifically "pervasive".
+    - ``detected=False`` — no such structure. This is **not** "no confounding": a
+      latent cause touching only two or three variables produces no dominant
+      eigenvalue and is invisible to this test by construction.
+    - ``detected=None``  — the check could not run (see the guards below); this is
+      deliberately distinct from ``False`` so "did not check" is never read as
+      "checked and found nothing".
+
+    Returns
+    -------
+    dict
+        ``{detected, spectral_ratio, tau}``; the latter two are ``None`` whenever
+        the check did not run.
+    """
+    unavailable = {"detected": None, "spectral_ratio": None, "tau": None}
+    T, d = arr.shape
+    # The statistic is built on VAR(1) least-squares residuals, so skip the inputs
+    # that would make the fit raise (non-finite) or return a meaningless number
+    # (underdetermined: the design matrix is (T-1) x (d+1); d < 2 has no spectrum).
+    if d < 2 or T < d + 3 or not np.isfinite(arr).all():
+        return unavailable
+    try:
+        from .confounders.routed_deconf import _route
+
+        regime, info = _route(arr, router="auto")
+    except Exception:  # a diagnostic must never break the whole report
+        return unavailable
+    return {
+        "detected": regime != "sparse",
+        "spectral_ratio": float(info["R"]),
+        "tau": float(info["tau"]),
+    }
+
+
 def recommend_config(facts, data):
     """Map measured facts to a discovery configuration (pure, deterministic).
 
@@ -262,6 +312,18 @@ def recommend_config(facts, data):
     else:
         c_preset = "linear"
 
+    # --- latent confounding (advisory only) ---
+    # Deliberately does NOT influence algorithm/ci_test/include_C: LUCID is orthogonal
+    # post-discovery correction, not an alternative discovery algorithm. And the nudge
+    # fires only on a positive detection -- `detected` False/None cannot rule out
+    # sparse (few-variable) confounding, so silence is the honest default.
+    lf = facts.get("latent_factor") or {}
+    if lf.get("detected") is True:
+        reasons.append(
+            f"latent factor detected (R={lf['spectral_ratio']:.2f} vs "
+            f"tau={lf['tau']:.2f}) → consider res.deconfound() after discovery"
+        )
+
     return {
         "algorithm": algorithm,
         "ci_test": ci_test,
@@ -324,6 +386,7 @@ def inspect_df(df, max_lag=None):
             "form": form,
         },
         "suggested_max_lag": int(suggested),
+        "latent_factor": _latent_factor_block(arr),
     }
 
     recommendation = recommend_config(facts, data)
