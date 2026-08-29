@@ -29,6 +29,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* **The GES, LGES and TGES baselines were substantially understated.** Two independent
+  problems, both now fixed and covered by regression tests:
+  * `ges_discovery` read causal-learn's adjacency matrix with the endpoints transposed,
+    so every directed contemporaneous edge came back reversed and every directed lagged
+    edge was silently dropped — only undirected edges survived.
+  * The vendored GES search behind `lges_discovery` / `tges_discovery`
+    (`causalts/lges.py`) is a hand-extracted condensation of upstream `ges`, and the
+    extraction broke the CPDAG construction and the Insert, Delete and Turn operators.
+    The forward phase stopped far short of the optimum, so LGES never converged — its
+    F1 sat at 0.35–0.52 on `ex2` no matter how much data it was given.
+
+  All three now also apply temporal background knowledge (a variable can only cause
+  another at an equal or later time step), which the lag-embedded search previously
+  ignored. On the `baseline_comparison` datasets, F1 moves from 0.125/0.154/0.522/0.333
+  (GES) and 0.400/0.417/0.526/0.333 (LGES/TGES) to 0.636/0.917/0.949/0.435 for all
+  three; LGES now reaches F1 1.000 on `ex2` by T=5,000. Every correction was verified
+  against upstream `ges` 1.1.1 — no defect originated with the upstream authors — and
+  the corrected search returns CPDAGs identical to upstream's on random DAGs while
+  running faster than it. `ges_discovery` gains an `engine=` argument selecting the
+  vendored search (default) or causal-learn.
+
+  Any prior comparison against these baselines understates them.
 * `corrplot` dropped the right and bottom edges of its grid border. All axes
   spines are hidden, and the border was drawn with `axhline`/`axvline` at
   exactly the axis limits, so half of each boundary line fell outside the clip
