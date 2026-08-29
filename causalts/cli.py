@@ -73,6 +73,8 @@ Key tradeoffs
 from .algorithms import list_algorithms as _list_algorithms  # noqa: E402
 
 ALGORITHM_CHOICES = _list_algorithms()
+# Everything else in ALGORITHM_CHOICES is a third-party plugin (see .algorithms).
+_BUILTIN_ALGORITHMS = ("cdnots", "cdnots+", "cedar", "grace", "grace-ss")
 PLOT_FORMAT_CHOICES = ["png", "pdf", "svg"]
 DATASET_CHOICES = ["ex1", "ex2", "ex3", "henon"]
 LAG_SEL_CHOICES = ["partial_dcor", "dcor", "dcor_biased", "pearson", "lasso"]
@@ -480,6 +482,20 @@ def discover(
             "check with --algorithm cdnots or cedar.",
             param_hint="--validate",
         )
+    if do_validate and algorithm not in _BUILTIN_ALGORITHMS:
+        # The bootstrap re-discovery closure below only special-cases
+        # cdnots/cdnots+ and otherwise re-runs CEDAR -- correct for the
+        # built-in fallback (nothing else reaches it), but wrong for a
+        # plugin: it would silently annotate the plugin's edges with CEDAR's
+        # persistence values instead of the plugin's own.
+        raise click.BadParameter(
+            f"--validate is not supported for third-party algorithm {algorithm!r} "
+            "(the stability bootstrap only knows how to re-run the built-in "
+            "algorithms). Re-run the stability check with --algorithm cdnots or "
+            "cedar, or bootstrap the plugin directly with "
+            "causalts.bootstrap.temporal_bootstrap.",
+            param_hint="--validate",
+        )
     if want_pvalues and algorithm in ("grace", "grace-ss"):
         raise click.BadParameter(
             "--pvalues is not supported for GRACE (it emits continuous gate "
@@ -804,6 +820,28 @@ def discover(
         _log(
             ctx,
             f"GRACE-SS complete. Graph shape: {grace_ss_res.cg_tig.shape}, {n_edges} edges, {elapsed:.1f}s",
+        )
+
+    else:
+        # Third-party algorithm from the plugin registry. The built-ins get
+        # bespoke branches above because each saves extra artifacts (gate values,
+        # stability scores, ...); a plugin only has to return a CausalResult.
+        from .algorithms import run_algorithm
+
+        _log(ctx, f"Running {algorithm} (registered plugin)...")
+        plugin_res = run_algorithm(algorithm, df=df, ci_test=ci, max_lag=max_lag)
+        plugin_graph = np.asarray(plugin_res.cg_tig)
+        np.save(os.path.join(outdir, "estimated_graph.npy"), plugin_graph)
+        summary["output_files"]["graph"] = "estimated_graph.npy"
+
+        n_edges = int(plugin_graph.astype(bool).sum())
+        elapsed = _time.time() - t0
+        summary["elapsed_seconds"] = round(elapsed, 1)
+        summary["n_edges"] = n_edges
+        _log(
+            ctx,
+            f"{algorithm} complete. Graph shape: {plugin_graph.shape}, "
+            f"{n_edges} edges, {elapsed:.1f}s",
         )
 
     # Named edge list for interpretation (agent-legible). Load the graph back
