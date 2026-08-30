@@ -187,6 +187,35 @@ def test_corrplot_diag_glyph_renders_the_diagonal():
     assert with_diag == without + n
 
 
+def test_corrplot_diag_glyph_leaves_split_diagonal_blank():
+    """With an upper/lower split, diag="glyph" draws nothing on the diagonal.
+
+    Documented behaviour, not an oversight: a diagonal cell belongs to neither
+    half, so there is no method to borrow. Pinned so the blank diagonal cannot
+    turn into an arbitrary one (e.g. silently falling back to `method`, which
+    the caller never set when upper/lower are given).
+    """
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import corrplot
+
+    counts = {}
+    for diag in ("blank", "glyph"):
+        fig, ax = plt.subplots()
+        corrplot(
+            _make_frame(),
+            upper="circle",
+            lower="color",
+            diag=diag,
+            colorbar=False,
+            fig_ax=(fig, ax),
+        )
+        counts[diag] = _glyph_path_count(ax)
+        plt.close(fig)
+
+    assert counts["glyph"] == counts["blank"]
+
+
 def test_corrplot_grid_border_is_closed():
     """All four edges of the grid border must be drawn.
 
