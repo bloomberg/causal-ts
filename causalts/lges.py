@@ -117,24 +117,46 @@ def topological_ordering(A):
     return ordering
 
 
-def semi_directed_paths(fro, to, A):
-    """Find all semi-directed paths from *fro* to *to* in PDAG *A*."""
-    paths = []
-    _sdp_dfs(fro, to, A, [fro], paths)
-    return paths
+def chain_component(i, G):
+    """The undirected-connected component containing *i*."""
+    U = only_undirected(G)
+    visited, to_visit = set(), {i}
+    while to_visit:
+        j = to_visit.pop()
+        visited.add(j)
+        to_visit |= neighbors(j, U) - visited
+    return visited
 
 
-def _sdp_dfs(current, to, A, path, paths):
-    if current == to:
-        paths.append(list(path))
-        return
-    for nxt in range(len(A)):
-        if nxt in path:
-            continue
-        if A[current, nxt] != 0:
-            path.append(nxt)
-            _sdp_dfs(nxt, to, A, path, paths)
-            path.pop()
+def induced_subgraph(S, G):
+    """The subgraph of *G* induced by the node set *S*."""
+    mask = np.zeros_like(G, dtype=bool)
+    mask[list(S), :] = True
+    mask = np.logical_and(mask, mask.T)
+    sub = np.zeros_like(G)
+    sub[mask] = G[mask]
+    return sub
+
+
+def separates(S, A_set, B_set, G):
+    """Does *S* block every semi-directed path between *A_set* and *B_set* in *G*?
+
+    Searches for one surviving path instead of enumerating all of them.
+    """
+    if (A_set & B_set) or (A_set & S) or (B_set & S):
+        raise ValueError("S, A and B must be pairwise disjoint")
+    for a in A_set:
+        stack, seen = [a], {a}
+        while stack:
+            cur = stack.pop()
+            if cur in B_set:
+                return False
+            for nxt in np.where(G[cur, :] != 0)[0]:
+                if nxt in seen or nxt in S:
+                    continue
+                seen.add(nxt)
+                stack.append(nxt)
+    return True
 
 
 def cartesian(arrays):
@@ -180,54 +202,75 @@ def delete(i, j, H, A):
 # --- PDAG -> DAG -> CPDAG pipeline ---
 
 
-def pdag_to_dag(P):
-    """Dor-Tarsi algorithm: find a consistent extension DAG of PDAG *P*."""
+def pdag_to_dag(P, forbidden=None):
+    """Dor-Tarsi algorithm: find a consistent extension DAG of PDAG *P*.
+
+    Repeatedly pick a node ``x`` of the remaining subgraph that is a sink (no
+    directed edge leaves it) and whose undirected neighbours are adjacent to
+    everything else adjacent to ``x``; orient every undirected edge at ``x``
+    *into* ``x``, then remove it. Orienting at removal time is what keeps the
+    result acyclic — deriving the directions afterwards from the removal order
+    inverts them, because the first node removed is the last topologically.
+
+    Plain Dor-Tarsi treats every undirected edge as equally resolvable in
+    either direction, which is wrong once ``forbidden`` says otherwise. But
+    rejecting a *candidate sink* whenever any neighbour has a forced direction
+    (an earlier version of this function did that) is incomplete: it can
+    report "no consistent extension" for perfectly resolvable graphs, because
+    Dor-Tarsi's one move -- turn every undirected edge at a chosen node into an
+    incoming edge -- has no way to express "most of these neighbours are free,
+    but this one specific edge must point out."
+
+    The fix used here relies on a property specific to how ``forbidden`` is
+    built by :func:`temporal_forbidden`: for any two nodes, either neither
+    direction is forbidden (free, e.g. two variables at the same lag) or
+    *exactly* one is (never both -- that would make the pair unconnectable).
+    So every such edge already has a unique legal direction with no search
+    needed; force them all before Dor-Tarsi runs, and hand it a graph with no
+    remaining background knowledge to violate. Classical Dor-Tarsi's
+    completeness guarantee then applies exactly as in the unconstrained case.
+    """
     P = P.copy()
+    if forbidden is not None:
+        p = len(P)
+        for i in range(p):
+            for j in range(p):
+                if i == j or P[i, j] == 0 or P[j, i] == 0:
+                    continue  # already directed, or no edge
+                if forbidden[j, i] != 0:
+                    # j -> i is illegal, i -> j is the only option (and, by
+                    # construction, is not itself forbidden).
+                    P[j, i] = 0
+
+    remaining_P = P.copy()
     p = len(P)
-    ordering = []
+    G = only_directed(P).copy()
     remaining = set(range(p))
     while remaining:
-        found = False
-        for x in list(remaining):
-            x_neighbors = neighbors(x, P) & remaining
-            x_pa = pa(x, P) & remaining
-            x_adj = x_neighbors | x_pa
-            if len(x_neighbors) == 0 or (
-                x_adj == x_adj and _is_sink_in_subgraph(x, P, remaining)
-            ):
-                ordering.append(x)
-                remaining.remove(x)
-                found = True
-                break
-        if not found:
+        for x in sorted(remaining):
+            if not _is_sink_in_subgraph(x, remaining_P):
+                continue
+            for y in neighbors(x, remaining_P):
+                G[y, x] = 1
+                G[x, y] = 0
+            remaining.discard(x)
+            remaining_P[x, :] = 0
+            remaining_P[:, x] = 0
+            break
+        else:
             raise ValueError("No consistent extension exists")
-    G = np.zeros((p, p))
-    for i in range(p):
-        for j in range(p):
-            if P[i, j] != 0 and P[j, i] == 0:
-                G[i, j] = 1
-            elif P[i, j] != 0 and P[j, i] != 0:
-                idx_i = ordering.index(i)
-                idx_j = ordering.index(j)
-                if idx_i < idx_j:
-                    G[i, j] = 1
-                else:
-                    G[j, i] = 1
     return G
 
 
-def _is_sink_in_subgraph(x, P, remaining):
-    """Check if x is a valid sink in the subgraph induced by remaining."""
-    for j in remaining:
-        if j == x:
-            continue
-        if P[x, j] != 0 and P[j, x] == 0:
-            return False
-    neigh = neighbors(x, P) & remaining
-    adj_x = (neigh | (pa(x, P) & remaining)) - {x}
-    for a, b in combinations(adj_x, 2):
-        if P[a, b] == 0 and P[b, a] == 0:
-            return False
+def _is_sink_in_subgraph(x, P):
+    """Is *x* a Dor-Tarsi sink of the subgraph *P* (removed nodes zeroed out)?"""
+    if len(ch(x, P)) > 0:  # a directed edge leaves x
+        return False
+    adj_x = adj(x, P)
+    for y in neighbors(x, P):
+        for z in adj_x - {y}:
+            if P[y, z] == 0 and P[z, y] == 0:
+                return False
     return True
 
 
@@ -246,37 +289,63 @@ def dag_to_cpdag(G):
 
 
 def order_edges(edges, order_map):
-    """Order edges for labeling."""
+    """Order edges for labelling (Chickering's Order-Edges).
+
+    Heads are visited in topological order; among the edges sharing a head, the
+    one whose *tail* comes latest in the topological order is ordered first.
+    Sorting the tail ascending instead reverses that inner order and makes
+    ``label_edges`` mark reversible edges as compelled.
+    """
 
     def edge_key(e):
-        return (order_map[e[1]], order_map[e[0]])
+        return (order_map[e[1]], -order_map[e[0]])
 
     return sorted(edges, key=edge_key)
 
 
 def label_edges(ordered_edges, G):
-    """Label each edge as compelled or reversible."""
+    """Label each edge of DAG *G* compelled or reversible (Chickering 1995).
+
+    Phase one — propagating compelledness *through* ``x`` — is what forces edges
+    that no v-structure pins down but that Meek's rules require. Omitting it
+    leaves such edges reversible, so the CPDAG comes back under-oriented.
+    """
     p = len(G)
-    labels = {}
-    for e in ordered_edges:
-        labels[e] = "unknown"
+    labels = {e: "unknown" for e in ordered_edges}
+
+    def parents(v):
+        return set(np.where(G[:, v] != 0)[0])
+
     for x, y in ordered_edges:
-        if labels[(x, y)] == "unknown":
-            parents_y = set(np.where(G[:, y] != 0)[0]) - {x}
-            for w in parents_y:
-                if G[w, x] == 0:
-                    labels[(x, y)] = "compelled"
-                    for z in set(np.where(G[:, y] != 0)[0]):
-                        if labels.get((z, y)) == "unknown":
-                            labels[(z, y)] = "compelled"
-                    break
-            if labels[(x, y)] == "unknown":
+        if labels[(x, y)] != "unknown":
+            continue
+        parents_y = parents(y)
+
+        # Phase 1: every compelled w -> x either forces x -> y outright (when w
+        # is not also a parent of y) or makes w -> y compelled.
+        done = False
+        for w in sorted(parents(x)):
+            if labels.get((w, x)) != "compelled":
+                continue
+            if w not in parents_y:
+                labels[(x, y)] = "compelled"
                 for z in parents_y:
-                    if labels.get((z, y)) == "compelled":
-                        labels[(x, y)] = "compelled"
-                        break
-            if labels[(x, y)] == "unknown":
-                labels[(x, y)] = "reversible"
+                    labels[(z, y)] = "compelled"
+                done = True
+                break
+            labels[(w, y)] = "compelled"
+        if done:
+            continue
+
+        # Phase 2: an unshielded parent of y other than x makes x -> y compelled;
+        # otherwise x -> y and every remaining unlabelled edge into y are reversible.
+        parents_x = parents(x)
+        compelled = any(z not in parents_x for z in parents_y - {x})
+        label = "compelled" if compelled else "reversible"
+        labels[(x, y)] = label
+        for z in parents_y:
+            if labels.get((z, y)) == "unknown":
+                labels[(z, y)] = label
     cpdag = np.zeros((p, p))
     for (i, j), lbl in labels.items():
         if lbl == "compelled":
@@ -287,10 +356,16 @@ def label_edges(ordered_edges, G):
     return cpdag
 
 
-def pdag_to_cpdag(P):
-    """PDAG -> consistent DAG -> CPDAG."""
+def pdag_to_cpdag(P, forbidden=None):
+    """PDAG -> consistent DAG -> CPDAG.
+
+    Pass ``forbidden`` whenever *P* came from a search that used it -- without
+    it, ``pdag_to_dag``'s arbitrary sink choice can resolve an undirected edge
+    in the one direction background knowledge rules out. ``dag_to_cpdag`` never
+    reverses an edge it is given, so a legally-extended DAG stays legal.
+    """
     try:
-        G = pdag_to_dag(P)
+        G = pdag_to_dag(P, forbidden)
     except ValueError:
         return P.copy()
     return dag_to_cpdag(G)
@@ -461,7 +536,18 @@ def fit(
             )
 
     if "turning" in phases:
+        # The turn operator scores each move as if the parents of x and y are
+        # the only thing that changes, but pdag_to_cpdag's completion step can
+        # legally reorient other, unrelated edges as a side effect (new
+        # v-structures, Meek propagation). When that happens the score gain
+        # the next candidate reports is computed against a baseline that
+        # completion already changed out from under it, and under background
+        # knowledge (forbidden) that can produce a genuine 2-cycle: turn A
+        # applied, turn B claims a gain that undoes A's effect, A is offered
+        # again, forever. Bound the loop with visited-state detection rather
+        # than assume every accepted move is real forward progress.
         cont = True
+        seen = {A.tobytes()}
         while cont:
             A, cont, metrics = _turning_step(
                 A,
@@ -472,6 +558,10 @@ def fit(
                 metrics=metrics,
                 debug=debug,
             )
+            state = A.tobytes()
+            if state in seen:
+                break
+            seen.add(state)
 
     metrics["time"] = time.time() - start
     try:
@@ -540,6 +630,7 @@ def _forward_step(
             y,
             A,
             score_class,
+            forbidden,
             prune=prune,
             max_subset_size=max_subset_size,
             debug=debug,
@@ -559,7 +650,7 @@ def _forward_step(
 
     _, x, y, T = best_operator
     new_A = _apply_insert(x, y, T, A)
-    new_A = pdag_to_cpdag(new_A)
+    new_A = pdag_to_cpdag(new_A, forbidden)
     metrics["inserts_actual"] += 1
     if debug:
         print(f"  Insert {x} -> {y} | T={T}, delta={best_score:.4f}")
@@ -582,7 +673,13 @@ def _backward_step(
                 continue
 
             operators = _score_valid_delete_operators(
-                x, y, A, score_class, max_subset_size=max_subset_size, debug=debug
+                x,
+                y,
+                A,
+                score_class,
+                forbidden,
+                max_subset_size=max_subset_size,
+                debug=debug,
             )
             metrics["deletes_eval"] += len(operators)
 
@@ -596,7 +693,7 @@ def _backward_step(
 
     _, x, y, H = best_operator
     new_A = _apply_delete(x, y, H, A)
-    new_A = pdag_to_cpdag(new_A)
+    new_A = pdag_to_cpdag(new_A, forbidden)
     metrics["deletes_actual"] += 1
     if debug:
         print(f"  Delete {x} -> {y} | H={H}, delta={best_score:.4f}")
@@ -607,38 +704,44 @@ def _turning_step(
     A, score_class, required, forbidden, max_subset_size=3, metrics=None, debug=0
 ):
     """GES turning phase: find best turn operator and apply it."""
-    p = len(A)
     best_score = 0
     best_operator = None
 
-    for x in range(p):
-        for y in range(p):
-            if x == y:
-                continue
-            if not (A[x, y] != 0 and A[y, x] == 0):
-                continue
-            if forbidden[y, x] != 0:
-                continue
+    # Candidates are the reverse of every present edge: for an edge src -> dst
+    # (or src - dst) we consider turning it so that it points dst -> src.
+    src, dst = np.where(A != 0)
+    for x, y in zip(dst, src):
+        if x == y:
+            continue
+        # The operator creates x -> y, so that is the direction to check.
+        if forbidden[x, y] != 0:
+            continue
 
-            operators = _score_valid_turn_operators(
-                x, y, A, score_class, max_subset_size=max_subset_size, debug=debug
-            )
-            metrics["turns_eval"] += len(operators)
+        operators = _score_valid_turn_operators(
+            x,
+            y,
+            A,
+            score_class,
+            forbidden,
+            max_subset_size=max_subset_size,
+            debug=debug,
+        )
+        metrics["turns_eval"] += len(operators)
 
-            for score_delta, C in operators:
-                if score_delta > best_score:
-                    best_score = score_delta
-                    best_operator = ("turn", x, y, C)
+        for score_delta, C in operators:
+            if score_delta > best_score:
+                best_score = score_delta
+                best_operator = ("turn", x, y, C)
 
     if best_operator is None:
         return A, False, metrics
 
     _, x, y, C = best_operator
     new_A = _apply_turn(x, y, C, A)
-    new_A = pdag_to_cpdag(new_A)
+    new_A = pdag_to_cpdag(new_A, forbidden)
     metrics["turns_actual"] += 1
     if debug:
-        print(f"  Turn {x} -> {y} to {y} -> {x} | C={C}, delta={best_score:.4f}")
+        print(f"  Turn to {x} -> {y} | C={C}, delta={best_score:.4f}")
     return new_A, True, metrics
 
 
@@ -646,7 +749,7 @@ def _turning_step(
 
 
 def _score_valid_insert_operators(
-    x, y, A, score_class, prune=False, max_subset_size=3, debug=0
+    x, y, A, score_class, forbidden, prune=False, max_subset_size=3, debug=0
 ):
     """Score all valid insert(x, y, T) operators.
 
@@ -657,17 +760,29 @@ def _score_valid_insert_operators(
     operators = []
     found_lower = False
 
-    for T in subsets(na_yx, max_size=max_subset_size):
+    # T ranges over subsets of Ne(y) \\ Adj(x) -- neighbours of y NOT adjacent to
+    # x. Drawing T from na_yx (= Ne(y) INTERSECT Adj(x)) instead explores the wrong
+    # operators and makes condition 1 vacuous, since T would already be inside na_yx.
+    # Every t in T is oriented t -> y by _apply_insert, so any t forbidden from
+    # causing y must never enter the candidate pool -- checking only the (x, y)
+    # pair (as the caller does) misses this, since T is a second, independent
+    # source of new edges into y.
+    candidates_T = {t for t in neighbors(y, A) - adj(x, A) if forbidden[t, y] == 0}
+
+    for T in subsets(candidates_T, max_size=max_subset_size):
         # Validity condition 1: NA_yx ∪ T is a clique
         if not is_clique(na_yx | T, A):
             continue
-        # Validity condition 2: no semi-directed path from y to x
-        new_pa = pa_y | T | {x}
+        # Validity condition 2: every semi-directed path y -> x is blocked by NA_yx ∪ T
         if _creates_cycle(x, y, T, A):
             continue
 
-        old_score = score_class.local_score(y, pa_y)
-        new_score = score_class.local_score(y, new_pa)
+        # The undirected neighbours in NA_yx and the members of T all become
+        # parents of y under this operator, so they belong in BOTH terms of the
+        # delta; omitting them scores a different operator than the one applied.
+        base = pa_y | na_yx | T
+        old_score = score_class.local_score(y, base)
+        new_score = score_class.local_score(y, base | {x})
         score_delta = new_score - old_score
 
         if prune and score_delta < 0:
@@ -679,22 +794,36 @@ def _score_valid_insert_operators(
     return operators, found_lower
 
 
-def _score_valid_delete_operators(x, y, A, score_class, max_subset_size=3, debug=0):
+def _score_valid_delete_operators(
+    x, y, A, score_class, forbidden, max_subset_size=3, debug=0
+):
     """Score all valid delete(x, y, H) operators."""
     na_yx = _na(y, x, A)
     pa_y = pa(y, A)
+    n_x = neighbors(x, A)
     operators = []
 
-    for H in subsets(na_yx - {x}, max_size=max_subset_size):
+    # _apply_delete orients every h in H as y -> h, and additionally x -> h
+    # when h is also an undirected neighbour of x. Either forbidden[y, h] or
+    # (h in n_x and forbidden[x, h]) makes h unusable, regardless of the (x, y)
+    # pair's own validity.
+    candidates_H = {
+        h
+        for h in na_yx - {x}
+        if forbidden[y, h] == 0 and not (h in n_x and forbidden[x, h] != 0)
+    }
+
+    for H in subsets(candidates_H, max_size=max_subset_size):
         # Validity: NA_yx \\ H is a clique
         if not is_clique(na_yx - H, A):
             continue
 
-        if A[y, x] != 0:
-            old_parents = pa_y | na_yx | {x}
-        else:
-            old_parents = pa_y | na_yx
-        new_parents = (pa_y | na_yx | {x}) - H - {x}
+        # Both terms share the base pa_y | (NA_yx \\ H) and differ only by x --
+        # the operator removes x, nothing else. Keeping H in the "old" set makes
+        # the delta also charge for dropping H, scoring a different move.
+        base = (na_yx - H) | pa_y
+        old_parents = base | {x}
+        new_parents = base - {x}
 
         old_score = score_class.local_score(y, old_parents)
         # Skip when old_score is -inf (inadmissible parent set, e.g. tier
@@ -710,47 +839,128 @@ def _score_valid_delete_operators(x, y, A, score_class, max_subset_size=3, debug
     return operators
 
 
-def _score_valid_turn_operators(x, y, A, score_class, max_subset_size=3, debug=0):
-    """Score all valid turn(x, y, C) operators."""
+def _turn_unblocked_path(x, y, C, A):
+    """Does a semi-directed path y -> x survive the blocking set ``C | ne(x)``?
+
+    The direct edge y-x is exempt. Reachability rather than path enumeration:
+    enumerating every path is exponential and made the turning phase dominate
+    runtime on dense graphs.
+    """
+    blocked = set(C) | neighbors(x, A)
+    stack, seen = [y], {y}
+    while stack:
+        cur = stack.pop()
+        for nxt in np.where(A[cur, :] != 0)[0]:
+            if nxt == x:
+                if cur != y:  # a path of length > 1 got through
+                    return True
+                continue
+            if nxt in seen or nxt in blocked:
+                continue
+            seen.add(nxt)
+            stack.append(nxt)
+    return False
+
+
+def _score_valid_turn_operators_dir(x, y, A, score_class, forbidden, max_subset_size=3):
+    """Turn the directed edge y -> x into x -> y (upstream ges.main)."""
     na_yx = _na(y, x, A)
-    pa_y = pa(y, A)
-    operators = []
-
-    for C in subsets(na_yx - {x}, max_size=max_subset_size):
-        if not is_clique(na_yx | C, A):
+    pa_y, pa_x = pa(y, A), pa(x, A)
+    out = []
+    # _apply_turn orients every member of C = na_yx | T as c -> y. na_yx is fixed
+    # per (x, y), so if it already contains a node forbidden from causing y, every
+    # possible C is invalid and there is nothing to search.
+    if any(forbidden[c, y] != 0 for c in na_yx):
+        return out
+    candidates_T = {t for t in neighbors(y, A) - adj(x, A) if forbidden[t, y] == 0}
+    for T in subsets(candidates_T, max_size=max_subset_size):
+        C = na_yx | T
+        if not is_clique(C, A):
             continue
-        new_pa_y = pa_y | na_yx | {x} - C  # noqa: F841
-        if _turn_creates_cycle(x, y, C, A):
+        if _turn_unblocked_path(x, y, C, A):
             continue
+        new = score_class.local_score(y, pa_y | C | {x}) + score_class.local_score(
+            x, pa_x - {y}
+        )
+        old = score_class.local_score(y, pa_y | C) + score_class.local_score(x, pa_x)
+        out.append((new - old, C))
+    return out
 
-        old_pa = pa_y | (na_yx - C - {x})
-        new_pa = pa_y | na_yx | {x} - C
 
-        old_score = score_class.local_score(y, old_pa)
-        new_score = score_class.local_score(y, new_pa)
-        score_delta = new_score - old_score
+def _score_valid_turn_operators_undir(
+    x, y, A, score_class, forbidden, max_subset_size=3
+):
+    """Turn the undirected edge y - x into x -> y (upstream ges.main)."""
+    non_adjacent = neighbors(y, A) - adj(x, A) - {x}
+    if not non_adjacent:
+        return []
+    na_yx = _na(y, x, A)
+    pa_y, pa_x = pa(y, A), pa(x, A)
+    subgraph = induced_subgraph(chain_component(y, A), A)
+    out = []
+    # _apply_turn orients every member of C as c -> y, so C's candidate pool
+    # must exclude anything forbidden from causing y.
+    candidates_C = {c for c in neighbors(y, A) - {x} if forbidden[c, y] == 0}
+    for C in subsets(candidates_C, max_size=max_subset_size):
+        # C must contain at least one neighbour of y that is not adjacent to x
+        if not (C & non_adjacent):
+            continue
+        if not is_clique(C, A):
+            continue
+        if not separates({x, y}, C - {x, y}, (na_yx - C) - {x, y}, subgraph):
+            continue
+        new = score_class.local_score(y, pa_y | C | {x}) + score_class.local_score(
+            x, pa_x | (C & na_yx)
+        )
+        old = score_class.local_score(y, pa_y | C) + score_class.local_score(
+            x, pa_x | (C & na_yx) | {y}
+        )
+        out.append((new - old, C))
+    return out
 
-        operators.append((score_delta, C))
 
-    return operators
+def _score_valid_turn_operators(
+    x, y, A, score_class, forbidden, max_subset_size=3, debug=0
+):
+    """Score every valid turn(x, y, C), producing the edge x -> y."""
+    if A[x, y] != 0 and A[y, x] == 0:
+        return []  # x -> y already exists
+    if A[x, y] == 0 and A[y, x] == 0:
+        return []  # not connected
+    if A[x, y] != 0 and A[y, x] != 0:
+        return _score_valid_turn_operators_undir(
+            x, y, A, score_class, forbidden, max_subset_size=max_subset_size
+        )
+    return _score_valid_turn_operators_dir(
+        x, y, A, score_class, forbidden, max_subset_size=max_subset_size
+    )
 
 
 def _creates_cycle(x, y, T, A):
-    """Check if insert(x, y, T) would create a cycle."""
-    paths = semi_directed_paths(y, x, A)
-    return len(paths) > 0
+    """Is insert(x, y, T) invalid because some semi-directed path is unblocked?
 
+    GES requires every semi-directed path from *y* to *x* to contain a node of
+    ``NA_yx | T``. Rejecting the operator whenever *any* such path exists — as
+    opposed to any *unblocked* one — starves the forward phase: paths multiply as
+    the graph grows, so the search stalls long before it reaches the optimum.
 
-def _turn_creates_cycle(x, y, C, A):
-    """Check if turn(x->y to y->x) with C would create a cycle."""
-    test_A = A.copy()
-    test_A[x, y] = 0
-    test_A[y, x] = 1
-    for c in C:
-        test_A[y, c] = 0
-        test_A[c, y] = 1
-    paths = semi_directed_paths(x, y, test_A)
-    return len(paths) > 0
+    Searches for one unblocked path rather than enumerating them all, which also
+    avoids the exponential blow-up of enumerating every path on dense graphs.
+    """
+    blocked = _na(y, x, A) | set(T)
+    stack, seen = [y], {y}
+    while stack:
+        cur = stack.pop()
+        if cur == x:
+            return True  # reached x without passing through the blocking set
+        for nxt in np.where(A[cur, :] != 0)[0]:
+            # A[cur, nxt] != 0 admits cur -> nxt and cur - nxt, and excludes
+            # nxt -> cur, which is exactly a semi-directed step away from y.
+            if nxt in seen or nxt in blocked:
+                continue
+            seen.add(nxt)
+            stack.append(nxt)
+    return False
 
 
 def _apply_insert(x, y, T, A):
@@ -764,24 +974,35 @@ def _apply_insert(x, y, T, A):
 
 
 def _apply_delete(x, y, H, A):
-    """Apply delete operator: remove x-y and orient H->y."""
+    """Apply delete(x, y, H): drop the x-y edge, then orient y -> h and x -> h.
+
+    The orientation runs *away* from y and x, not toward them. Orienting h -> y
+    instead (and skipping the x - h edges entirely) yields a graph that does not
+    match the operator that was scored, so the search can leave the space of
+    valid PDAGs.
+    """
     new_A = A.copy()
     new_A[x, y] = 0
     new_A[y, x] = 0
+    n_x = neighbors(x, A)
     for h in H:
-        new_A[y, h] = 0
-        new_A[h, y] = 1
+        new_A[h, y] = 0  # leaves y -> h
+        if h in n_x:
+            new_A[h, x] = 0  # leaves x -> h
     return new_A
 
 
 def _apply_turn(x, y, C, A):
-    """Apply turn operator: reverse x->y to y->x, orient C->y."""
+    """Apply turn(x, y, C): make the edge x -> y and orient every c in C as c -> y.
+
+    Matches upstream ``ges.main.turn``. Clearing ``A[y, c]`` leaves ``c -> y``;
+    setting ``A[c, y]`` as well would keep the edge undirected.
+    """
     new_A = A.copy()
-    new_A[x, y] = 0
-    new_A[y, x] = 1
+    new_A[y, x] = 0
+    new_A[x, y] = 1
     for c in C:
         new_A[y, c] = 0
-        new_A[c, y] = 1
     return new_A
 
 
@@ -831,6 +1052,29 @@ def _apply_tier_orientation(cpdag, tier_of):
 # ---------------------------------------------------------------------------
 
 
+def temporal_forbidden(d, max_lag):
+    """Forbidden-edges matrix enforcing "past can cause present, not vice versa".
+
+    Variable blocks in a lag embedding are ``[lag0: 0..d-1] [lag1: d..2d-1] ...
+    [lagK: Kd..(K+1)d-1]``. A variable at ``lag_a`` may cause one at ``lag_b``
+    only if ``lag_a >= lag_b``. Also forbids lag-0 self-loops (a variable
+    cannot cause itself at the same time step). Every lag-embedded search in
+    this module and in :mod:`causalts.baselines` shares this constraint.
+    """
+    n = d * (max_lag + 1)
+    forbidden = np.zeros((n, n))
+    for lag_cause in range(max_lag + 1):
+        for lag_effect in range(max_lag + 1):
+            if lag_cause < lag_effect:
+                cause_start, effect_start = lag_cause * d, lag_effect * d
+                for i in range(d):
+                    for j in range(d):
+                        forbidden[cause_start + i, effect_start + j] = 1
+    for i in range(d):
+        forbidden[i, i] = 1
+    return forbidden
+
+
 def lges_discovery(df, max_lag=1, mode="lges", lambda_value=None):
     """Run LGES on lag-embedded time series data.
 
@@ -867,26 +1111,7 @@ def lges_discovery(df, max_lag=1, mode="lges", lambda_value=None):
 
     # Set up scoring
     score_class = GaussObsL0Pen(embedded, lmbda=lambda_value)
-    n_embedded = d * (max_lag + 1)
-
-    # Build forbidden-edges matrix enforcing temporal constraints:
-    # Variable blocks: [lag0: 0..d-1] [lag1: d..2d-1] ... [lagK: Kd..(K+1)d-1]
-    # Rule: a variable at lag_a can only cause a variable at lag_b if a >= b
-    #   (the past can cause the present, not vice versa).
-    # Also forbid self-loops at lag 0.
-    forbidden = np.zeros((n_embedded, n_embedded))
-    for lag_cause in range(max_lag + 1):
-        for lag_effect in range(max_lag + 1):
-            if lag_cause < lag_effect:
-                # Block: present (lag_cause) cannot cause past (lag_effect)
-                cause_start = lag_cause * d
-                effect_start = lag_effect * d
-                for i in range(d):
-                    for j in range(d):
-                        forbidden[cause_start + i, effect_start + j] = 1
-    # Forbid self-loops at lag 0
-    for i in range(d):
-        forbidden[i, i] = 1
+    forbidden = temporal_forbidden(d, max_lag)
 
     # Set LGES mode
     if mode == "lges":
@@ -978,24 +1203,10 @@ def tges_discovery(df, max_lag=1, mode="lges", lambda_value=None):
         embedded_cols.append(data[start:end, :])
     embedded = np.hstack(embedded_cols)
 
-    n_embedded = d * (max_lag + 1)
-
     # tier_of[node] = lag index of that node (0 = present, k = k steps back)
     tier_of = {lag * d + i: lag for lag in range(max_lag + 1) for i in range(d)}
 
-    # Forbidden matrix (fast-path guard; redundant with score but keeps
-    # operator checks O(1) rather than hitting the score for every pair)
-    forbidden = np.zeros((n_embedded, n_embedded))
-    for lag_cause in range(max_lag + 1):
-        for lag_effect in range(max_lag + 1):
-            if lag_cause < lag_effect:
-                cause_start = lag_cause * d
-                effect_start = lag_effect * d
-                for i in range(d):
-                    for j in range(d):
-                        forbidden[cause_start + i, effect_start + j] = 1
-    for i in range(d):
-        forbidden[i, i] = 1
+    forbidden = temporal_forbidden(d, max_lag)
 
     # Standard BIC score — temporal constraints are enforced via the forbidden
     # matrix (same guarantee as TieredGaussObsL0Pen's -inf scoring, without

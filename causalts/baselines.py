@@ -221,7 +221,60 @@ def _patch_ges_numpy2():
     _ges_mod.local_score_BIC_from_cov = _patched
 
 
-def ges_discovery(df, max_lag=1, score_func="local_score_BIC", lambda_value=None):
+def _lag_embed(df, max_lag):
+    """Stack the present block beside one block per lag: [X_t, X_{t-1}, ...]."""
+    data = df.values if isinstance(df, pd.DataFrame) else np.asarray(df)
+    T_orig, d = data.shape
+    blocks = [data[max_lag - lag : T_orig - lag, :] for lag in range(max_lag + 1)]
+    return np.hstack(blocks), d
+
+
+def _ges_fast(embedded, d, max_lag, lambda_value, forbidden):
+    """GES via the vendored search in :mod:`causalts.lges`.
+
+    Same algorithm as causal-learn's ``ges`` -- forward Insert phase then backward
+    Delete phase, no turning -- plus temporal background knowledge forbidding
+    edges from the present into the past (see ``temporal_forbidden``). Without
+    it, the search treats every lag-embedded column as an ordinary variable and
+    happily inserts and scores backward-in-time edges -- e.g. present X2 into
+    past-lag-1 X5 -- which are never reported (extraction only reads out
+    lag-to-present cells) but still consume search budget and can change which
+    forward edges win. Verified to return the same graph as causal-learn's
+    ``ges`` when there is no lag structure to protect (``max_lag == 0``, where
+    ``forbidden`` is all zeros). It is also much faster on large samples
+    because ``GaussObsL0Pen`` caches the scatter matrix, so each local score is
+    O(1) in the sample size instead of a fresh pass over the data.
+    """
+    from .lges import GaussObsL0Pen, fit
+
+    n = embedded.shape[0]
+    # causal-learn penalises lambda_value * (|pa| + 1) * log(n); GaussObsL0Pen
+    # penalises lmbda * (|pa| + 1), so fold the log(n) in to match.
+    lmbda = None if lambda_value is None else lambda_value * np.log(n)
+    A, metrics = fit(
+        GaussObsL0Pen(embedded, lmbda=lmbda),
+        phases=["forward", "backward"],
+        score_based=False,
+        prune=False,
+        forbidden=forbidden,
+    )
+
+    G_hat = np.zeros((d, d, max_lag + 1), dtype=int)
+    for lag in range(max_lag + 1):
+        for i in range(d):
+            for j in range(d):
+                if lag == 0 and i == j:
+                    continue
+                # ges-package convention: A[u, v] != 0 means u -> v (both
+                # directions set means the edge is undirected).
+                if A[lag * d + i, j] != 0:
+                    G_hat[i, j, lag] = 1
+    return G_hat, {"method": "ges", "engine": "fast", "cpdag": A, "metrics": metrics}
+
+
+def ges_discovery(
+    df, max_lag=1, score_func="local_score_BIC", lambda_value=None, engine="fast"
+):
     """Run GES (Greedy Equivalence Search) on lag-embedded data.
 
     Score-based method that searches over equivalence classes of DAGs.
@@ -235,63 +288,87 @@ def ges_discovery(df, max_lag=1, score_func="local_score_BIC", lambda_value=None
     max_lag : int
         Number of lags to embed.
     score_func : str
-        Scoring function for GES (e.g. ``"local_score_BIC"``).
+        Scoring function for GES (e.g. ``"local_score_BIC"``). Only
+        ``"local_score_BIC"`` is available under ``engine="fast"``; any other
+        value transparently selects the causal-learn engine.
     lambda_value : float or None
         BIC penalty hyperparameter. Larger values produce sparser graphs.
+    engine : {"fast", "causal-learn"}
+        Which implementation of GES to run. ``"fast"`` (the default) uses the
+        vendored search in :mod:`causalts.lges`, which forbids edges from the
+        present into the past during the search itself -- background knowledge
+        that a lagged time series always licenses -- and is dramatically
+        quicker on large samples, since ``GaussObsL0Pen`` caches the scatter
+        matrix (a 24-column embedding at T=20,000 takes 1.2s against
+        causal-learn's 131s). ``"causal-learn"`` runs the original
+        implementation, which has no parameter for background knowledge; it is
+        offered for parity/validation and matches the fast engine exactly at
+        ``max_lag=0``, where there is no temporal ordering to protect. At
+        ``max_lag > 0`` it raises, rather than silently return a graph from an
+        unconstrained search that can orient edges backward in time.
 
     Returns
     -------
     G_hat : ndarray, shape ``(d, d, max_lag+1)``
         Estimated graph.
     info : dict
-        ``score``, ``ges_graph`` (raw GES output).
+        ``engine`` plus, for the causal-learn engine, ``score`` and ``ges_graph``
+        (raw GES output); for the fast engine, ``cpdag`` and ``metrics``.
 
     """
+    if engine not in ("fast", "causal-learn"):
+        raise ValueError(f"engine must be 'fast' or 'causal-learn', got {engine!r}")
+
+    embedded, d = _lag_embed(df, max_lag)
+
+    from .lges import temporal_forbidden
+
+    forbidden = temporal_forbidden(d, max_lag)
+
+    if engine == "fast" and score_func == "local_score_BIC":
+        return _ges_fast(embedded, d, max_lag, lambda_value, forbidden)
+
+    if max_lag > 0:
+        raise ValueError(
+            "the causal-learn engine cannot honor temporal background "
+            "knowledge: causal-learn's ges() has no forbidden-edges "
+            "parameter, so running it on lagged data (max_lag > 0) would "
+            "search unconstrained and could orient edges backward in time. "
+            f"This was reached because {'engine=' + repr(engine) if engine == 'causal-learn' else 'score_func=' + repr(score_func) + ' is not local_score_BIC'} "  # noqa: E501
+            "-- use engine='fast' with score_func='local_score_BIC' (the "
+            "default) instead, or call with max_lag=0."
+        )
+
     from causallearn.search.ScoreBased.GES import ges
 
     _patch_ges_numpy2()
-
-    data = df.values if isinstance(df, pd.DataFrame) else np.asarray(df)
-    T_orig, d = data.shape
-
-    embedded_cols = []
-    for lag in range(max_lag + 1):
-        start = max_lag - lag
-        end = T_orig - lag
-        embedded_cols.append(data[start:end, :])
-
-    embedded = np.hstack(embedded_cols)
-    n_vars = embedded.shape[1]  # noqa: F841
 
     result = ges(embedded, score_func=score_func, lambda_value=lambda_value)
     ges_graph = result["G"].graph
 
     G_hat = np.zeros((d, d, max_lag + 1), dtype=int)
 
+    # causal-learn adjacency convention (verified against GeneralGraph.add_edge):
+    #   u -> v   is  graph[u, v] == -1 (tail at u)  and  graph[v, u] == 1 (arrow at v)
+    #   u -- v   is  graph[u, v] == graph[v, u] == -1
+    # Undirected edges are recorded in the temporal direction, which is the only
+    # one consistent with the lag embedding.
     for lag in range(max_lag + 1):
-        cause_start = lag * d
-        cause_end = (lag + 1) * d
-        effect_start = 0
-        effect_end = d
-
-        block = ges_graph[effect_start:effect_end, cause_start:cause_end]
         for i in range(d):
             for j in range(d):
                 if lag == 0 and i == j:
                     continue
-                if (
-                    block[j, i] == -1
-                    and ges_graph[cause_start + i, effect_start + j] == 1
-                ):
-                    G_hat[i, j, lag] = 1
-                elif (
-                    block[j, i] == -1
-                    and ges_graph[cause_start + i, effect_start + j] == -1
-                ):
+                cause = lag * d + i  # variable i at time t - lag
+                effect = j  # variable j at time t
+                tail, head = ges_graph[cause, effect], ges_graph[effect, cause]
+                directed = tail == -1 and head == 1
+                undirected = tail == -1 and head == -1
+                if directed or undirected:
                     G_hat[i, j, lag] = 1
 
     info = {
         "method": "ges",
+        "engine": "causal-learn",
         "score": result.get("score"),
         "score_func": score_func,
         "ges_graph": ges_graph,
