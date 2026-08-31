@@ -255,7 +255,9 @@ def corrplot(
         cause→effect adjacency or edge-stability matrix) where the diagonal
         is real data — a self-loop — rather than the trivial 1.0 of a
         correlation matrix. Significance markers and confidence-interval
-        overlays are still skipped on the diagonal.
+        overlays are still skipped on the diagonal. With an upper/lower split
+        the diagonal is left blank instead: it belongs to neither half, so
+        there is no "ordinary cell" method to borrow.
     is_corr : bool or None
         If None, auto-detect whether data is correlation-like ([-1, 1]).
         If True, force [-1, 1] range with diverging cmap.
