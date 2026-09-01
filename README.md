@@ -38,18 +38,32 @@ Causal-TS is a Python framework for causal discovery in time series data. It imp
 
 ### Installation
 
-Install the latest release from PyPI:
+Install the latest release from PyPI with pip or
+[uv](https://docs.astral.sh/uv/):
 
 ```bash
+# Option 1: pip
 pip install causalts
+
+# Option 2 (recommended): uv
+uv venv  # create a virtual env
+uv pip install causalts
 ```
 
-For development, install from a clone:
+For development, clone the repository:
 
 ```bash
 git clone https://github.com/bloomberg/causal-ts.git
 cd causal-ts
+```
+
+```bash
+# Option 1: pip
 pip install -e ".[dev,dowhy,tigramite]"
+
+# Option 2 (recommended): uv
+uv venv  # create a virtual env
+uv pip install -e ".[dev,dowhy,tigramite]"
 ```
 
 PyTorch is installed automatically. CUDA and Apple MPS are auto-detected at

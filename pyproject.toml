@@ -68,6 +68,7 @@ dev = [
   "black>=23.0",
   "isort>=5.12",
   "flake8>=6.0",
+  "ipykernel>=6.0",
 ]
 
 [tool.setuptools.packages.find]

@@ -132,6 +132,11 @@ ipython_config.py
 #   https://pdm.fming.dev/#use-with-ide
 .pdm.toml
 
+# uv
+#   causalts is a library, so the lockfile is not committed: it constrains nothing
+#   for consumers, and CI installs via pip rather than resolving it.
+uv.lock
+
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
 __pypackages__/
 
