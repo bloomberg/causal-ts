@@ -62,7 +62,8 @@ cd causal-ts
 pip install -e ".[dev,dowhy,tigramite]"
 
 # Option 2 (recommended): uv
-uv sync --extra dev --extra dowhy --extra tigramite
+uv venv  # create a virtual env
+uv pip install -e ".[dev,dowhy,tigramite]"
 ```
 
 PyTorch is installed automatically. CUDA and Apple MPS are auto-detected at

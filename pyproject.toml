@@ -48,7 +48,6 @@ dependencies = [
   "matplotlib>=3.7",
   "pytorch-lightning>=2.0",
   "click>=8.0",
-  "ipykernel>=6.0",
 ]
 
 [project.scripts]
@@ -69,6 +68,7 @@ dev = [
   "black>=23.0",
   "isort>=5.12",
   "flake8>=6.0",
+  "ipykernel>=6.0",
 ]
 
 [tool.setuptools.packages.find]
