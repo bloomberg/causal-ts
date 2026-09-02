@@ -198,10 +198,27 @@ def detect_subsampling(
         Dataclass with the test statistic, p-value, residual-correlation and
         non-Gaussianity diagnostics, a ``verdict`` string, ``notes`` (including the
         non-separability caveat), and the ``subsampling_flagged`` property.
+
+    Raises
+    ------
+    ValueError
+        If ``X`` is not 2-D, has fewer than 2 variables (the test measures
+        correlation *between* residual series, so a univariate input has
+        nothing to measure), is too short for the requested ``lag``, or if
+        ``null`` is not one of the documented values.
     """
     if hasattr(X, "values"):
         X = X.values
     X = np.asarray(X, dtype=float)
+    if X.ndim != 2:
+        raise ValueError(f"X must be 2-D of shape (T, d), got shape {X.shape}")
+    if X.shape[1] < 2:
+        # The whole test is about correlation *between* residual series, so a
+        # univariate input has nothing to test. Without this the run reaches
+        # numpy and dies with an opaque LinAlgError about a 0-dimensional array.
+        raise ValueError(
+            "subsampling detection needs at least 2 variables; " f"got d={X.shape[1]}"
+        )
     beta, resid = _fit_var(X, lag)
     n, d = resid.shape
     if null == "auto":

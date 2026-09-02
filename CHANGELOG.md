@@ -29,6 +29,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `detect_subsampling` raises `ValueError` on a 1-D or single-variable input, instead of
+  failing inside NumPy with `LinAlgError: 0-dimensional array given`.
+
 * **The GES, LGES and TGES baselines were substantially understated.** Two independent
   problems, both now fixed and covered by regression tests:
   * `ges_discovery` read causal-learn's adjacency matrix with the endpoints transposed,
