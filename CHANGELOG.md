@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+* `detect_subsampling` raises `ValueError` on a 1-D or single-variable input, instead of
+  failing inside NumPy with `LinAlgError: 0-dimensional array given`.
+
 ### Added
 
 * **LUCID** (`causalts.confounders`) — regime-adaptive deconfounding for causal discovery
