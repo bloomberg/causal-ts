@@ -25,7 +25,7 @@ from .skeleton_discovery import (
     skeleton_discovery,
     skeleton_discovery_pervar,
 )
-from .uc_sepset import uc_sepset
+from .uc_sepset import uc_sepset, validate_priority
 
 _C_PRESETS = {
     "linear": lambda T: np.arange(T, dtype=float).reshape(-1, 1),
@@ -837,7 +837,8 @@ def run_cdnots(
     max_combinations : int
         Maximum conditioning sets per edge per depth.
     priority : int
-        Collider conflict resolution strategy (0-4).
+        Collider conflict resolution strategy: 0 (overwrite),
+        1 (abstain on conflicts) or 2 (keep the first collider).
     verbose : bool
         Print CI test results.
     show_progress : bool
@@ -870,6 +871,7 @@ def run_cdnots(
         Self-contained result with graph, p-values, plotting, and
         effect-estimation methods.
     """
+    validate_priority(priority)
     disc_out = cdnots_discovery(
         df=df,
         indep_test=indep_test,
@@ -995,6 +997,7 @@ def run_cdnots_plus(
     CdnotsResult
         Self-contained result.
     """
+    validate_priority(priority)
     if discrete_cols is None:
         discrete_cols = _detect_discrete_cols(df, df.shape[0])
 

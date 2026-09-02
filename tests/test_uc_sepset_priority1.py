@@ -171,3 +171,72 @@ def test_keep_undirected_survives_bidirected_branch():
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+@pytest.mark.parametrize("priority", [3, 4])
+def test_strength_ordering_priorities_are_rejected(priority):
+    """priority=3/4 must fail fast with an explanation, not an AttributeError.
+
+    Upstream's strength-ordering rules score every conflicting triple over
+    ``find_cond_sets()`` -- the full powerset of the endpoints' neighbours,
+    uncapped, so exponential in node degree. They also call ``cg.ci_test``,
+    which CDNOTS never wires up, so they used to die with
+    ``AttributeError: 'NoneType' object has no attribute 'method'`` from
+    inside causal-learn after the skeleton search had already run.
+    """
+    ci = ParCorrGPU(np.zeros((2, 2)), device="cpu")
+    with pytest.raises(ValueError, match="not supported"):
+        run_cdnots(
+            _data(T=200),
+            ci,
+            num_lags=1,
+            include_C=False,
+            priority=priority,
+            verbose=False,
+            show_progress=False,
+        )
+
+
+def test_out_of_range_priority_is_rejected():
+    ci = ParCorrGPU(np.zeros((2, 2)), device="cpu")
+    with pytest.raises(ValueError, match="priority must be 0, 1 or 2"):
+        run_cdnots(
+            _data(T=200),
+            ci,
+            num_lags=1,
+            include_C=False,
+            priority=7,
+            verbose=False,
+            show_progress=False,
+        )
+
+
+@pytest.mark.parametrize("entry", ["run_cdnots", "run_cdnots_plus"])
+@pytest.mark.parametrize("priority", [3, 4])
+def test_bad_priority_rejected_before_the_skeleton_search(entry, priority, monkeypatch):
+    """The point of the check is fail-fast, not just the exception type.
+
+    uc_sepset runs *after* skeleton discovery, so a guard there alone still
+    burns the whole search -- exactly where the old AttributeError fired.
+    """
+    import causalts.cdnots.phase3_utils as p3
+
+    calls = []
+    for name in ("skeleton_discovery", "skeleton_discovery_pervar"):
+        original = getattr(p3, name)
+        monkeypatch.setattr(
+            p3, name, lambda *a, _o=original, **k: (calls.append(1), _o(*a, **k))[1]
+        )
+
+    fn = getattr(p3, entry)
+    with pytest.raises(ValueError, match="not supported"):
+        fn(
+            _data(T=200),
+            ParCorrGPU(np.zeros((2, 2)), device="cpu"),
+            num_lags=1,
+            include_C=False,
+            priority=priority,
+            verbose=False,
+            show_progress=False,
+        )
+    assert calls == [], "skeleton search ran before the priority was rejected"

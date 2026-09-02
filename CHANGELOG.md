@@ -29,6 +29,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `priority=3` and `priority=4` (collider strength ordering) now raise `ValueError`
+  at the entry point, instead of failing with an `AttributeError` from inside
+  causal-learn after the skeleton search. They score each conflict over the full
+  powerset of the endpoints' neighbours — exponential in node degree — and were
+  never wired to a CI test. Use `priority=1` (abstain) or `2` (keep first).
 * `detect_subsampling` raises `ValueError` on a 1-D or single-variable input, instead of
   failing inside NumPy with `LinAlgError: 0-dimensional array given`.
 

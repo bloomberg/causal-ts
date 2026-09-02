@@ -19,6 +19,36 @@ from causallearn.utils.PCUtils.Helper import sort_dict_ascending
 from causalts.cdnots.meek import _build_adj_dict, _find_unshielded_triples_fast
 
 
+def validate_priority(priority: int) -> None:
+    """Reject collider-conflict rules CDNOTS does not support.
+
+    Call this at an entry point, before the skeleton search -- the check below
+    in :func:`uc_sepset` only runs after it, so on its own it would let a bad
+    value burn the whole search first.
+    """
+    if priority in (0, 1, 2):
+        return
+    if priority in (3, 4):
+        # Upstream's strength-ordering rules. They score every conflicting
+        # triple by max p(x indep z | S) over find_cond_sets(), which is the
+        # full powerset of the neighbours of x and z -- 2**degree conditioning
+        # sets per triple, uncapped, on top of a skeleton search that
+        # deliberately stopped at the first separating set. They also need
+        # cg.ci_test, which CDNOTS never wires up, so they used to fail with an
+        # opaque AttributeError from inside causal-learn. Rejected explicitly
+        # instead: CDNOTS+ abstains on conflicts (priority=1) rather than
+        # tie-breaking them.
+        raise ValueError(
+            f"priority={priority} (collider strength ordering) is not "
+            "supported: it scores each conflict over the full powerset of "
+            "the endpoints' neighbours, which is exponential in the node "
+            "degree. Use priority=1 to abstain on conflicts (CDNOTS+'s "
+            "default) or priority=2 to keep the first collider "
+            "(CDNOTS's default)."
+        )
+    raise ValueError(f"priority must be 0, 1 or 2, got {priority!r}")
+
+
 def uc_sepset(
     cg: CausalGraph,
     priority: int = 2,
@@ -38,9 +68,12 @@ def uc_sepset(
         A CausalGraph object.
     priority : int
         Rule of resolving conflicts between unshielded colliders
-        (default 2). 0: overwrite, 1: orient bi-directed,
-        2: prioritize existing colliders, 3: prioritize stronger
-        colliders, 4: prioritize stronger* colliders.
+        (default 2). 0: overwrite, 1: orient bi-directed (abstain --
+        CDNOTS+'s default), 2: prioritize existing colliders
+        (CDNOTS's default). Upstream's 3 and 4 (strength ordering)
+        are **not supported** and raise ``ValueError``; they are
+        exponential in the node degree. See ``maxp`` below, which
+        retains them but is not reachable from CDNOTS.
     background_knowledge : BackgroundKnowledge, optional
         Artificial background knowledge.
     num_lags : int
@@ -69,7 +102,7 @@ def uc_sepset(
         ``graph[i,j] = graph[j,i] = 1`` indicates i <-> j.
     """
 
-    assert priority in [0, 1, 2, 3, 4]
+    validate_priority(priority)
 
     no_of_var = cg.G.num_vars
     assert no_of_var % (num_lags + 1) == 0
