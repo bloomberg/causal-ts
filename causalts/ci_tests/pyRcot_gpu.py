@@ -470,7 +470,7 @@ class RCOTGPU(CIT_Base):
         combined_hash = cache_key, self.param_hash
         if combined_hash in self.pvalue_cache:
             return self.pvalue_cache[combined_hash]
-        self.n_actual_tests += 1  # actualy need to compute now
+        self.n_actual_tests += 1  # actually need to compute now
 
         data_t = self.data_torch
         if self._has_nan:

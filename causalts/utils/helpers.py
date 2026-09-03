@@ -298,7 +298,7 @@ def precision_recall_3d(g_true_3d, g_est_3d):
     L = g_true_3d.sum()  # number of links
     nDisc = g_est_3d.sum()
     nDisc = nDisc + 1e-12 if nDisc == 0 else nDisc
-    return nTP / nDisc, nTP / L  # precission, recall
+    return nTP / nDisc, nTP / L  # precision, recall
 
 
 # Logging formatter supporting colorized output

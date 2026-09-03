@@ -346,7 +346,7 @@ class SYPI:  # SYstemathic Path Isolation for causal discovery — DEPRECATED
                 for lag_ in np.where(sig_lags != 0)[0]:
                     if lag_ != 0:  # pcmci does not model it
                         ldic[(j, -lag_)] = (
-                            "-?>"  # means might or might not exist, but if exist the direction is fron j_lag_l to n
+                            "-?>"  # means might or might not exist, but if it exists the direction is from j_lag_l to n
                         )
             if ldic != {}:  # not empty
                 link_assumptions[n] = ldic
@@ -941,7 +941,7 @@ class SYPI:  # SYstemathic Path Isolation for causal discovery — DEPRECATED
                                             [
                                                 self.data.loc[:, source].shift(
                                                     lag_dic[source]
-                                                ),  # potentional removal
+                                                ),  # potential removal
                                                 self.data.loc[:, node],  # target at t
                                                 self.data.loc[:, node].shift(
                                                     1
@@ -1004,9 +1004,7 @@ class SYPI:  # SYstemathic Path Isolation for causal discovery — DEPRECATED
                 }
                 zz = pd.concat(
                     [
-                        self.data.loc[:, src].shift(
-                            lag_dic[src]
-                        ),  # potentional removal
+                        self.data.loc[:, src].shift(lag_dic[src]),  # potential removal
                         self.data.loc[:, trg],  # target at t
                         self.data.loc[:, trg].shift(1),  # target t-1
                         self.data.loc[:, trg].shift(-1),  # target t+1
@@ -1067,13 +1065,13 @@ class SYPI:  # SYstemathic Path Isolation for causal discovery — DEPRECATED
         M2[M2 < 0.02] = np.nan
         np.fill_diagonal(M2, np.nan)
         sig_relations = np.where(M2[target_ind, :] > 0.02)[0]
-        potential_childeren_idx = [
+        potential_children_idx = [
             t
             for t in sig_relations
             if M[target_ind, t] / M[t, target_ind] > direction_strength_threshold
         ]
-        potential_childeren = [self.var_names[pc] for pc in potential_childeren_idx]
-        return potential_childeren
+        potential_children = [self.var_names[pc] for pc in potential_children_idx]
+        return potential_children
 
     def run_ts_causality(self):
         # self.print_settings()
@@ -1127,11 +1125,11 @@ class SYPI:  # SYstemathic Path Isolation for causal discovery — DEPRECATED
         if self.filter_potential_children:
             # threshold_multiplier_4_filter_children = 1.0
             target_ind = self.var_names.index(target)
-            potential_childeren = self.get_potential_children_new(
+            potential_children = self.get_potential_children_new(
                 target_ind, self.direction_strength_threshold
             )
         else:
-            potential_childeren = []
+            potential_children = []
 
         for i_candidate, candidate in enumerate(other_cols):
             # w = [np.nan,np.nan,np.nan,1,2]
@@ -1146,7 +1144,7 @@ class SYPI:  # SYstemathic Path Isolation for causal discovery — DEPRECATED
                     if (
                         not np.isnan(w[i_var])
                         and cond_var != candidate
-                        and cond_var not in potential_childeren
+                        and cond_var not in potential_children
                     ):
                         u = self.data.loc[:, cond_var].shift(
                             -int(w[i_candidate] - w[i_var] - 1)
