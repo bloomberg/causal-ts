@@ -175,7 +175,16 @@ def main(ctx, output_dir, seed, device, verbose, quiet):
 )
 def ci_test_info(test):
     """Print the CI test selection guide and per-test summaries."""
-    click.echo(CI_TEST_GUIDE)
+    if test == "all":
+        click.echo(CI_TEST_GUIDE)
+        return
+
+    for section in CI_TEST_GUIDE.split("\n\n"):
+        if section.startswith(f"  {test} "):
+            click.echo(section)
+            return
+
+    raise click.ClickException(f"No selection guide available for CI test '{test}'.")
 
 
 # ---------------------------------------------------------------------------

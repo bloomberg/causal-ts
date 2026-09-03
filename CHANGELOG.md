@@ -29,6 +29,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `causal-ts ci-test-info --test <name>` now shows only the selected test's
+  summary instead of the full guide. Registered tests without a guide section
+  report a clear error; the default and `--test all` output are unchanged.
 * `priority=3` and `priority=4` (collider strength ordering) now raise `ValueError`
   at the entry point, instead of failing with an `AttributeError` from inside
   causal-learn after the skeleton search. They score each conflict over the full
