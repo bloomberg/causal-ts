@@ -1475,7 +1475,7 @@ def plot_graph(
     node_size : int, optional (default: 0.3)
         Node size.
     node_aspect : float, optional (default: None)
-        Ratio between the heigth and width of the varible nodes.
+        Ratio between the height and width of the variable nodes.
     arrowhead_size : int, optional (default: 20)
         Size of link arrow head. Passed on to FancyArrowPatch object.
     curved_radius, float, optional (default: 0.2)
@@ -1641,7 +1641,7 @@ def plot_graph(
     net = np.any(link_matrix_upper != "", axis=2)
     G = nx.DiGraph(net)
 
-    # This handels Graphs with no links.
+    # This handles graphs with no links.
     # nx.draw(G, alpha=0, zorder=-10)
 
     node_color = list(np.zeros(N))
@@ -2179,7 +2179,7 @@ def plot_time_series_graph(
     node_size : int, optional (default: 0.1)
         Node size.
     node_aspect : float, optional (default: None)
-        Ratio between the heigth and width of the varible nodes.
+        Ratio between the height and width of the variable nodes.
     lag_array : array-like, optional (default: None)
         Array of actual lag values for column labels. If None, uses
         sequential integers 0, 1, ..., tau_max.

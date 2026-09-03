@@ -153,12 +153,12 @@ class CIT_Base(object):  # noqa: F811
 
         if Z is None:
             Z = []
-        x_orderd = sorted(X) if isinstance(X, Iterable) else int(X)
-        y_orderd = sorted(Y) if isinstance(Y, Iterable) else int(Y)
-        z_orderd = sorted(Z) if isinstance(Z, Iterable) else int(Z)
-        x_hash = sha1(np.ascontiguousarray(self.data[:, x_orderd])).hexdigest()
-        y_hash = sha1(np.ascontiguousarray(self.data[:, y_orderd])).hexdigest()
-        z_hash = sha1(np.ascontiguousarray(self.data[:, z_orderd])).hexdigest()
+        x_ordered = sorted(X) if isinstance(X, Iterable) else int(X)
+        y_ordered = sorted(Y) if isinstance(Y, Iterable) else int(Y)
+        z_ordered = sorted(Z) if isinstance(Z, Iterable) else int(Z)
+        x_hash = sha1(np.ascontiguousarray(self.data[:, x_ordered])).hexdigest()
+        y_hash = sha1(np.ascontiguousarray(self.data[:, y_ordered])).hexdigest()
+        z_hash = sha1(np.ascontiguousarray(self.data[:, z_ordered])).hexdigest()
 
         sorted_xy = sorted([x_hash, y_hash])
         combined_hash = "_".join((sorted_xy[0], sorted_xy[1], z_hash))

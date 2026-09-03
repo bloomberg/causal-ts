@@ -8,8 +8,8 @@ Hands-on notebooks covering algorithms, CI tests, and the full discovery-to-esti
 
 <div class="ct-gallery">
 
-<a href="beginers_guide.html" class="ct-gallery-item" data-tooltip="Beginner-friendly introduction: causation vs correlation, discovery vs inference, assumptions, constraint-based vs score-based methods, and nonstationarity handling.">
-  <img src="../_static/img/thumbnails/beginers_guide_thumb.png" alt="Beginner's Guide" />
+<a href="beginners_guide.html" class="ct-gallery-item" data-tooltip="Beginner-friendly introduction: causation vs correlation, discovery vs inference, assumptions, constraint-based vs score-based methods, and nonstationarity handling.">
+  <img src="../_static/img/thumbnails/beginners_guide_thumb.png" alt="Beginner's Guide" />
   <span class="ct-gallery-title">Beginner's Guide</span>
 </a>
 
@@ -230,7 +230,7 @@ Notebooks reproducing experiments from the GRACE paper (preprint forthcoming) wi
 :maxdepth: 1
 :caption: Tutorials
 
-beginers_guide
+beginners_guide
 agentic_discovery
 ../tutorial
 api_reference

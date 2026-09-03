@@ -353,7 +353,7 @@ class CondIndTest:
         remove_constant_data=False,
         verbosity=0,
     ):
-        """Convencience wrapper around construct_array."""
+        """Convenience wrapper around construct_array."""
 
         if self.measure in [
             "par_corr",
@@ -460,17 +460,17 @@ class CondIndTest:
         # First check whether CI result was already computed
         # by checking whether hash of (xyz, array) already exists
         # Individually sort X, Y, Z since for a CI test it does not matter
-        # how they are aranged
-        x_orderd = sorted(range(len(X)), key=X.__getitem__)
-        arr_x = array[xyz == 0][x_orderd]
+        # how they are arranged
+        x_ordered = sorted(range(len(X)), key=X.__getitem__)
+        arr_x = array[xyz == 0][x_ordered]
         x_hash = sha1(np.ascontiguousarray(arr_x)).hexdigest()
 
-        y_orderd = sorted(range(len(Y)), key=Y.__getitem__)
-        arr_y = array[xyz == 1][y_orderd]
+        y_ordered = sorted(range(len(Y)), key=Y.__getitem__)
+        arr_y = array[xyz == 1][y_ordered]
         y_hash = sha1(np.ascontiguousarray(arr_y)).hexdigest()
 
-        z_orderd = sorted(range(len(Z)), key=Z.__getitem__)
-        arr_z = array[xyz == 2][z_orderd]
+        z_ordered = sorted(range(len(Z)), key=Z.__getitem__)
+        arr_z = array[xyz == 2][z_ordered]
         z_hash = sha1(np.ascontiguousarray(arr_z)).hexdigest()
 
         sorted_xy = sorted([x_hash, y_hash])
@@ -1290,7 +1290,7 @@ class CondIndTest:
         bootdist.sort()
         conf_lower = bootdist[int((1.0 - c_int) * conf_samples)]
         conf_upper = bootdist[int(c_int * conf_samples)]
-        # Return the confidance limits as a tuple
+        # Return the confidence limits as a tuple
         return (conf_lower, conf_upper)
 
     def _get_acf(self, series, max_lag=None):
@@ -1355,7 +1355,7 @@ class CondIndTest:
 
         # Get the shape of the array
         dim, T = array.shape
-        # Initiailize the indices
+        # Initialize the indices
         indices = range(dim)
         if mode == "significance":
             indices = np.where(xyz == 0)[0]
@@ -1511,7 +1511,7 @@ class CondIndTest:
         return null_dist
 
     def get_fixed_thres_significance(self, value, fixed_thres):
-        """DEPRECATED Returns signficance for thresholding test."""
+        """DEPRECATED Returns significance for thresholding test."""
         raise ValueError("fixed_thres is replaced by alpha_or_thres in run_test.")
         # if np.abs(value) < np.abs(fixed_thres):
         #     pval = 1.

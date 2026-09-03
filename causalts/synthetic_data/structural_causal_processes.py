@@ -156,13 +156,13 @@ def _var_network(
         Flag to add random noise or not
     inno_cov : array, optional (default: None)
         Covariance matrix of innovations.
-    invert_inno : bool, optional (defualt : False)
+    invert_inno : bool, optional (default : False)
         Flag to negate off-diagonal elements of inno_cov and invert it before
         using it as the covariance matrix of innovations
     T : int, optional (default: 100)
         Sample size.
 
-    initial_values : array, optional (defult: None)
+    initial_values : array, optional (default: None)
         Initial values for each node. Shape is (n_nodes, max_delay+1), i.e. must
         be of shape (graph.shape[1], graph.shape[2]).
 
@@ -579,7 +579,7 @@ class _Graph:
             elif recStack[neighbour]:
                 return True
 
-        # The node needs to be poped from
+        # The node needs to be popped from
         # recursion stack before function ends
         recStack[v] = False
         return False
