@@ -2387,36 +2387,36 @@ def plot_time_series_graph(
             tauj = -(max_lag - 1 - (v % max_lag))
 
             if np.abs(i - j) <= 1 and np.abs(tauj - taui) <= 1:
-                inout = "inner"
+                edge_location = "inner"
                 dic["inner_edge"] = True
                 dic["outer_edge"] = False
             else:
-                inout = "outer"
+                edge_location = "outer"
                 dic["inner_edge"] = False
                 dic["outer_edge"] = True
 
-            dic[f"{inout}_edge_type"] = tsg_style[u, v]
+            dic[f"{edge_location}_edge_type"] = tsg_style[u, v]
 
-            dic[f"{inout}_edge_alpha"] = alpha
+            dic[f"{edge_location}_edge_alpha"] = alpha
 
             if link_width is None:
                 # fraction of nonzero values
-                dic[f"{inout}_edge_width"] = arrow_linewidth
+                dic[f"{edge_location}_edge_width"] = arrow_linewidth
             else:
-                dic[f"{inout}_edge_width"] = tsg_width[u, v]
+                dic[f"{edge_location}_edge_width"] = tsg_width[u, v]
 
             if link_attribute is None:
-                dic[f"{inout}_edge_attribute"] = None
+                dic[f"{edge_location}_edge_attribute"] = None
             else:
-                dic[f"{inout}_edge_attribute"] = tsg_attr[u, v]
+                dic[f"{edge_location}_edge_attribute"] = tsg_attr[u, v]
 
             # value at argmax of average
             if no_coloring:
-                dic[f"{inout}_edge_color"] = None
+                dic[f"{edge_location}_edge_color"] = None
             else:
-                dic[f"{inout}_edge_color"] = tsg_val[u, v]
+                dic[f"{edge_location}_edge_color"] = tsg_val[u, v]
 
-            all_strengths.append(dic[f"{inout}_edge_color"])
+            all_strengths.append(dic[f"{edge_location}_edge_color"])
             dic["label"] = None
 
     # If no links are present, set value to zero
