@@ -45,9 +45,30 @@ Conditional Independence Test Selection Guide
 
   cmiknn-gpu   k-NN conditional mutual information. Nonparametric, no bandwidth.
                Sensitive to many dependency types but slow (O(T^2) k-NN search).
+               The permutation null stops early once the p-value is decided.
 
   sigkci       Signature kernel CI for path-valued data (SDEs, diffusions).
                Captures temporal structure that pointwise tests ignore.
+
+  cmiknn-mixed-gpu  k-NN CMI for mixed discrete-continuous data, using MSinf
+               stratification so k-NN balls never cross discrete values. Use
+               when some columns are categorical and others continuous.
+
+  parcorr      CPU partial correlation (tigramite implementation). Same
+               estimator as parcorr-gpu; use when torch is unavailable.
+
+  cmiknn       CPU k-NN conditional mutual information (tigramite
+               implementation, with early stopping). Same estimator as
+               cmiknn-gpu but markedly slower.
+
+  fisherz      Gaussian Fisher-Z test (causal-learn adapter). Analytic p-value,
+               same normality assumption as parcorr-gpu.
+
+  chisq        Chi-squared test for categorical data (causal-learn adapter).
+               All columns must be discrete. Reports a p-value only.
+
+  gsquared     G-squared / likelihood-ratio test for categorical data
+               (causal-learn adapter). All columns must be discrete.
 
 When to use what
 ----------------
@@ -57,7 +78,10 @@ When to use what
   Nonlinear, high collinearity     -> kci (uses all data, most robust)
   Monotone nonlinear, fast needed  -> gcmi (analytic, near-instant)
   Stochastic processes / SDEs      -> sigkci
+  All columns categorical          -> chisq or gsquared
+  Mixed discrete and continuous    -> dfcit, then cmiknn-mixed-gpu
   Runtime-constrained              -> parcorr-gpu or gcmi
+  No GPU / torch unavailable       -> parcorr or cmiknn (CPU implementations)
 
 Key tradeoffs
 -------------
