@@ -182,8 +182,8 @@ def _compute_one_pair_partial_dcor(
 
     Removes X_j's own AR(1) contribution by OLS residualization, then
     measures nonlinear dependence via unbiased distance correlation.
-    Unlike Granger, does NOT condition on shorter lags of X_i, avoiding
-    over-suppression of true lag-k signals when the source has strong AR.
+    Does not condition on shorter lags of X_i, which avoids over-suppressing
+    true lag-k signals when the source has strong AR.
     """
     import dcor as _dcor
 
