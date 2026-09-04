@@ -125,9 +125,7 @@ class Cedar:
         Lag importance method: ``"partial_dcor"`` (default, unbiased dcor on
         X_j(t) residualised on X_j(t-1) — best lag accuracy for hub graphs),
         ``"dcor"`` (unbiased U-centered), ``"pearson"``,
-        ``"lasso"`` (LassoCV per pair, matching SyPI Mastakouri et al. 2021),
-        or ``"granger"`` (Granger-conditional parcorr — conditions on X_j(t-1)
-        and shorter lags of X_i to suppress AR-mediated lag inflation).
+        or ``"lasso"`` (LassoCV per pair, matching SyPI Mastakouri et al. 2021).
     lag_pvalue_method : str
         Lag significance testing: ``"t_test"`` (default, ~200x faster,
         no permutation), ``"circular_shift"`` (proper for AR data),
@@ -1226,7 +1224,7 @@ def run_cedar(
         Threshold for independence test (Cond2).
     lag_method : str
         Lag importance method: ``"partial_dcor"`` (default), ``"dcor"``,
-        ``"pearson"``, ``"lasso"``, or ``"granger"``.  See :class:`Cedar` for details.
+        ``"pearson"``, or ``"lasso"``.  See :class:`Cedar` for details.
     lag_alpha : float
         P-value threshold for lag significance.
     n_permutations : int
