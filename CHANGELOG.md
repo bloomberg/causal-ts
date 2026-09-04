@@ -32,6 +32,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * `causal-ts ci-test-info --test <name>` now shows only the selected test's
   summary instead of the full guide. Registered tests without a guide section
   report a clear error; the default and `--test all` output are unchanged.
+* The CI test selection guide now covers all registered tests. `parcorr`,
+  `cmiknn`, `cmiknn-mixed-gpu`, `fisherz`, `chisq` and `gsquared` had no entry,
+  so `ci-test-info --test <name>` failed for them. The `cmiknn-gpu` entry also
+  now notes that its permutation null stops early.
 * `priority=3` and `priority=4` (collider strength ordering) now raise `ValueError`
   at the entry point, instead of failing with an `AttributeError` from inside
   causal-learn after the skeleton search. They score each conflict over the full

@@ -30,7 +30,7 @@ def test_ci_test_info(options):
         ("rcot", "Fast. At T<=300, auto-averages 5 RFF draws to reduce variance."),
         (
             "cmiknn-gpu",
-            "Sensitive to many dependency types but slow (O(T^2) k-NN search).",
+            "The permutation null stops early once the p-value is decided.",
         ),
         ("sigkci", "Captures temporal structure that pointwise tests ignore."),
     ],
@@ -50,13 +50,29 @@ def test_ci_test_info_filters_summary(test_name, last_line):
     assert "Key tradeoffs" not in result.output
 
 
-@pytest.mark.parametrize("test_name", ["cmiknn", "parcorr"])
-def test_ci_test_info_missing_summary(test_name):
+def test_every_registered_ci_test_has_a_guide_section():
+    """A CI test registered without a guide section makes --test <name> fail."""
+    sections = CI_TEST_GUIDE.split("\n\n")
+    missing = [
+        name
+        for name in CI_TEST_CHOICES
+        if not any(section.startswith(f"  {name} ") for section in sections)
+    ]
+    assert missing == []
+
+
+@pytest.mark.parametrize("test_name", CI_TEST_CHOICES)
+def test_ci_test_info_selects_every_registered_test(test_name):
     result = CliRunner().invoke(main, ["ci-test-info", "--test", test_name])
 
-    assert result.exit_code == 1
-    assert f"No selection guide available for CI test '{test_name}'." in result.output
-    assert "Conditional Independence Test Selection Guide" not in result.output
+    assert result.exit_code == 0
+    headings = [
+        name
+        for name in CI_TEST_CHOICES
+        if any(line.startswith(f"  {name} ") for line in result.output.splitlines())
+    ]
+    assert headings == [test_name]
+    assert "When to use what" not in result.output
 
 
 def test_ci_test_info_invalid_choice():
