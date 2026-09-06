@@ -25,6 +25,13 @@ from causalts.plotting import (
 
 Network layout — nodes are variables, edges are contemporaneous or lagged causal links.
 
+Graphviz-family layouts (`graphviz`, `neato`, `dot`, `fdp`, `sfdp`, `twopi`, and
+`circo`) use the optional `pygraphviz` backend first and then the optional
+`pydot` backend. Both backends require a Graphviz executable (such as `neato`)
+to be installed and available on `PATH`; neither Python package is installed by
+`causalts`. If both backends are unavailable or fail, `causalts` falls back to
+a circular layout and emits a `UserWarning`.
+
 ```{eval-rst}
 .. autofunction:: causalts.plotting._core.plot_graph
 ```

@@ -23,6 +23,7 @@ Public License v3.0. Ensure proper attribution when using or modifying this code
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import warnings
 from copy import deepcopy
 from operator import sub
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -1319,8 +1320,17 @@ def compute_node_positions(
                             graphviz_layout as pydot_layout,
                         )
 
-                        pos = pydot_layout(H, prog=prog_to_use, args=args)
+                        # networkx's pydot adapter does not accept the args
+                        # parameter supported by its pygraphviz counterpart.
+                        pos = pydot_layout(H, prog=prog_to_use)
                     except Exception:
+                        warnings.warn(
+                            "Graphviz layout unavailable; falling back to "
+                            "circular layout. Install pygraphviz or pydot "
+                            "with Graphviz installed and on PATH.",
+                            UserWarning,
+                            stacklevel=2,
+                        )
                         pos = nx.circular_layout(H)
             else:
                 pos = nx.circular_layout(H)
