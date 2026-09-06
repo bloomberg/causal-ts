@@ -4,10 +4,66 @@
 """Smoke tests for plotting (non-interactive Agg backend)."""
 
 import matplotlib
+import pytest
 
 matplotlib.use("Agg")
 
 import numpy as np  # noqa: E402
+
+
+def test_graphviz_layout_uses_pydot_without_unsupported_args(monkeypatch):
+    # Regression test for https://github.com/bloomberg/causal-ts/issues/53.
+    import networkx as nx
+    import networkx.drawing.nx_agraph as nx_agraph
+    import networkx.drawing.nx_pydot as nx_pydot
+
+    from causalts.plotting._core import compute_node_positions
+
+    graph = nx.path_graph(3)
+    expected = {node: np.array([float(node), float(node) + 1]) for node in graph}
+    calls = []
+
+    def unavailable(*args, **kwargs):
+        raise ImportError("pygraphviz is not installed")
+
+    def pydot_layout(graph, prog="neato", root=None):
+        calls.append((prog, root))
+        return expected
+
+    monkeypatch.setattr(nx_agraph, "graphviz_layout", unavailable)
+    monkeypatch.setattr(nx_pydot, "graphviz_layout", pydot_layout)
+
+    positions = compute_node_positions(
+        graph,
+        layout="neato",
+        layout_kwargs={"args": "-Goverlap=false"},
+        normalize=False,
+    )
+
+    assert calls == [("neato", None)]
+    assert all(np.array_equal(positions[node], expected[node]) for node in graph)
+
+
+def test_graphviz_layout_warns_before_circular_fallback(monkeypatch):
+    # Regression test for https://github.com/bloomberg/causal-ts/issues/53.
+    import networkx as nx
+    import networkx.drawing.nx_agraph as nx_agraph
+    import networkx.drawing.nx_pydot as nx_pydot
+
+    from causalts.plotting._core import compute_node_positions
+
+    graph = nx.path_graph(3)
+
+    def unavailable(*args, **kwargs):
+        raise ImportError("Graphviz backend is unavailable")
+
+    monkeypatch.setattr(nx_agraph, "graphviz_layout", unavailable)
+    monkeypatch.setattr(nx_pydot, "graphviz_layout", unavailable)
+
+    with pytest.warns(UserWarning, match="falling back to circular layout"):
+        positions = compute_node_positions(graph, layout="neato", normalize=False)
+
+    assert set(positions) == set(graph)
 
 
 def _make_graph():
