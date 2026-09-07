@@ -43,6 +43,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   never wired to a CI test. Use `priority=1` (abstain) or `2` (keep first).
 * `detect_subsampling` raises `ValueError` on a 1-D or single-variable input, instead of
   failing inside NumPy with `LinAlgError: 0-dimensional array given`.
+* The generator in the *Unobserved Confounders (LUCID)* tutorial injected its true lag-1
+  edges after the recursion instead of inside it, so the simulated data did not match the
+  ground truth the notebook scored against.
 
 * **The GES, LGES and TGES baselines were substantially understated.** Two independent
   problems, both now fixed and covered by regression tests:
