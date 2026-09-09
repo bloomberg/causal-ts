@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+* `causalts.ci_tests.causal_learn_bridge` — registers causal-ts's GPU CI tests
+  with causal-learn's `CIT()` factory/`register_ci_test()`, so they can be
+  used directly from causal-learn's own algorithms (e.g.
+  `pc(data, indep_test="parcorr_gpu")`).
 * **LUCID** (`causalts.confounders`) — regime-adaptive deconfounding for causal discovery
   under latent confounders. `run_lucid(df, max_lag)` diagnoses whether latent confounding
   is sparse or pervasive from the residual spectrum (against a Marchenko–Pastur no-factor
