@@ -176,5 +176,50 @@ def _localize_announcement(app, pagename, templatename, context, doctree):
     )
 
 
+#: Notebooks live in the repo-root ``examples/`` directory so that relative
+#: links between them work when browsing on GitHub or opening them in Jupyter.
+#: Sphinx has a single source root (``docs/``), so anything outside it has no
+#: docname -- and a symlink is no help, because myst resolves a link target to
+#: its real path before calling ``path2doc``. Linking to a symlinked sibling
+#: therefore produced a dead link and an ``Unknown source document`` warning.
+#:
+#: Copying the notebooks into the source tree at build time puts real files at
+#: ``docs/examples/``, which gives them docnames and makes the plain relative
+#: links resolve. The copies are gitignored; ``examples/`` stays canonical.
+_NOTEBOOK_COPIES = [
+    ("examples", "examples"),  # examples/*.ipynb -> docs/examples/*.ipynb
+]
+
+
+def _sync_notebooks(app):
+    import shutil
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parent.parent
+    for src_rel, dst_rel in _NOTEBOOK_COPIES:
+        src_dir = repo_root / src_rel
+        dst_dir = Path(app.srcdir) / dst_rel
+        if not src_dir.is_dir():
+            continue
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        for src in sorted(src_dir.glob("*.ipynb")):
+            dst = dst_dir / src.name
+            # Replace a stale symlink (or an out-of-date copy) with the real file.
+            if dst.is_symlink():
+                dst.unlink()
+            if not dst.exists() or src.stat().st_mtime > dst.stat().st_mtime:
+                shutil.copy2(src, dst)
+
+    # tutorial.ipynb sits at the repo root and is referenced as ../tutorial
+    tut_src = repo_root / "tutorial.ipynb"
+    tut_dst = Path(app.srcdir) / "tutorial.ipynb"
+    if tut_src.is_file():
+        if tut_dst.is_symlink():
+            tut_dst.unlink()
+        if not tut_dst.exists() or tut_src.stat().st_mtime > tut_dst.stat().st_mtime:
+            shutil.copy2(tut_src, tut_dst)
+
+
 def setup(app):
+    _sync_notebooks(app)
     app.connect("html-page-context", _localize_announcement)
