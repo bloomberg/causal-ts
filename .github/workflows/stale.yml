@@ -14,11 +14,15 @@ permissions: read-all
 jobs:
   mark-stale:
     # Call reusable workflow file
-    uses: bloomberg/.github/.github/workflows/_stale.yml@main
+    uses: bloomberg/.github/.github/workflows/_stale.yml@6e6478c5f719f8ac2251558635f700dd5c0f128e # main
     permissions:
       contents: read
       issues: write
       pull-requests: write
+    # _stale.yml needs secrets.BLOOMBERG_OSS_USER_TOKEN_READ for actions/stale's
+    # repo-token, but its workflow_call trigger declares no `secrets:` schema, so
+    # there is no way to pass it explicitly -- inherit is the only option here.
+    secrets: inherit # zizmor: ignore[secrets-inherit]
     with:
       days-until-stale: 60
       days-until-close: 7
