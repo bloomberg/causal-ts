@@ -43,7 +43,7 @@ Constraint-based · PCMCI+ skeleton
 
 Pairwise · Scalable
 
-{bdg-primary-line}`O(d²)`
+{bdg-primary-line}`pair-wise`
 :::
 
 :::{grid-item-card}
