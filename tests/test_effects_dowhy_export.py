@@ -401,26 +401,13 @@ def test_the_helpers_are_exported_at_the_top_level():
         assert hasattr(e, name), f"{name} not exported from causalts.effects"
 
 
-def test_renamed_dowhy_apis_are_bound_by_capability_not_version():
-    """DoWhy renamed two APIs in 0.13; both names must resolve.
+def test_adjustment_set_accessor_handles_both_dowhy_spellings():
+    """`get_adjustment_set` (0.13+) vs `get_backdoor_variables` (all versions).
 
-    0.11/0.12 export `construct_backdoor_estimand` and expose
-    `get_backdoor_variables`; 0.13+ renamed these to
-    `construct_adjustment_estimand` and `get_adjustment_set`. The bridge binds
-    whichever is present rather than comparing version strings -- forks, conda
-    rebuilds and `0.13.0.dev` builds all report versions that do not predict
-    which symbol exists.
+    Pure dispatch logic, so it runs without DoWhy installed -- which is the
+    point: the shim must not itself require the thing it is shimming.
     """
-    from causalts.effects.graph_bridge import (
-        _adjustment_set_of,
-        _construct_adjustment_estimand,
-    )
-
-    fn = _construct_adjustment_estimand()
-    assert fn.__name__ in (
-        "construct_adjustment_estimand",
-        "construct_backdoor_estimand",
-    )
+    from causalts.effects.graph_bridge import _adjustment_set_of
 
     class OldEstimand:  # pre-0.13 surface
         def get_backdoor_variables(self):
@@ -435,6 +422,23 @@ def test_renamed_dowhy_apis_are_bound_by_capability_not_version():
 
     assert _adjustment_set_of(OldEstimand()) == ["V0_lag1"]
     assert _adjustment_set_of(NewEstimand()) == ["V0_lag2"]
+
+
+def test_construct_adjustment_estimand_resolves_under_either_name():
+    """DoWhy 0.13 renamed `construct_backdoor_estimand`; both must resolve.
+
+    Bound by capability rather than version: forks, conda rebuilds and
+    `0.13.0.dev` builds all report versions that do not predict which symbol
+    is present.
+    """
+    pytest.importorskip("dowhy")
+    from causalts.effects.graph_bridge import _construct_adjustment_estimand
+
+    fn = _construct_adjustment_estimand()
+    assert fn.__name__ in (
+        "construct_adjustment_estimand",
+        "construct_backdoor_estimand",
+    )
 
 
 def test_identification_guard_names_the_broken_pair_not_just_dowhy(monkeypatch):
