@@ -175,6 +175,23 @@ def _localize_announcement(app, pagename, templatename, context, doctree):
     )
 
 
+def _fix_edit_page_source(app, pagename, templatename, context, doctree):
+    """Point "Edit on GitHub" at the real notebook, not its build-time copy.
+
+    ``examples/*.ipynb`` and ``tutorial.ipynb`` are synced into the source
+    tree from the repo root (see ``_sync_notebooks`` below) and are
+    gitignored there. The theme's default edit-page template joins
+    ``doc_path`` (``"docs/"``) with the page name, which for these pages
+    produces a nonexistent ``docs/examples/*.ipynb`` / ``docs/tutorial.ipynb``
+    URL that 404s. Their real home is the repo root, so clear ``doc_path``
+    for them; every other page keeps the default.
+    """
+    if context.get("page_source_suffix") != ".ipynb":
+        return
+    if pagename == "tutorial" or pagename.startswith("examples/"):
+        context["doc_path"] = ""
+
+
 #: Notebooks live in the repo-root ``examples/`` directory so that relative
 #: links between them work when browsing on GitHub or opening them in Jupyter.
 #: Sphinx has a single source root (``docs/``), so anything outside it has no
@@ -222,3 +239,4 @@ def _sync_notebooks(app):
 def setup(app):
     _sync_notebooks(app)
     app.connect("html-page-context", _localize_announcement)
+    app.connect("html-page-context", _fix_edit_page_source)
