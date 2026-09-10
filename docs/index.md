@@ -139,8 +139,16 @@ Estimate causal effects, fit SCMs, run counterfactuals, and attribute anomalies 
 
 ::::
 
-::::{grid} 2
+::::{grid} 3
 :gutter: 3
+
+:::{grid-item-card} {fas}`eye-slash;1.1em;sd-text-primary` &nbsp; Latent Confounders (LUCID)
+:link: api/confounders
+:link-type: doc
+:shadow: sm
+
+Diagnose whether latent confounding is sparse or pervasive from the residual spectrum, then apply the matching correction to any discovered graph.
+:::
 
 :::{grid-item-card} {fas}`table-cells-large;1.1em;sd-text-primary` &nbsp; Missing & Mixed Data
 :link: examples/index

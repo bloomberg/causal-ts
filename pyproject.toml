@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "causalts"
-version = "0.26.0"
+version = "0.27.0"
 description = "Causal Discovery for Time Series"
 readme = "README.md"
 license = "GPL-3.0-or-later"

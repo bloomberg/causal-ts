@@ -9,18 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.27.0]
+
 ### Added
 
-* `causalts.ci_tests.causal_learn_bridge` — registers causal-ts's GPU CI tests
-  with causal-learn's `CIT()` factory/`register_ci_test()`, so they can be
-  used directly from causal-learn's own algorithms (e.g.
-  `pc(data, indep_test="parcorr_gpu")`).
-* **DoWhy effects bridge.** `validate_transition_graph()` and `history_sufficiency()`
-  validate a lag-embedded graph (replacing the deprecated `falsify_graph()`);
-  `refute_effect()` and `sensitivity_analysis()` stress-test an estimate;
-  `build_identification_artifacts()` / `build_transition_artifacts()` hand back a graph
-  and the frame it belongs with, for driving DoWhy directly. All are on the result
-  objects, and `causal-ts dowhy validate --test` exposes the validators from the CLI.
 * **LUCID** (`causalts.confounders`) — regime-adaptive deconfounding for causal discovery
   under latent confounders. `run_lucid(df, max_lag)` diagnoses whether latent confounding
   is sparse or pervasive from the residual spectrum (against a Marchenko–Pastur no-factor
@@ -30,6 +22,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   with any algorithm, without re-running the skeleton search. See the new
   [Unobserved Confounders (LUCID)](examples/latent_confounder_detection) tutorial and the
   `causalts.confounders` API page.
+* **DoWhy effects bridge.** `validate_transition_graph()` and `history_sufficiency()`
+  validate a lag-embedded graph (replacing the deprecated `falsify_graph()`);
+  `refute_effect()` and `sensitivity_analysis()` stress-test an estimate;
+  `build_identification_artifacts()` / `build_transition_artifacts()` hand back a graph
+  and the frame it belongs with, for driving DoWhy directly. All are on the result
+  objects, and `causal-ts dowhy validate --test` exposes the validators from the CLI.
 * `corrplot(..., diag="glyph")` — renders the diagonal as an ordinary cell,
   using the same `method` and colormap as the rest of the matrix. Intended for
   *directed* matrices (a cause→effect adjacency or an edge-stability matrix),
@@ -43,6 +41,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   causal effect — a lagged treatment had no parents, so no backdoor path was found. The
   graph is now unrolled and the adjustment set verified against the fitted estimator.
   ATEs change.
+* **The GES, LGES and TGES baselines were substantially understated.** `ges_discovery`
+  read causal-learn's adjacency matrix with the endpoints transposed, and the vendored
+  GES search behind `lges_discovery` / `tges_discovery` had a broken CPDAG construction
+  that stopped LGES far short of convergence. Both are fixed and now apply temporal
+  background knowledge; F1 on `baseline_comparison` moves from 0.125–0.522 to 0.636–0.949.
+  Any prior comparison against these baselines understates them.
 * `refute_effect()` no longer reports an uncomputable refutation as a failure, and
   `refute_structure()` returns `p_value` and `adjusted_p_value` separately. DoWhy's
   renamed identification APIs are bound by capability, not version.
@@ -63,29 +67,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * The generator in the *Unobserved Confounders (LUCID)* tutorial injected its true lag-1
   edges after the recursion instead of inside it, so the simulated data did not match the
   ground truth the notebook scored against.
-
-* **The GES, LGES and TGES baselines were substantially understated.** Two independent
-  problems, both now fixed and covered by regression tests:
-  * `ges_discovery` read causal-learn's adjacency matrix with the endpoints transposed,
-    so every directed contemporaneous edge came back reversed and every directed lagged
-    edge was silently dropped — only undirected edges survived.
-  * The vendored GES search behind `lges_discovery` / `tges_discovery`
-    (`causalts/lges.py`) is a hand-extracted condensation of upstream `ges`, and the
-    extraction broke the CPDAG construction and the Insert, Delete and Turn operators.
-    The forward phase stopped far short of the optimum, so LGES never converged — its
-    F1 sat at 0.35–0.52 on `ex2` no matter how much data it was given.
-
-  All three now also apply temporal background knowledge (a variable can only cause
-  another at an equal or later time step), which the lag-embedded search previously
-  ignored. On the `baseline_comparison` datasets, F1 moves from 0.125/0.154/0.522/0.333
-  (GES) and 0.400/0.417/0.526/0.333 (LGES/TGES) to 0.636/0.917/0.949/0.435 for all
-  three; LGES now reaches F1 1.000 on `ex2` by T=5,000. Every correction was verified
-  against upstream `ges` 1.1.1 — no defect originated with the upstream authors — and
-  the corrected search returns CPDAGs identical to upstream's on random DAGs while
-  running faster than it. `ges_discovery` gains an `engine=` argument selecting the
-  vendored search (default) or causal-learn.
-
-  Any prior comparison against these baselines understates them.
 * `corrplot` dropped the right and bottom edges of its grid border. All axes
   spines are hidden, and the border was drawn with `axhline`/`axvline` at
   exactly the axis limits, so half of each boundary line fell outside the clip
@@ -182,7 +163,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * Synthetic data generators (nonstationary, mixed discrete-continuous, Lorenz-96)
 
 
-[unreleased]: https://github.com/bloomberg/causal-ts/compare/v0.26.0...HEAD
+[unreleased]: https://github.com/bloomberg/causal-ts/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/bloomberg/causal-ts/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/bloomberg/causal-ts/compare/v0.25.2...v0.26.0
 [0.25.2]: https://github.com/bloomberg/causal-ts/compare/v0.25.1...v0.25.2
 
