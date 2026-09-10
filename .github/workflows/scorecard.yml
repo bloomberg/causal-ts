@@ -24,6 +24,10 @@ jobs:
     permissions:
       id-token: write
       security-events: write
+      contents: read
+      issues: read
+      pull-requests: read
+      checks: read
     secrets: inherit
     with:
       # Publish results of Scorecard analysis
