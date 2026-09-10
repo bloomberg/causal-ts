@@ -160,7 +160,7 @@ Notebooks reproducing experiments from the GRACE paper (preprint forthcoming) wi
 
 <div class="ct-gallery">
 
-<a href="effect_estimation.html" class="ct-gallery-item" data-tooltip="End-to-end DoWhy integration: estimate causal effects, fit SCMs, run counterfactuals, root cause analysis, and graph falsification.">
+<a href="effect_estimation.html" class="ct-gallery-item" data-tooltip="End-to-end DoWhy integration: estimate causal effects, fit SCMs, run counterfactuals, root cause analysis, transition-structure validation, and refutation.">
   <img src="../_static/img/thumbnails/effect_estimation_thumb.png" alt="Effect Estimation" />
   <span class="ct-gallery-title">Effect Estimation</span>
 </a>
