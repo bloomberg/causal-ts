@@ -86,6 +86,30 @@ class CausalResult:
     def falsify(self, **kwargs):
         return self._bridge().falsify(**kwargs)
 
+    def validate_transition_graph(self, **kwargs):
+        return self._bridge().validate_transition_graph(**kwargs)
+
+    def history_sufficiency(self, extra_lags=2, **kwargs):
+        return self._bridge().history_sufficiency(extra_lags=extra_lags, **kwargs)
+
+    def to_dowhy_transition(self, **kwargs):
+        return self._bridge().to_dowhy_transition(**kwargs)
+
+    def to_dowhy_identification(self, treatment, outcome, treatment_lag=1, **kwargs):
+        return self._bridge().to_dowhy_identification(
+            treatment, outcome, treatment_lag=treatment_lag, **kwargs
+        )
+
+    def refute_effect(self, treatment, outcome, treatment_lag=1, **kwargs):
+        return self._bridge().refute_effect(
+            treatment, outcome, treatment_lag=treatment_lag, **kwargs
+        )
+
+    def sensitivity_analysis(self, treatment, outcome, treatment_lag=1, **kwargs):
+        return self._bridge().sensitivity_analysis(
+            treatment, outcome, treatment_lag=treatment_lag, **kwargs
+        )
+
     def refute_structure(self, **kwargs):
         return self._bridge().refute_structure(**kwargs)
 

@@ -133,3 +133,60 @@ def test_evaluate(tmp_path):
     )
     assert result.exit_code == 0
     assert "F1" in result.output or "f1" in result.output.lower()
+
+
+def _validate_fixture(tmp_path, max_lag):
+    """A small AR chain plus a graph with the requested lag depth."""
+    rng = np.random.default_rng(0)
+    n = 600
+    x = np.zeros((n, 3))
+    for t in range(1, n):
+        x[t, 0] = 0.5 * x[t - 1, 0] + rng.standard_normal()
+        x[t, 1] = 0.6 * x[t - 1, 0] + rng.standard_normal()
+        x[t, 2] = 0.4 * x[t - 1, 1] + 0.7 * x[t - 1, 0] + rng.standard_normal()
+    csv_path = tmp_path / "data.csv"
+    pd.DataFrame(x, columns=["V0", "V1", "V2"]).to_csv(csv_path, index=False)
+
+    g = np.zeros((3, 3, max_lag + 1), dtype=int)
+    if max_lag >= 1:
+        g[0, 0, 1] = g[0, 1, 1] = g[1, 2, 1] = g[0, 2, 1] = 1
+    graph_path = tmp_path / "graph.npy"
+    np.save(graph_path, g)
+    return graph_path, csv_path
+
+
+def test_dowhy_validate_transition(tmp_path):
+    graph_path, csv_path = _validate_fixture(tmp_path, max_lag=1)
+    result = CliRunner().invoke(
+        main,
+        [
+            "dowhy",
+            "validate",
+            str(graph_path),
+            "--data",
+            str(csv_path),
+            "--test",
+            "transition",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Transition-Structure Validation" in result.output
+
+
+def test_dowhy_validate_history_skips_a_contemporaneous_only_graph(tmp_path):
+    """max_lag=0 has no history window; it must skip, not abort --test all."""
+    graph_path, csv_path = _validate_fixture(tmp_path, max_lag=0)
+    result = CliRunner().invoke(
+        main,
+        [
+            "dowhy",
+            "validate",
+            str(graph_path),
+            "--data",
+            str(csv_path),
+            "--test",
+            "history",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "contemporaneous-only" in result.output

@@ -148,6 +148,97 @@ class WrappedGraph:
 
         return falsify_graph(self.cg_tig, self._df, var_names=self._var_names, **kwargs)
 
+    def validate_transition_graph(self, **kwargs):
+        """Test the local Markov condition at every current-time node.
+
+        The successor to :meth:`falsify`, which mistakes the lag embedding for
+        a joint DAG. See validate.validate_transition_graph for details.
+        """
+        from .validate import validate_transition_graph
+
+        return validate_transition_graph(
+            self.cg_tig, self._df, var_names=self._var_names, **kwargs
+        )
+
+    def history_sufficiency(self, extra_lags: int = 2, **kwargs):
+        """Test whether history older than the graph's max_lag still informs.
+
+        See validate.history_sufficiency for details.
+        """
+        from .validate import history_sufficiency
+
+        return history_sufficiency(
+            self._df,
+            max_lag=self.cg_tig.shape[2] - 1,
+            extra_lags=extra_lags,
+            var_names=self._var_names,
+            **kwargs,
+        )
+
+    def to_dowhy_transition(self, **kwargs):
+        """Export the one-step transition graph and its lag-embedded frame.
+
+        See effects.export.build_transition_artifacts for details.
+        """
+        from .export import build_transition_artifacts
+
+        return build_transition_artifacts(
+            self.cg_tig, self._df, var_names=self._var_names, **kwargs
+        )
+
+    def to_dowhy_identification(self, treatment, outcome, treatment_lag=1, **kwargs):
+        """Export an unrolled graph and frame for one effect query.
+
+        See effects.export.build_identification_artifacts for details.
+        """
+        from .export import build_identification_artifacts
+
+        return build_identification_artifacts(
+            self.cg_tig,
+            self._df,
+            treatment=treatment,
+            outcome=outcome,
+            treatment_lag=treatment_lag,
+            var_names=self._var_names,
+            **kwargs,
+        )
+
+    def refute_effect(self, treatment, outcome, treatment_lag=1, **kwargs) -> dict:
+        """Stress-test an estimated effect with one of DoWhy's refuters.
+
+        See validate.refute_effect for details.
+        """
+        from .validate import refute_effect
+
+        return refute_effect(
+            self.cg_tig,
+            self._df,
+            treatment=treatment,
+            outcome=outcome,
+            treatment_lag=treatment_lag,
+            var_names=self._var_names,
+            **kwargs,
+        )
+
+    def sensitivity_analysis(
+        self, treatment, outcome, treatment_lag=1, **kwargs
+    ) -> dict:
+        """How strong would an omitted confounder have to be to overturn it?
+
+        See validate.sensitivity_analysis for details.
+        """
+        from .validate import sensitivity_analysis
+
+        return sensitivity_analysis(
+            self.cg_tig,
+            self._df,
+            treatment=treatment,
+            outcome=outcome,
+            treatment_lag=treatment_lag,
+            var_names=self._var_names,
+            **kwargs,
+        )
+
     def refute_structure(self, **kwargs) -> pd.DataFrame:
         """Test structural assumptions (edge deps + local Markov conditions).
 
@@ -376,8 +467,12 @@ class WrappedGraph:
     def summary(self, mechanism_type="linear", top_k=5):
         """Print a one-page diagnostic report of the discovered graph.
 
-        Runs falsification, arrow strength for the top-connected nodes,
-        and basic graph statistics. Requires DoWhy.
+        Runs transition-structure validation, arrow strength for the
+        top-connected nodes, and basic graph statistics. Requires DoWhy.
+
+        The returned dict carries ``"transition_validation"``; the old
+        ``"falsification"`` key is gone, along with the joint-DAG reading it
+        came from.
 
         Parameters
         ----------
@@ -420,19 +515,25 @@ class WrappedGraph:
 
         result = {"n_edges": n_edges, "n_self": n_self, "n_cross": n_cross}
 
-        # Falsification
+        # Transition-structure validation. Deliberately not falsify(), which
+        # reads the lag embedding as a joint DAG and so rejects any
+        # autoregressive series regardless of the graph.
         try:
-            fals = self.falsify()
-            print("\nGraph falsification:")
-            print(f"  Falsifiable: {fals['falsifiable']}")
-            print(f"  Falsified:   {fals['falsified']}")
-            if fals["falsifiable"] and not fals["falsified"]:
-                print("  -> Graph is consistent with data.")
-            elif fals["falsified"]:
-                print("  -> WARNING: graph may contain errors.")
-            result["falsification"] = fals
+            validation = self.validate_transition_graph()
+            print("\nTransition-structure validation:")
+            if validation.rejected:
+                print(
+                    "  -> WARNING: local Markov condition violated at "
+                    + ", ".join(validation.rejected_nodes)
+                )
+            else:
+                print(
+                    f"  -> No violation in {validation.n_tests} node tests "
+                    f"(alpha={validation.significance_level})."
+                )
+            result["transition_validation"] = validation
         except Exception as e:
-            print(f"\nGraph falsification: skipped ({e})")
+            print(f"\nTransition-structure validation: skipped ({e})")
 
         # Top edges by arrow strength (pick the node with most parents)
         try:

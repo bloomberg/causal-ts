@@ -33,8 +33,22 @@ Typical workflow::
 
 from ._compat import dowhy_available, require_dowhy, require_gcm
 from .effect import estimate_effect, print_effect_summary
+from .export import (
+    DoWhyArtifacts,
+    build_identification_artifacts,
+    build_transition_artifacts,
+)
 from .forecast import CausalForecaster, get_causal_parents
-from .graph_bridge import graph_to_networkx, make_lagged_df, networkx_to_graph
+from .graph_bridge import (
+    force_parent_adjustment_set,
+    graph_to_networkx,
+    make_lagged_df,
+    networkx_to_graph,
+    parent_adjustment_set,
+    required_lag_depth,
+    treatment_parents,
+    verify_parent_adjustment_set,
+)
 from .influence import (
     arrow_strength,
     causal_influence,
@@ -45,19 +59,45 @@ from .query import interventional_query, observational_query, query_summary
 from .root_cause import attribute_anomaly
 from .scm import counterfactual, fit_scm
 from .tigramite_effects import TigramiteEffects, pathwise_effects, tigramite_available
-from .validate import evaluate_model, falsify_graph, refute_structure
+from .validate import (
+    HistorySufficiencyResult,
+    TransitionValidationResult,
+    evaluate_model,
+    falsify_graph,
+    history_sufficiency,
+    linear_ci_test,
+    refute_effect,
+    refute_structure,
+    sensitivity_analysis,
+    validate_transition_graph,
+)
 from .wrap import WrappedGraph, wrap_graph
 
 __all__ = [
     "graph_to_networkx",
     "make_lagged_df",
     "networkx_to_graph",
+    "parent_adjustment_set",
+    "treatment_parents",
+    "required_lag_depth",
+    "force_parent_adjustment_set",
+    "verify_parent_adjustment_set",
+    "DoWhyArtifacts",
+    "build_identification_artifacts",
+    "build_transition_artifacts",
     "fit_scm",
     "counterfactual",
     "estimate_effect",
     "print_effect_summary",
     "attribute_anomaly",
     "falsify_graph",
+    "validate_transition_graph",
+    "TransitionValidationResult",
+    "history_sufficiency",
+    "HistorySufficiencyResult",
+    "linear_ci_test",
+    "refute_effect",
+    "sensitivity_analysis",
     "refute_structure",
     "evaluate_model",
     "arrow_strength",
