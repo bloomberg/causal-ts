@@ -70,7 +70,7 @@ Signature kernel on path space. Built for SDEs and diffusions.
 
 **`parcorr-gpu`** or **`gcmi`**
 
-Fastest options. `parcorr-gpu` is instant (analytic); `gcmi` adds rank-normalisation overhead but handles mild nonlinearity.
+Fastest option. `parcorr-gpu` is instant (analytic); `gcmi` adds rank-normalisation overhead but handles mild nonlinearity.
 
 {bdg-success}`fast`
 :::
