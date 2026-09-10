@@ -88,7 +88,7 @@ causal-ts discover DATA.csv [OPTIONS]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--lag-method` | `dcor` | Lag importance metric: `dcor` (default), `dcor_biased`, `pearson`. `--lag-sel-algo` also accepted for legacy. |
+| `--lag-method` | `partial_dcor` | Lag importance metric: `partial_dcor`, `dcor`, `dcor_biased`, `pearson`, `lasso`. `--lag-sel-algo` also accepted for legacy. |
 | `--lag-pvalue-method` | `t_test` | Lag significance: `t_test` (~200× faster) or `circular_shift` (permutation) |
 | `--lag-alpha FLOAT` | `0.05` | P-value threshold for lag significance |
 | `--alpha-cond1 FLOAT` | `0.05` | Significance threshold for dependence test (Condition 1). `--p-cond1` also accepted. |
@@ -98,8 +98,8 @@ causal-ts discover DATA.csv [OPTIONS]
 | `--multi-lag / --no-multi-lag` | on | Test all significant lags per pair (vs only the top lag) |
 | `--multi-lag-keep` | `first` | `first` (stop at first accepted lag) or `all` (max recall) |
 | `--target-var TEXT` | — | Discover causes of one variable only — O(d) tests instead of O(d²) |
+| `--include-lag0` | off | Include contemporaneous (lag-0) effects |
 | `--no-prune` | off | Skip MCI pruning pass after discovery |
-| `--impute` | — | Missing-value strategy: `pairwise_complete` (default) or `var_em` |
 | `--include-autoreg / --no-autoreg` | on | Add autoregressive self-loops `Xi(t-k)→Xi(t)` for the detected AR order of each variable |
 | `--assume-ar1` | off | Skip AR order estimation; use standard AR(1) Cond2 for all variables (backward-compatible with original SyPI) |
 | `--include-c / --no-c` | on | Append a nonstationarity time-index variable C — forces `include_lag0=True` so C(t) → X(t) edges are detectable |
@@ -230,6 +230,25 @@ causal-ts evaluate ground_truth.npy discovered.npy --var-names X0,X1,X2,X3
 
 ---
 
+## `deconfound`
+
+Apply LUCID latent-confounder corrections to an already-discovered graph.
+
+```bash
+causal-ts deconfound GRAPH --data data.csv
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--data PATH` | *required* | Data file the graph was discovered from |
+| `--strategy` | `adaptive` | `adaptive` (LUCID: infers regime, applies matching correction), or the fixed comparators `tetrad` / `pds` |
+| `--threshold FLOAT` | `0.25` | Tetrad factor-consistency threshold (`--strategy tetrad` only) |
+| `--alpha FLOAT` | `1e-10` | Significance level for the PDS filter (`--strategy pds` only) |
+| `--var-names` | — | Comma-separated variable names |
+| `--json` | off | Echo the run summary as JSON to stdout |
+
+---
+
 ## `ci-test-info`
 
 Print a selection guide for CI tests with indicative performance notes.
@@ -288,7 +307,7 @@ skill can be added as a Claude Code plugin from a checkout.
 
 ## `dowhy` — Effect Estimation
 
-Requires `pip install causalts[dowhy]`. All subcommands take a saved `graph.npy` and a CSV data file.
+Requires `pip install causalts[dowhy]`. Every subcommand takes a saved `graph.npy`; most also take a CSV via `--data`, except `drift`, which compares two periods with `--data-old` / `--data-new`.
 
 ### `dowhy effect`
 
@@ -321,26 +340,40 @@ causal-ts dowhy root-cause GRAPH --data data.csv --target X2
 
 ### `dowhy validate`
 
-Falsify the graph structure against data using DoWhy's falsification tests.
+Validate the graph structure against data — no ground truth needed.
 
 ```bash
 causal-ts dowhy validate GRAPH --data data.csv
 ```
 
+`--test` selects what runs. The default `all` covers:
+
+| value | question |
+|---|---|
+| `transition` | Do the asserted parent sets hold at each current-time node? |
+| `history` | Is `max_lag` deep enough, or does older history still inform? |
+| `refute` | Edge dependencies plus local Markov conditions, via DoWhy's GCM. |
+| `evaluate` | Mechanism fit, invertibility and KL divergence. |
+
+`falsify` is available but **deprecated** and excluded from `all`: it treats the
+lag embedding as a joint DAG, where every lagged node is a root by construction,
+so DoWhy's unconditional root tests reject any autoregressive series regardless
+of whether the graph is right.
+
 ### `dowhy strength`
 
-Compute arrow strength and causal influence for each edge.
+Compute arrow strength and parent relevance for one target's incoming arrows.
 
 ```bash
-causal-ts dowhy strength GRAPH --data data.csv
+causal-ts dowhy strength GRAPH --data data.csv --target Mek
 ```
 
 ### `dowhy drift`
 
-Detect distribution change / mechanism drift over time.
+Attribute a distribution shift in one target between two periods.
 
 ```bash
-causal-ts dowhy drift GRAPH --data data.csv
+causal-ts dowhy drift GRAPH --data-old before.csv --data-new after.csv --target Mek
 ```
 
 ---

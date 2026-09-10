@@ -15,6 +15,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   with causal-learn's `CIT()` factory/`register_ci_test()`, so they can be
   used directly from causal-learn's own algorithms (e.g.
   `pc(data, indep_test="parcorr_gpu")`).
+* **DoWhy effects bridge.** `validate_transition_graph()` and `history_sufficiency()`
+  validate a lag-embedded graph (replacing the deprecated `falsify_graph()`);
+  `refute_effect()` and `sensitivity_analysis()` stress-test an estimate;
+  `build_identification_artifacts()` / `build_transition_artifacts()` hand back a graph
+  and the frame it belongs with, for driving DoWhy directly. All are on the result
+  objects, and `causal-ts dowhy validate --test` exposes the validators from the CLI.
 * **LUCID** (`causalts.confounders`) — regime-adaptive deconfounding for causal discovery
   under latent confounders. `run_lucid(df, max_lag)` diagnoses whether latent confounding
   is sparse or pervasive from the residual spectrum (against a Marchenko–Pastur no-factor
@@ -33,6 +39,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* **Breaking.** `estimate_effect()` reported an unadjusted regression as an identified
+  causal effect — a lagged treatment had no parents, so no backdoor path was found. The
+  graph is now unrolled and the adjustment set verified against the fitted estimator.
+  ATEs change.
+* `refute_effect()` no longer reports an uncomputable refutation as a failure, and
+  `refute_structure()` returns `p_value` and `adjusted_p_value` separately. DoWhy's
+  renamed identification APIs are bound by capability, not version.
 * `causal-ts ci-test-info --test <name>` now shows only the selected test's
   summary instead of the full guide. Registered tests without a guide section
   report a clear error; the default and `--test all` output are unchanged.

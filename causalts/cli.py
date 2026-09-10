@@ -1667,10 +1667,16 @@ def dowhy_root_cause(
 @click.option(
     "--test",
     "test_type",
-    type=click.Choice(["falsify", "refute", "evaluate", "all"]),
+    type=click.Choice(
+        ["transition", "history", "refute", "evaluate", "all", "falsify"]
+    ),
     default="all",
     show_default=True,
-    help="Validation test to run.",
+    help=(
+        "Validation test to run. 'all' runs everything except the deprecated "
+        "'falsify', which reads the lag embedding as a joint DAG and rejects "
+        "any autoregressive series regardless of the graph."
+    ),
 )
 @click.option(
     "--mechanism",
@@ -1689,7 +1695,9 @@ def dowhy_validate(ctx, graph_path, data_path, test_type, mechanism_type):
         from .effects.validate import (
             evaluate_model,
             falsify_graph,
+            history_sufficiency,
             refute_structure,
+            validate_transition_graph,
         )
     except ImportError as e:
         raise click.ClickException(str(e))
@@ -1697,8 +1705,32 @@ def dowhy_validate(ctx, graph_path, data_path, test_type, mechanism_type):
     graph = np.load(graph_path)
     data = pd.read_csv(data_path)
 
-    if test_type in ("falsify", "all"):
-        click.echo("\n--- Graph Falsification ---")
+    if test_type in ("transition", "all"):
+        click.echo("\n--- Transition-Structure Validation ---")
+        result = validate_transition_graph(graph, data)
+        click.echo(result.to_frame().to_string(index=False))
+        if result.rejected:
+            click.echo(
+                "Local Markov condition violated at: "
+                + ", ".join(result.rejected_nodes)
+            )
+        else:
+            click.echo(f"No violation in {result.n_tests} node tests.")
+
+    if test_type in ("history", "all"):
+        click.echo("\n--- History Sufficiency ---")
+        max_lag = graph.shape[2] - 1
+        if max_lag < 1:
+            # A contemporaneous-only graph has no history window to check. Under
+            # --test all this must not abort the remaining tests.
+            click.echo("Skipped: the graph is contemporaneous-only (max_lag=0).")
+        else:
+            result = history_sufficiency(data, max_lag=max_lag)
+            click.echo(result.to_frame().to_string(index=False))
+            click.echo(repr(result))
+
+    if test_type == "falsify":
+        click.echo("\n--- Graph Falsification (deprecated) ---")
         result = falsify_graph(graph, data)
         click.echo(f"Falsifiable: {result['falsifiable']}")
         click.echo(f"Falsified:   {result['falsified']}")
