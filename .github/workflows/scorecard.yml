@@ -20,7 +20,7 @@ permissions: read-all
 jobs:
   run-scorecard:
     # Call reusable workflow file
-    uses: bloomberg/.github/.github/workflows/_scorecard.yml@main
+    uses: bloomberg/.github/.github/workflows/_scorecard.yml@6e6478c5f719f8ac2251558635f700dd5c0f128e # main
     permissions:
       id-token: write
       security-events: write
@@ -28,7 +28,6 @@ jobs:
       issues: read
       pull-requests: read
       checks: read
-    secrets: inherit
     with:
       # Publish results of Scorecard analysis
       publish-results: true
