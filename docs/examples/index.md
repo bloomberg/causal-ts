@@ -13,6 +13,11 @@ Hands-on notebooks covering algorithms, CI tests, and the full discovery-to-esti
   <span class="ct-gallery-title">Beginner's Guide</span>
 </a>
 
+<a href="pc_step_by_step.html" class="ct-gallery-item" data-tooltip="Constraint-based (PC-style) discovery walked through one step at a time: skeleton search with CI tests, sepsets, collider detection, and Meek-rule orientation, showing the graph after each step.">
+  <img src="../_static/img/thumbnails/pc_step_by_step_thumb.png" alt="PC Step by Step" />
+  <span class="ct-gallery-title">Constraint-Based Discovery, Step by Step</span>
+</a>
+
 <a href="score_based_step_by_step.html" class="ct-gallery-item" data-tooltip="How score-based discovery actually works: a greedy BIC search run by hand on a four-variable collider, printing every candidate edge and its score change at every step — why the complexity penalty is the whole game, how one edge can make another worthless or more valuable, what Markov equivalence leaves undecided, and a head-to-head against PC.">
   <img src="../_static/img/thumbnails/score_based_step_by_step_thumb.png" alt="Score-Based Discovery Step by Step" />
   <span class="ct-gallery-title">Score-Based, Step by Step</span>
@@ -236,6 +241,7 @@ Notebooks reproducing experiments from the GRACE paper (preprint forthcoming) wi
 :caption: Tutorials
 
 beginners_guide
+pc_step_by_step
 score_based_step_by_step
 agentic_discovery
 ../tutorial
