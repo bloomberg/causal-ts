@@ -168,6 +168,200 @@ def test_result_objects_expose_both():
     assert wrapped.sensitivity_analysis("V1", "V2")["simulation_method"] == "e-value"
 
 
+def test_sensitivity_analysis_reports_a_clean_run_as_such():
+    """`reason` is None and `stats` is populated when nothing is wrong."""
+    g, df = _confounded()
+    s = sensitivity_analysis(g, df, "V1", "V2", 1)
+    assert s["reason"] is None
+    assert s["summary"] is not None
+    assert s["stats"]["evalue_estimate"] > 1.0
+
+
+# ------------------------------------- sensitivity analysis, when it cannot run
+#
+# Every other `sensitivity_analysis` test here runs on a fixture with a
+# non-empty adjustment set. The empty set is the untested complement.
+
+
+def _no_confounder():
+    """V0(t-1) -> V1(t), nothing else: the treatment has no parents.
+
+    So the adjustment set is empty, which is ordinary on a correct graph.
+    """
+    rng = np.random.default_rng(0)
+    n = 2000
+    e = rng.normal(size=(n, 2))
+    x = np.zeros((n, 2))
+    for t in range(1, n):
+        x[t, 0] = e[t, 0]
+        x[t, 1] = 0.5 * x[t - 1, 0] + e[t, 1]
+    g = np.zeros((2, 2, 2), dtype=np.int8)
+    g[0, 1, 1] = 1
+    return g, pd.DataFrame(x, columns=["V0", "V1"])
+
+
+def test_empty_adjustment_set_keeps_the_evalue_instead_of_raising():
+    """The analysis succeeds; only DoWhy's report cannot be rendered.
+
+    `EValueSensitivityAnalyzer.__str__` does `.iloc[0]` on a benchmarking frame
+    that is empty with no measured confounders to drop. The e-value is well
+    defined here and must survive.
+    """
+    from causalts.effects.effect import _identify_and_estimate
+
+    g, df = _no_confounder()
+    _, _, est, _ = _identify_and_estimate(
+        g, df, "V0", "V1", 1, confidence_intervals=False
+    )
+    assert est.estimator._target_estimand.get_adjustment_set() == [], (
+        "fixture no longer has an empty adjustment set, so it no longer "
+        "exercises the bug"
+    )
+
+    s = sensitivity_analysis(g, df, "V0", "V1", 1)
+    assert s["summary"] is None
+    assert s["reason"] is not None and "adjustment set" in s["reason"]
+    # The point of the fix: the number was computed, so it must be returned.
+    assert s["stats"]["evalue_estimate"] > 1.0
+    assert s["details"] is not None
+    assert abs(s["estimated_effect"] - 0.5) < 0.05
+
+
+def test_no_directed_path_is_reported_not_raised():
+    """No path from treatment to outcome -> nothing to be sensitive about.
+
+    DoWhy returns a bare `CausalEstimate` holding int 0 with no estimator, and
+    its analyzers then fail on `isinstance(estimate.estimator, ...)`.
+    """
+    rng = np.random.default_rng(1)
+    n = 800
+    x = rng.normal(size=(n, 2))
+    df = pd.DataFrame(x, columns=["V0", "V1"])
+    g = np.zeros((2, 2, 2), dtype=np.int8)
+    g[0, 0, 1] = g[1, 1, 1] = 1  # self-loops only: no V0 -> V1 path at all
+
+    s = sensitivity_analysis(g, df, "V0", "V1", 1)
+    assert s["summary"] is None
+    assert s["details"] is None
+    assert s["stats"] is None
+    assert s["reason"] is not None and "directed path" in s["reason"]
+    assert s["estimated_effect"] == 0.0
+    assert s["simulation_method"] == "e-value"
+
+
+def test_refute_effect_does_not_run_the_sensitivity_precheck(monkeypatch):
+    """`refute_effect` must not pass `_refute`'s `precheck`.
+
+    A refuter still answers on graphs the analyzers cannot handle. Detected by
+    call, not behaviour: any fixture the precheck accepts makes it vacuous.
+    """
+    from causalts.effects import validate as validate_mod
+
+    def _explode(identified, estimate):
+        raise AssertionError("refute_effect must not run the sensitivity precheck")
+
+    monkeypatch.setattr(validate_mod, "_sensitivity_precheck", _explode)
+
+    g, df = _no_confounder()
+    r = refute_effect(g, df, "V0", "V1", 1, num_simulations=10)
+    assert r["passed"]
+    assert abs(r["estimated_effect"] - 0.5) < 0.05
+
+
+@pytest.mark.parametrize(
+    "fixture,treatment,outcome,exc",
+    [
+        # Unknown exception type, in both the ordinary and the recovery state.
+        (_confounded, "V1", "V2", RuntimeError),
+        (_no_confounder, "V0", "V1", RuntimeError),
+        # Recognised type, wrong state: a non-empty adjustment set is not the
+        # empty-frame bug, so an IndexError here is somebody else's.
+        (_confounded, "V1", "V2", IndexError),
+    ],
+)
+def test_an_unrecognised_rendering_failure_still_propagates(
+    monkeypatch, fixture, treatment, outcome, exc
+):
+    """The recovery is for two known DoWhy bugs, not a blanket exception sink.
+
+    Discrimination is by exception type *and* state, so both are varied here.
+    """
+    g, df = fixture()
+
+    import dowhy.causal_refuters.evalue_sensitivity_analyzer as ev
+
+    def _boom(self):
+        raise exc("unrelated formatting failure")
+
+    monkeypatch.setattr(ev.EValueSensitivityAnalyzer, "__str__", _boom)
+
+    with pytest.raises(exc, match="unrelated formatting failure"):
+        sensitivity_analysis(g, df, treatment, outcome, 1)
+
+
+def _weak_effect():
+    """A real but weak V0(t-1) -> V1(t), so the CI includes the null."""
+    rng = np.random.default_rng(0)
+    n = 300
+    e = rng.normal(size=(n, 2))
+    x = np.zeros((n, 2))
+    for t in range(1, n):
+        x[t, 0] = e[t, 0]
+        x[t, 1] = 0.02 * x[t - 1, 0] + 3.0 * e[t, 1]
+    g = np.zeros((2, 2, 2), dtype=np.int8)
+    g[0, 1, 1] = 1
+    return g, pd.DataFrame(x, columns=["V0", "V1"])
+
+
+def test_tipped_confidence_interval_keeps_the_evalue_instead_of_raising():
+    """DoWhy skips the benchmark when the CI is already tipped, then reads it.
+
+    `benchmarking_results` stays None, so `__str__` raises TypeError rather
+    than the empty-frame IndexError. A weak effect is an ordinary case.
+    """
+    g, df = _weak_effect()
+    s = sensitivity_analysis(g, df, "V0", "V1", 1)
+
+    assert s["summary"] is None
+    assert s["reason"] is not None and "includes the null" in s["reason"]
+    assert s["stats"]["evalue_estimate"] >= 1.0
+    assert s["details"] is not None
+    assert s["details"].benchmarking_results is None
+
+
+def test_a_typeerror_outside_the_tipped_ci_state_still_propagates(monkeypatch):
+    """The TypeError recovery discriminates by state, not by exception type.
+
+    `_confounded` benchmarks normally, so `benchmarking_results` is a frame and
+    the CI is not tipped -- neither condition the recovery requires.
+    """
+    g, df = _confounded()
+
+    import dowhy.causal_refuters.evalue_sensitivity_analyzer as ev
+
+    def _boom(self):
+        raise TypeError("unrelated formatting failure")
+
+    monkeypatch.setattr(ev.EValueSensitivityAnalyzer, "__str__", _boom)
+
+    with pytest.raises(TypeError, match="unrelated formatting failure"):
+        sensitivity_analysis(g, df, "V1", "V2", 1)
+
+
+def test_precheck_rejects_an_estimate_whose_estimator_is_none():
+    """`hasattr` is not enough: the analyzers need a fitted estimator."""
+    from causalts.effects.validate import _sensitivity_precheck
+
+    class _Identified:
+        no_directed_path = False
+
+    class _EstimatorIsNone:
+        estimator = None
+
+    reason = _sensitivity_precheck(_Identified(), _EstimatorIsNone())
+    assert reason is not None and "no fitted estimator" in reason
+
+
 # ------------------------------------------------------- the verdict logic
 #
 # Every integration test above asserts a PASS, so a wrapper hardcoded to
@@ -183,6 +377,10 @@ def test_result_objects_expose_both():
         (0.04, False),
         (0.001, False),
         (None, None),  # no verdict is a third outcome, not a failure
+        # Non-finite is untestable, not a pass: inf > alpha would read True.
+        (float("nan"), None),
+        (float("inf"), None),
+        (float("-inf"), None),
     ],
 )
 def test_verdict_polarity_and_boundary(p_value, expected):

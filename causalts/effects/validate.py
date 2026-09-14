@@ -475,6 +475,84 @@ REFUTERS = (
 )
 
 
+class _RefutationUnavailable(Exception):
+    """No refutation can be formed for this query. Carries the estimate."""
+
+    def __init__(self, reason: str, estimate=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.estimate = estimate
+
+
+def _sensitivity_precheck(identified, estimate):
+    """Why DoWhy's sensitivity analyzers cannot be built. ``None`` if they can.
+
+    Both conditions otherwise raise from inside the analyzer's ``__init__``.
+    """
+    if getattr(identified, "no_directed_path", False):
+        return (
+            "The graph contains no directed path from the treatment to the "
+            "outcome, so DoWhy reports a structural effect of exactly zero "
+            "without fitting an estimator. There is no estimated effect for an "
+            "omitted confounder to explain away."
+        )
+    # A fitted estimator is what the analyzers need; `estimator = None`
+    # satisfies `hasattr`.
+    if getattr(estimate, "estimator", None) is None:
+        return (
+            "DoWhy returned an estimate with no fitted estimator, which its "
+            "sensitivity analyzers require. This usually means the estimand "
+            "was not identified for the requested estimation method."
+        )
+    return None
+
+
+def _adjustment_set_or_none(estimate):
+    """The estimate's adjustment set, or ``None`` if it could not be read.
+
+    A confirmed empty set and an unreadable one must not be conflated.
+    """
+    try:
+        return list(estimate.estimator._target_estimand.get_adjustment_set())
+    except Exception:
+        return None
+
+
+def _ci_already_tipped(stats):
+    """Whether the e-value CI limit is already 1, DoWhy's own benchmark-skip test."""
+    lo, hi = stats.get("evalue_lower_ci"), stats.get("evalue_upper_ci")
+    return (lo is None and hi == 1) or (hi is None and lo == 1)
+
+
+def _render_failure_reason(exc, result, estimate, simulation_method, stats):
+    """Why DoWhy could not render a completed analysis. ``None`` if unrecognised.
+
+    Both cases leave every sensitivity statistic computed and only the report
+    unbuilt. Anything else must propagate.
+    """
+    if simulation_method != "e-value" or stats is None:
+        return None
+    tail = " The sensitivity statistics themselves are in `stats`."
+    if isinstance(exc, IndexError) and _adjustment_set_or_none(estimate) == []:
+        return (
+            "The sensitivity analysis ran, but its report could not be "
+            "rendered: benchmarking an unmeasured confounder against the "
+            "observed covariates works by dropping each in turn, and this "
+            "estimand has an empty adjustment set." + tail
+        )
+    if (
+        isinstance(exc, TypeError)
+        and getattr(result, "benchmarking_results", None) is None
+        and _ci_already_tipped(stats)
+    ):
+        return (
+            "The sensitivity analysis ran, but its report could not be "
+            "rendered: the confidence interval already includes the null, so "
+            "DoWhy skipped the observed-covariate benchmark." + tail
+        )
+    return None
+
+
 def _refute(
     graph,
     data,
@@ -487,8 +565,14 @@ def _refute(
     include_c,
     cycle_resolution,
     kwargs,
+    precheck=None,
 ):
-    """Estimate, then hand DoWhy the same model and estimand to attack."""
+    """Estimate, then hand DoWhy the same model and estimand to attack.
+
+    ``precheck`` is an optional ``f(identified, estimate) -> reason | None``
+    run after estimation and before refutation; a reason raises
+    :class:`_RefutationUnavailable` carrying the estimate.
+    """
     from .effect import _identify_and_estimate
 
     model, identified, estimate, _ = _identify_and_estimate(
@@ -503,6 +587,10 @@ def _refute(
         include_c=include_c,
         cycle_resolution=cycle_resolution,
     )
+    if precheck is not None:
+        reason = precheck(identified, estimate)
+        if reason:
+            raise _RefutationUnavailable(reason, estimate)
     if method_name == "placebo_treatment_refuter":
         # DoWhy's default placebo for a *float* treatment is
         # `randn(n) * DEFAULT_STD_DEV_OF_NORMAL + DEFAULT_MEAN_OF_NORMAL`, and
@@ -552,7 +640,7 @@ def _refutation_verdict(
     placebo estimate of 9.
     """
     del method, reported_reference  # kept for signature stability
-    if p_value is None:
+    if p_value is None or not np.isfinite(p_value):
         return None
     return bool(p_value > significance_level)
 
@@ -739,8 +827,30 @@ def sensitivity_analysis(
     Returns
     -------
     dict
-        ``estimated_effect``, ``simulation_method``, ``summary`` and the raw
-        ``details``, whose shape depends on ``simulation_method``.
+        ``estimated_effect``, ``simulation_method``, ``summary``, ``stats``,
+        the raw ``details`` (shape depends on ``simulation_method``), and
+        ``reason``.
+
+        ``reason`` is ``None`` on a clean run and a sentence otherwise. Two
+        situations are reported explicitly rather than leaking an exception
+        from DoWhy: sensitivity analysis is unavailable for the query, or it
+        completed but its textual report could not be rendered.
+
+        * **No sensitivity analysis is possible.** There is no directed path
+          from treatment to outcome, so DoWhy reports a structural zero without
+          fitting an estimator and there is no effect to explain away; or the
+          estimand was not identified for the requested method. ``summary``,
+          ``stats`` and ``details`` are all ``None``.
+
+        * **The analysis ran but its report could not be rendered.** DoWhy
+          skips the "largest observed covariate" benchmark when the adjustment
+          set is empty, and again when the confidence interval already includes
+          the null, but its formatter reads the benchmark either way. Every
+          sensitivity statistic was still computed: ``summary`` is ``None``,
+          while ``stats`` and ``details`` carry the numbers. Both cases are
+          ordinary -- the first on a well-specified graph where the treatment
+          has no other parent, the second on any weak effect -- so check
+          ``reason`` before treating a ``None`` summary as a failure.
     """
     from ._compat import require_dowhy
 
@@ -751,24 +861,52 @@ def sensitivity_analysis(
     # call into a hang. Default it off; a caller who wants the figure can
     # still ask for it.
     kwargs = {"simulation_method": simulation_method, "plot_estimate": False, **kwargs}
-    estimate, result = _refute(
-        graph,
-        data,
-        treatment,
-        outcome,
-        treatment_lag,
-        "add_unobserved_common_cause",
-        estimation_method,
-        var_names,
-        include_c,
-        cycle_resolution,
-        kwargs,
-    )
+    try:
+        estimate, result = _refute(
+            graph,
+            data,
+            treatment,
+            outcome,
+            treatment_lag,
+            "add_unobserved_common_cause",
+            estimation_method,
+            var_names,
+            include_c,
+            cycle_resolution,
+            kwargs,
+            precheck=_sensitivity_precheck,
+        )
+    except _RefutationUnavailable as exc:
+        value = getattr(exc.estimate, "value", None)
+        return {
+            "estimated_effect": float(value) if value is not None else float("nan"),
+            "simulation_method": simulation_method,
+            "summary": None,
+            "stats": None,
+            "details": None,
+            "reason": exc.reason,
+        }
+
+    # The analyzer does real work in __str__, so a rendering failure can follow
+    # an analysis that succeeded. Keep the numbers.
+    stats = getattr(result, "stats", None)
+    try:
+        summary, reason = str(result), None
+    except (IndexError, TypeError) as exc:
+        # Recover only from the two known rendering failures. Anything else, and
+        # any other state, propagates rather than being passed off as a partial
+        # success.
+        reason = _render_failure_reason(exc, result, estimate, simulation_method, stats)
+        if reason is None:
+            raise
+        summary = None
     return {
         "estimated_effect": float(estimate.value),
         "simulation_method": simulation_method,
-        "summary": str(result),
+        "summary": summary,
+        "stats": stats,
         "details": result,
+        "reason": reason,
     }
 
 

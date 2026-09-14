@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+* `sensitivity_analysis()` reports why it cannot run instead of raising (`reason`, `stats`).
+
 ## [0.27.0]
 
 ### Added
