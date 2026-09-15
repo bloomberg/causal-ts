@@ -299,3 +299,255 @@ def test_corrplot_grid_border_is_closed():
     assert border, "expected a full-extent unfilled border rectangle"
     assert not border[0].get_clip_on(), "border must not be clipped at the axes edge"
     plt.close(fig)
+
+
+def test_corr_table_smoke():
+    from causalts.plotting import corr_table
+
+    table = corr_table(_make_frame())
+    frame = table.to_frame()
+    assert frame.shape[0] == 4
+    repr(table)
+    table._repr_html_()
+
+
+def test_corr_table_full_matrix_toggle():
+    from causalts.plotting import corr_table
+
+    lower_only = corr_table(_make_frame(), full_matrix=False).to_frame()
+    full = corr_table(_make_frame(), full_matrix=True).to_frame()
+
+    def _filled(frame):
+        var_cols = frame.columns[-4:] if "M" in frame.columns else frame.columns
+        return (frame[var_cols] != "").sum().sum()
+
+    assert _filled(full) > _filled(lower_only)
+
+
+def test_corr_table_show_n_toggle():
+    from causalts.plotting import corr_table
+
+    with_n = corr_table(_make_frame(), show_n=True).to_frame()
+    without_n = corr_table(_make_frame(), show_n=False).to_frame()
+
+    assert "M" in with_n.columns and "SD" in with_n.columns
+    assert "M" not in without_n.columns
+
+
+def test_corr_table_dcor_no_stars():
+    from causalts.plotting import corr_table
+
+    table = corr_table(_make_frame(), metric="dcor", sig_stars=True)
+    assert table.sig_stars is False
+    frame = table.to_frame()
+    assert not frame.apply(lambda col: col.str.contains(r"\*")).any().any()
+
+
+def test_corr_table_html_escapes_variable_names():
+    import pandas as pd
+
+    from causalts.plotting import corr_table
+
+    df = pd.DataFrame({"A<script>": [1, 2, 3, 4], "B&C": [4, 3, 2, 1]}, dtype=float)
+    html = corr_table(df)._repr_html_()
+
+    assert "<script>" not in html
+    assert "A&lt;script&gt;" in html
+    assert "B&amp;C" in html
+
+
+def test_corr_table_pvalues_accepts_ndarray():
+    import numpy as np
+    import pandas as pd
+
+    from causalts.plotting import corr_table
+
+    df = pd.DataFrame({"A": [1.0, 2.0, 3.0, 4.0], "B": [4.0, 3.0, 2.0, 1.0]})
+    pvals = np.array([[0.0, 0.01], [0.01, 0.0]])
+    table = corr_table(df, pvalues=pvals)
+    assert "*" in table.to_frame().loc["2. B", 1]
+
+
+def test_corr_table_show_ci_ignored_for_unsupported_metric():
+    import numpy as np
+    import pandas as pd
+
+    from causalts.plotting import corr_table
+
+    df = pd.DataFrame({"A": [1.0, 2.0, 3.0, 4.0], "B": [4.0, 3.0, 2.0, 1.0]})
+    corr = df.corr()
+    pvals = pd.DataFrame(
+        np.array([[0.0, 0.01], [0.01, 0.0]]), index=corr.index, columns=corr.columns
+    )
+    table = corr_table(df, metric="dcor", pvalues=pvals, show_ci=True)
+    assert table.show_ci is False
+    assert "CI" not in table._footnote()
+    assert "[" not in table.to_frame().to_string()
+
+
+def test_corr_table_nan_correlation_is_blank_not_literal_nan():
+    import pandas as pd
+
+    from causalts.plotting import corr_table
+
+    df = pd.DataFrame({"A": [1.0, 1.0, 1.0, 1.0], "B": [4.0, 3.0, 2.0, 1.0]})
+    frame = corr_table(df, show_ci=True).to_frame()
+    assert "nan" not in frame.to_string().lower()
+
+
+def test_corr_table_nan_mean_sd_is_blank_not_literal_nan():
+    import numpy as np
+    import pandas as pd
+
+    from causalts.plotting import corr_table
+
+    # A single valid observation makes SD (ddof=1) undefined; an all-NaN
+    # column makes both M and SD undefined.
+    df = pd.DataFrame({"A": [1.0, np.nan, np.nan, np.nan], "B": [4.0, 3.0, 2.0, 1.0]})
+    frame = corr_table(df).to_frame()
+    assert "nan" not in frame.to_string().lower()
+
+    df_all_nan = pd.DataFrame(
+        {"A": [np.nan, np.nan, np.nan, np.nan], "B": [4.0, 3.0, 2.0, 1.0]}
+    )
+    frame_all_nan = corr_table(df_all_nan).to_frame()
+    assert "nan" not in frame_all_nan.to_string().lower()
+
+
+def test_corr_table_duplicate_column_names_do_not_crash():
+    import pandas as pd
+
+    from causalts.plotting import corr_table
+
+    df = pd.DataFrame(
+        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 10.0]], columns=["A", "A", "B"]
+    )
+    frame = corr_table(df).to_frame()
+    assert frame.shape[0] == 3
+
+
+def test_corr_table_duplicate_column_names_with_explicit_pvalues_df():
+    import pandas as pd
+
+    from causalts.plotting import corr_table
+
+    # r's column order after data.corr() may not match a user-supplied
+    # pvalues DataFrame's order; with duplicate labels, pandas' own
+    # .reindex() raises on that mismatch (label alignment is ambiguous).
+    df = pd.DataFrame(
+        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 10.0]], columns=["A", "A", "B"]
+    )
+    pvals = pd.DataFrame(
+        [[0.0, 0.01, 0.02], [0.01, 0.0, 0.03], [0.02, 0.03, 0.0]],
+        columns=["B", "A", "A"],
+        index=["B", "A", "A"],
+    )
+    frame = corr_table(df, pvalues=pvals).to_frame()
+    assert frame.shape[0] == 3
+
+
+def test_fisher_ci_rejects_nonfinite_r():
+    from causalts.plotting.corrplot import _fisher_ci
+
+    assert _fisher_ci(float("nan"), 30) is None
+    assert _fisher_ci(float("inf"), 30) is None
+
+
+def test_pairs_panel_smoke():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import pairs_panel
+
+    fig, axes, matrix = pairs_panel(_make_frame())
+    assert axes.shape == (4, 4)
+    assert matrix.shape == (4, 4)
+    plt.close(fig)
+
+
+def test_pairs_panel_wide_data_warns():
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    from causalts.plotting import pairs_panel
+
+    rng = np.random.default_rng(0)
+    wide = pd.DataFrame(rng.standard_normal((30, 16)))
+
+    with pytest.warns(UserWarning):
+        fig, axes, matrix = pairs_panel(wide)
+    plt.close(fig)
+
+
+def test_pairs_panel_density_overlays_kde_line():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import pairs_panel
+
+    fig, axes, _ = pairs_panel(_make_frame(), density=True)
+    diag_lines = sum(len(axes[i, i].lines) for i in range(4))
+    plt.close(fig)
+
+    fig, axes, _ = pairs_panel(_make_frame(), density=False)
+    diag_lines_off = sum(len(axes[i, i].lines) for i in range(4))
+    plt.close(fig)
+
+    assert diag_lines == 4
+    assert diag_lines_off == 0
+
+
+def test_pairs_panel_edgecolor_toggle():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import pairs_panel
+
+    fig, axes, _ = pairs_panel(_make_frame(), edgecolor="black")
+    scatter_ax = axes[1, 0]
+    edgecolors_on = scatter_ax.collections[0].get_edgecolors()
+    plt.close(fig)
+
+    fig, axes, _ = pairs_panel(_make_frame(), edgecolor=None)
+    scatter_ax = axes[1, 0]
+    edgecolors_off = scatter_ax.collections[0].get_edgecolors()
+    plt.close(fig)
+
+    assert len(edgecolors_on) > 0
+    assert len(edgecolors_off) == 0
+
+
+def test_pairs_panel_infinite_value_does_not_crash():
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+
+    from causalts.plotting import pairs_panel
+
+    df = pd.DataFrame(
+        {
+            "A": [1.0, 2.0, 3.0, np.inf],
+            "B": [4.0, 3.0, 2.0, 1.0],
+            "C": [1.0, 2.0, 3.0, 4.0],
+            "D": [5.0, 4.0, 3.0, 2.0],
+        }
+    )
+    fig, axes, matrix = pairs_panel(df)
+    plt.close(fig)
+
+
+def test_pairs_panel_constant_column_shows_na_not_nan():
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    from causalts.plotting import pairs_panel
+
+    df = pd.DataFrame(
+        {
+            "A": [1.0, 1.0, 1.0, 1.0],
+            "B": [4.0, 3.0, 2.0, 1.0],
+            "C": [1.0, 2.0, 1.0, 2.0],
+            "D": [5.0, 4.0, 3.0, 2.0],
+        }
+    )
+    fig, axes, matrix = pairs_panel(df)
+    upper_texts = [t.get_text() for ax in axes.flat for t in ax.texts if t.get_text()]
+    assert not any("nan" in t.lower() for t in upper_texts)
+    plt.close(fig)

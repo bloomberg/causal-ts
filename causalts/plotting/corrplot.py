@@ -5,12 +5,15 @@ Inspired by R's corrplot package. Supports arbitrary pairwise metrics
 significance overlays, confidence intervals, and hierarchical ordering.
 """
 
+import html
+
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy.cluster.hierarchy as hierarchy
 import scipy.spatial.distance as distance
+import scipy.stats as stats
 from matplotlib.collections import PatchCollection
 from matplotlib.lines import Line2D
 from matplotlib.patches import (
@@ -1320,3 +1323,368 @@ def _draw_colorbar(
     cbar.ax.tick_params(labelsize=9 * cl_cex)
     if cl_label:
         cbar.set_label(cl_label, fontsize=10 * cl_cex)
+
+
+_PVALUE_FUNCS = {
+    "pearson": stats.pearsonr,
+    "spearman": stats.spearmanr,
+    "kendall": stats.kendalltau,
+}
+
+
+def _compute_pvalue_matrix(data, metric):
+    """Pairwise p-values for a correlation metric, dropping NaNs per pair."""
+    func = _PVALUE_FUNCS[metric]
+    cols = data.columns
+    n = len(cols)
+    pmat = np.full((n, n), np.nan)
+    for i in range(n):
+        pmat[i, i] = 0.0
+        for j in range(i + 1, n):
+            xi, xj = data.iloc[:, i], data.iloc[:, j]
+            mask = xi.notna() & xj.notna()
+            if mask.sum() < 3:
+                p = np.nan
+            else:
+                _, p = func(xi[mask].values, xj[mask].values)
+            pmat[i, j] = p
+            pmat[j, i] = p
+    return pd.DataFrame(pmat, index=cols, columns=cols)
+
+
+def _pairwise_n(data):
+    """Pairwise complete-observation counts, for Fisher CI sample sizes."""
+    cols = data.columns
+    n = len(cols)
+    counts = np.zeros((n, n), dtype=int)
+    for i in range(n):
+        for j in range(i, n):
+            mask = data.iloc[:, i].notna() & data.iloc[:, j].notna()
+            counts[i, j] = counts[j, i] = mask.sum()
+    return pd.DataFrame(counts, index=cols, columns=cols)
+
+
+def _apa_stars(p):
+    """Fixed APA-style significance stars: * p<.05, ** p<.01, *** p<.001."""
+    if p is None or (isinstance(p, float) and np.isnan(p)):
+        return ""
+    if p < 0.001:
+        return "***"
+    if p < 0.01:
+        return "**"
+    if p < 0.05:
+        return "*"
+    return ""
+
+
+def _fisher_ci(r, n, metric="pearson", level=0.95):
+    """Fisher z-transform confidence interval for a correlation coefficient.
+
+    The variance of the z-transform is metric-specific: Pearson uses the
+    plain 1/(n-3); Spearman needs the Bonett-Wright correction
+    (1 + r^2/2)/(n-3); Kendall's tau uses a different approximate variance,
+    0.437/(n-4) (Fieller, Hartley & Pearson 1957). Using the Pearson SE for
+    the rank metrics understates their CI width.
+
+    The Kendall variance above is derived for tau-a (no ties); with tied
+    ranks, `scipy.stats.kendalltau` reports tau-b, and this interval is
+    only approximate for that case.
+    """
+    if n is None or not np.isfinite(r) or abs(r) >= 1:
+        return None
+    if metric == "pearson":
+        if n < 4:
+            return None
+        se = 1 / np.sqrt(n - 3)
+    elif metric == "spearman":
+        if n < 4:
+            return None
+        se = np.sqrt((1 + r**2 / 2) / (n - 3))
+    elif metric == "kendall":
+        if n < 5:
+            return None
+        se = np.sqrt(0.437 / (n - 4))
+    else:
+        return None
+    z = np.arctanh(r)
+    z_crit = stats.norm.ppf(1 - (1 - level) / 2)
+    return np.tanh(z - z_crit * se), np.tanh(z + z_crit * se)
+
+
+def _format_p(p):
+    """APA-style p-value text, e.g. 'p = .019' or 'p < .001' (no leading 0)."""
+    if p is None or np.isnan(p):
+        return None
+    if p < 0.001:
+        return "p < .001"
+    return "p = " + f"{p:.3f}".lstrip("0")
+
+
+def _render_multiline_table(frame):
+    """Fixed-width ASCII rendering of a DataFrame whose cells may hold
+    multi-line ('\\n'-joined) text, top-aligning each cell's lines within
+    the row (`DataFrame.to_string` renders embedded newlines as literal
+    '\\n' text instead of a real line break).
+    """
+    header = [""] + [str(c) for c in frame.columns]
+    rows = [[str(idx)] + [str(v) for v in row] for idx, row in frame.iterrows()]
+
+    split_rows = []
+    for row in [header] + rows:
+        cell_lines = [c.split("\n") for c in row]
+        height = max(len(cl) for cl in cell_lines)
+        split_rows.append([cl + [""] * (height - len(cl)) for cl in cell_lines])
+
+    n_cols = len(header)
+    col_widths = [0] * n_cols
+    for cell_lines in split_rows:
+        for c in range(n_cols):
+            col_widths[c] = max(
+                col_widths[c], max((len(x) for x in cell_lines[c]), default=0)
+            )
+
+    out_lines = []
+    for cell_lines in split_rows:
+        for line_idx in range(len(cell_lines[0])):
+            parts = [
+                cell_lines[0][line_idx].ljust(col_widths[0]),
+                *(
+                    cell_lines[c][line_idx].rjust(col_widths[c])
+                    for c in range(1, n_cols)
+                ),
+            ]
+            out_lines.append("  ".join(parts))
+    return "\n".join(out_lines)
+
+
+class CorrTableResult:
+    """APA-style correlation table (see `corr_table`).
+
+    Holds the raw numeric matrix and p-values plus display options, and
+    renders on demand via `to_frame()` (formatted strings) or the notebook
+    repr hooks (`_repr_html_`, `__repr__`).
+    """
+
+    def __init__(
+        self,
+        r,
+        p,
+        means,
+        sds,
+        pairwise_n,
+        full_matrix,
+        sig_stars,
+        show_n,
+        show_ci,
+        notes,
+        number_fmt,
+        metric="pearson",
+    ):
+        self.r = r
+        self.p = p
+        self.means = means
+        self.sds = sds
+        self.pairwise_n = pairwise_n
+        self.full_matrix = full_matrix
+        self.sig_stars = sig_stars
+        self.show_n = show_n
+        self.show_ci = show_ci
+        self.notes = notes
+        self.number_fmt = number_fmt
+        self.metric = metric
+
+    def to_frame(self):
+        """Build the formatted display table (strings, triangle applied).
+
+        When both `show_ci` and `sig_stars` (or just `show_ci`) are set,
+        each cell is a 3-line stack (r+stars / CI / p-value), matching
+        apaTables' multi-row style for a table that reports both. With
+        `show_ci=False`, cells stay a single line (r+stars).
+        """
+        cols = list(self.r.columns)
+        n = len(cols)
+        cells = pd.DataFrame("", index=cols, columns=range(1, n + 1))
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    continue
+                if not self.full_matrix and j >= i:
+                    continue
+                val = self.r.iloc[i, j]
+                if not np.isfinite(val):
+                    # e.g. a constant column -> undefined correlation;
+                    # leave blank rather than printing the literal "nan".
+                    continue
+                line1 = f"{val:{self.number_fmt}}"
+                if self.sig_stars:
+                    line1 += _apa_stars(self.p.iloc[i, j])
+                lines = [line1]
+                if self.show_ci:
+                    pair_n = (
+                        self.pairwise_n.iloc[i, j]
+                        if self.pairwise_n is not None
+                        else None
+                    )
+                    ci = _fisher_ci(val, pair_n, metric=self.metric)
+                    if ci is not None:
+                        lines.append(f"[{ci[0]:.2f}, {ci[1]:.2f}]")
+                    p_text = _format_p(self.p.iloc[i, j])
+                    if p_text is not None:
+                        lines.append(p_text)
+                cells.iloc[i, j] = "\n".join(lines)
+
+        row_labels = [f"{i + 1}. {c}" for i, c in enumerate(cols)]
+        cells.index = row_labels
+
+        if self.show_n:
+            # Positional lookup: self.means[c] would return a Series (and
+            # fail to format) if two columns share a name.
+            def _fmt(series, i):
+                v = series.iloc[i]
+                return f"{v:.2f}" if np.isfinite(v) else ""
+
+            frame = pd.DataFrame(index=row_labels)
+            frame["M"] = [_fmt(self.means, i) for i in range(n)]
+            frame["SD"] = [_fmt(self.sds, i) for i in range(n)]
+            frame = pd.concat([frame, cells], axis=1)
+        else:
+            frame = cells
+        return frame
+
+    def _footnote(self):
+        """Build the footnote, mentioning only columns/markers actually shown."""
+        parts = []
+        if self.show_n:
+            parts.append("M = mean. SD = standard deviation.")
+        if self.show_ci:
+            parts.append("Values in square brackets indicate the 95% CI.")
+        if self.sig_stars:
+            parts.append("* p < .05. ** p < .01. *** p < .001.")
+        return " ".join(parts)
+
+    def __repr__(self):
+        text = _render_multiline_table(self.to_frame())
+        if self.notes:
+            footnote = self._footnote()
+            if footnote:
+                text += f"\n\nNote. {footnote}"
+        return text
+
+    def _repr_html_(self):
+        # escape=False is required so the "<br>" line-break markers below
+        # render as real breaks, but that also skips pandas' own escaping
+        # of cell/row/column text -- escape everything ourselves first
+        # (a variable name containing '<'/'>'/'&' would otherwise corrupt
+        # the table or inject markup), then substitute the newline.
+        frame = self.to_frame()
+        for col in frame.columns:
+            frame[col] = (
+                frame[col]
+                .astype(str)
+                .map(lambda s: html.escape(s).replace("\n", "<br>"))
+            )
+        frame.index = [html.escape(str(idx)) for idx in frame.index]
+        frame.columns = [html.escape(str(c)) for c in frame.columns]
+        html_str = frame.to_html(escape=False)
+        if self.notes:
+            footnote = self._footnote()
+            if footnote:
+                html_str += f"<p><em>Note.</em> {html.escape(footnote)}</p>"
+        return html_str
+
+
+def corr_table(
+    data,
+    metric="pearson",
+    full_matrix=False,
+    show_n=True,
+    sig_stars=True,
+    show_ci=False,
+    notes=True,
+    pvalues=None,
+    number_fmt=".2f",
+):
+    """APA-style correlation table (inspired by R's apaTables::apa.cor.table).
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Raw data where columns are variables.
+    metric : str or callable
+        String preset ('pearson', 'spearman', 'kendall', 'dcor') or a
+        callable with signature metric(x, y) -> float. p-values (and hence
+        significance stars/CIs) are only computed automatically for
+        'pearson', 'spearman', and 'kendall'; for 'dcor' or a callable,
+        pass `pvalues=` explicitly or stars/CIs are silently omitted.
+    full_matrix : bool
+        If False (default, apaTables style), only the lower triangle is
+        filled; the diagonal and upper triangle are left blank. If True,
+        both triangles are filled.
+    show_n : bool
+        If True (default), prepend Mean (M) and SD columns per variable.
+    sig_stars : bool
+        If True (default), append APA significance stars (* p<.05,
+        ** p<.01, *** p<.001) to each cell, when p-values are available.
+    show_ci : bool
+        If True, append a 95% Fisher-z confidence interval to each cell.
+        The analytic Fisher-z formula (and its metric-specific standard
+        error) is only defined for 'pearson', 'spearman', and 'kendall';
+        for 'dcor' or a callable metric, `show_ci=True` is silently
+        ignored (no CI, and the footnote won't claim one).
+    notes : bool
+        If True (default), append a footnote explaining M/SD and stars.
+    pvalues : pd.DataFrame, np.ndarray, or None
+        Explicit p-value matrix, overriding automatic computation. Required
+        for significance stars when `metric` is 'dcor' or a callable (an
+        ndarray is aligned positionally to `data`'s columns).
+    number_fmt : str
+        Format spec for correlation coefficients, e.g. '.2f' (default).
+
+    Returns
+    -------
+    CorrTableResult
+        Notebook-printable table (`_repr_html_`) that also prints cleanly
+        in a terminal (`__repr__`).
+    """
+    r = compute_association_matrix(data, metric=metric)
+
+    if pvalues is not None:
+        if isinstance(pvalues, pd.DataFrame) and r.columns.is_unique:
+            # Align by label so a correctly-labeled but differently-ordered
+            # p-value matrix still lines up with `r`'s cells. Label
+            # alignment is ambiguous with duplicate column names (pandas
+            # raises), so fall back to positional alignment there.
+            p = pvalues.reindex(index=r.index, columns=r.columns)
+        elif isinstance(pvalues, pd.DataFrame):
+            p = pd.DataFrame(pvalues.to_numpy(), index=r.index, columns=r.columns)
+        else:
+            p = pd.DataFrame(np.asarray(pvalues), index=r.index, columns=r.columns)
+    elif isinstance(metric, str) and metric in _PVALUE_FUNCS:
+        p = _compute_pvalue_matrix(data, metric)
+    else:
+        p = None
+
+    # The analytic Fisher-z CI (and its metric-specific SE) is only defined
+    # for these three metrics -- silently drop show_ci otherwise, same as
+    # sig_stars silently drops for an unsupported metric with no pvalues.
+    ci_supported = isinstance(metric, str) and metric in _PVALUE_FUNCS
+    show_ci = show_ci and ci_supported and p is not None
+
+    pairwise_n = _pairwise_n(data) if show_ci else None
+    means = data.mean() if show_n else None
+    sds = data.std() if show_n else None
+
+    return CorrTableResult(
+        r=r,
+        p=p,
+        means=means,
+        sds=sds,
+        pairwise_n=pairwise_n,
+        full_matrix=full_matrix,
+        sig_stars=sig_stars and p is not None,
+        show_n=show_n,
+        show_ci=show_ci,
+        notes=notes,
+        number_fmt=number_fmt,
+        metric=metric,
+    )

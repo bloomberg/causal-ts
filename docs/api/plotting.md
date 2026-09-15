@@ -14,6 +14,8 @@ from causalts.plotting import (
     setup_matrix,
     corrplot,
     compute_association_matrix,
+    corr_table,
+    pairs_panel,
 )
 ```
 
@@ -119,6 +121,31 @@ or a custom callable) — the usual input to `corrplot`.
 
 ```{eval-rst}
 .. autofunction:: causalts.plotting.corrplot.compute_association_matrix
+```
+
+### `corr_table`
+
+APA-style correlation table (inspired by R's apaTables::apa.cor.table) —
+lower-triangle r values with significance stars, Mean/SD columns, and a
+footnote, all individually toggleable. Prints nicely in notebooks
+(`_repr_html_`) and terminals (`__repr__`).
+
+```{eval-rst}
+.. autofunction:: causalts.plotting.corrplot.corr_table
+```
+
+---
+
+## Pairs Panel
+
+### `pairs_panel`
+
+Scatterplot matrix (inspired by R's psych::pairs.panels) — histogram
+diagonal, scatter + linear fit below the diagonal, and correlation text
+above.
+
+```{eval-rst}
+.. autofunction:: causalts.plotting.pairs.pairs_panel
 ```
 
 ---

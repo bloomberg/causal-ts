@@ -15,4 +15,5 @@ from .compare import (  # noqa: F401
     plot_metrics_summary,
     plot_pvalue_distribution,
 )
-from .corrplot import compute_association_matrix, corrplot  # noqa: F401
+from .corrplot import compute_association_matrix, corr_table, corrplot  # noqa: F401
+from .pairs import pairs_panel  # noqa: F401
