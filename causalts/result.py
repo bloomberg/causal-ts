@@ -39,14 +39,117 @@ class CausalResult:
     # Plotting
     # ------------------------------------------------------------------
 
-    def plot(self, var_names=None, **kwargs):
+    def plot(self, var_names=None, undirected=None, **kwargs):
+        """Draw the discovered graph.
+
+        Parameters
+        ----------
+        undirected : {"keep", "bidirected", "drop"}, optional
+            How to render unoriented contemporaneous (``o-o``) edges. Left
+            unset the plot uses ``cg_tig`` exactly as the engine produced it.
+            ``"keep"`` draws them as genuine ``o-o`` marks via
+            :meth:`~causalts.cdnots.result.CdnotsResult.to_marks`;
+            ``"bidirected"`` and ``"drop"`` re-render the binary graph. Only
+            available on results that carry a CPDAG (CDNOTS / CDNOTS+).
+        """
         from .plotting._core import plot_graph
 
+        if undirected is None:
+            graph = self.cg_tig
+        elif undirected == "keep":
+            graph = self.to_marks()
+        else:
+            graph = self.to_binary(undirected=undirected)
+
         return plot_graph(
-            graph=self.cg_tig,
+            graph=graph,
             var_names=list(var_names or self.var_names),
             **kwargs,
         )
+
+    # ------------------------------------------------------------------
+    # CPDAG rendering (overridden where a CPDAG is available)
+    # ------------------------------------------------------------------
+
+    def to_binary(self, undirected=None, conflict=None):
+        """Binary ``[cause, effect, lag]`` rendering of the discovered graph.
+
+        With no arguments this returns :attr:`cg_tig` unchanged. With a
+        policy, the base implementation applies it to whatever symmetric lag-0
+        pairs are present in :attr:`cg_tig` -- all it can see, since a binary
+        array is the only record these engines keep.
+
+        :class:`~causalts.cdnots.result.CdnotsResult` overrides this with a
+        re-render off the stored CPDAG, which is strictly richer: it can
+        recover ``o-o`` edges that ``cg_tig`` already discarded.
+
+        Parameters
+        ----------
+        undirected : {"bidirected", "drop"}, optional
+            How to render a symmetric lag-0 pair. Defaults to leaving it in
+            place.
+        conflict : {"drop", "bidirected"}, optional
+            Accepted so the signature matches
+            :meth:`~causalts.cdnots.result.CdnotsResult.to_binary`, but a
+            **no-op here**: ``cg_tig`` records a conflicting ``x-x`` edge and
+            an unoriented ``o-o`` edge identically, as symmetric 1s, so there
+            is nothing for a non-CPDAG result to act on. The value is still
+            validated rather than silently ignored, so a typo surfaces
+            instead of quietly doing nothing.
+        """
+        if undirected is None and conflict is None:
+            return self.cg_tig
+        import numpy as np
+
+        undirected = undirected or "bidirected"
+        if undirected not in ("bidirected", "drop"):
+            raise ValueError(
+                f"undirected must be 'bidirected' or 'drop', got {undirected!r}"
+            )
+        if conflict is not None and conflict not in ("drop", "bidirected"):
+            raise ValueError(
+                f"conflict must be 'drop' or 'bidirected', got {conflict!r}"
+            )
+        cg = np.array(self.cg_tig, copy=True)
+        if undirected == "drop":
+            g0 = cg[:, :, 0].astype(bool)
+            sym = g0 & g0.T
+            cg[:, :, 0][sym] = 0
+        return cg
+
+    def to_marks(self):
+        """Tigramite edge-mark (``<U3``) rendering of the discovered graph.
+
+        A DAG is a CPDAG with nothing left unoriented, so this is well defined
+        for every result type -- it is a *string format* of the graph, not an
+        ambiguity report. Reads :attr:`cg_tig`:
+
+        - one-way at lag 0        -> ``"-->"`` / ``"<--"``
+        - symmetric at lag 0      -> ``"o-o"``
+        - present at lag >= 1     -> ``"-->"`` (time-ordered, never mirrored)
+
+        This is the same reconstruction :func:`~causalts.plotting._core.plot_graph`
+        already applies to any binary graph, so plots and marks agree.
+
+        :class:`~causalts.cdnots.result.CdnotsResult` overrides this to read
+        the stored CPDAG directly, which is lossless rather than
+        reconstructed: it distinguishes ``o-o`` from ``x-x`` and survives
+        ``cg_tig`` having dropped the unoriented edges outright. For CEDAR,
+        GRACE and LUCID -- all directed by construction -- the reconstruction
+        is exact, and a symmetric lag-0 pair would indicate a conflict rather
+        than genuine Markov equivalence.
+        """
+        import numpy as np
+
+        cg = np.asarray(self.cg_tig).astype(bool)
+        marks = np.full(cg.shape, "", dtype="<U3")
+        marks[cg] = "-->"
+        g0 = cg[:, :, 0]
+        sym = g0 & g0.T
+        rev = g0.T & ~g0
+        marks[:, :, 0][sym] = "o-o"
+        marks[:, :, 0][rev] = "<--"
+        return marks
 
     # ------------------------------------------------------------------
     # DoWhy bridge

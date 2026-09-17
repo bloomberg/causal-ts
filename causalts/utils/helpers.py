@@ -29,8 +29,44 @@ def evaluate_graph(
     Returns
     -------
     dict
-        Dict with TPR, FPR, Precision, F1, SHD.
+        Dict with TPR, FPR, Precision, F1, SHD, the ``*_pair`` lag-collapsed
+        variants, and three lag-resolved groups (see Notes).
+
+    Notes
+    -----
+    Three additional groups are reported unconditionally, each with ``TP``,
+    ``FP``, ``FN``, ``TPR``, ``Precision``, ``F1`` and ``SHD``:
+
+    ``*_lag0``
+        Lag 0 only, scored directed -- both ``(i, j)`` and ``(j, i)``.
+    ``*_lag0_adj``
+        Lag 0 only, scored as **adjacency**: both graphs are symmetrised and
+        each pair is counted once from the upper triangle. This is the right
+        metric for CPDAG-valued output, where an unoriented edge is a claim
+        about adjacency rather than direction.
+    ``*_lagpos``
+        Lags >= 1 only, scored directed. Time order orients these, so no
+        unoriented edge can occur and the choice above is irrelevant here.
+
+    ``SHD`` is **invariant** to how an unoriented edge is rendered: a true
+    ``X -> Y`` returned symmetric costs 1 TP + 1 FP, dropped costs 1 FN, and
+    both give ``SHD = 1``. The choice moves F1 only, in opposite directions,
+    which is why directed F1 is the wrong single number for a CPDAG. Prefer
+    ``F1_lag0_adj`` at lag 0, ``F1_lagpos`` at lag >= 1, and ``SHD`` as the
+    headline scalar.
+
+    Raw counts are exposed in every group because pooling across datasets
+    requires micro-averaging -- summing TP/FP/FN first and dividing once. A
+    mean of per-dataset F1 silently swallows false positives on any dataset
+    that has no true edges in the slice, where every method scores 0.
     """
+    for name, arr in (("G_est", G_est), ("G_true", G_true)):
+        if getattr(arr, "dtype", None) is not None and arr.dtype.kind in "USO":
+            raise TypeError(
+                f"{name} is a string array ({arr.dtype}), which cannot be "
+                "scored. This looks like the lossless edge-mark rendering "
+                "from result.to_marks(); pass result.to_binary(...) instead."
+            )
     G_est = np.asarray(G_est, dtype=np.int8)
     G_true = np.asarray(G_true, dtype=np.int8)
     assert (
@@ -81,7 +117,7 @@ def evaluate_graph(
     rec_pair = tpr_pair
     f1_pair = 2 * prec_pair * rec_pair / max(prec_pair + rec_pair, 1e-12)
 
-    return {
+    out = {
         "TPR": tpr,
         "FPR": fpr,
         "Precision": precision_val,
@@ -97,6 +133,71 @@ def evaluate_graph(
         "FN": fn,
         "TN": tn,
     }
+    out.update(_lag_resolved_metrics(G_est, G_true, mask))
+    return out
+
+
+def _counts_to_metrics(tp: int, fp: int, fn: int, suffix: str) -> dict:
+    """Derive TPR / Precision / F1 / SHD from raw counts, keyed by suffix."""
+    rec = tp / max(tp + fn, 1)
+    prec = tp / max(tp + fp, 1)
+    return {
+        f"TP_{suffix}": tp,
+        f"FP_{suffix}": fp,
+        f"FN_{suffix}": fn,
+        f"TPR_{suffix}": rec,
+        f"Precision_{suffix}": prec,
+        f"F1_{suffix}": 2 * prec * rec / max(prec + rec, 1e-12),
+        f"SHD_{suffix}": fp + fn,
+    }
+
+
+def _lag_resolved_metrics(G_est, G_true, mask) -> dict:
+    """Lag-0 directed, lag-0 adjacency, and lag>=1 directed metric groups.
+
+    ``mask`` is the self-loop exclusion mask already built by the caller, so
+    these groups honour ``exclude_self_loops`` exactly as the pooled metrics
+    do.
+    """
+    d = G_est.shape[0]
+    est = G_est.astype(bool)
+    true = G_true.astype(bool)
+
+    # --- lag 0, directed -------------------------------------------------
+    m0 = mask[:, :, 0]
+    e0, t0 = est[:, :, 0] & m0, true[:, :, 0] & m0
+    out = _counts_to_metrics(
+        int(np.sum(e0 & t0)), int(np.sum(e0 & ~t0)), int(np.sum(~e0 & t0)), "lag0"
+    )
+
+    # --- lag 0, adjacency ------------------------------------------------
+    # Symmetrise BOTH graphs and count each pair once. Symmetrising only the
+    # estimate would turn a correctly found X -> Y into 1 TP + 1 FP.
+    iu = np.triu_indices(d, 1)
+    ea = (e0 | e0.T)[iu]
+    ta = (t0 | t0.T)[iu]
+    out.update(
+        _counts_to_metrics(
+            int(np.sum(ea & ta)),
+            int(np.sum(ea & ~ta)),
+            int(np.sum(~ea & ta)),
+            "lag0_adj",
+        )
+    )
+
+    # --- lags >= 1, directed ---------------------------------------------
+    if G_est.shape[2] > 1:
+        mp = mask[:, :, 1:]
+        ep, tp_ = est[:, :, 1:] & mp, true[:, :, 1:] & mp
+        counts = (
+            int(np.sum(ep & tp_)),
+            int(np.sum(ep & ~tp_)),
+            int(np.sum(~ep & tp_)),
+        )
+    else:
+        counts = (0, 0, 0)
+    out.update(_counts_to_metrics(*counts, "lagpos"))
+    return out
 
 
 def precision(s_true, s1):
