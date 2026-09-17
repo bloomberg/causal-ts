@@ -93,6 +93,7 @@ def _build_result(
     stable,
     num_c_cols=1,
     c_node_names=None,
+    undirected_policy="bidirected",
 ):
     """Package discovery outputs into a CdnotsResult, replacing method-patching."""
     return CdnotsResult(
@@ -111,6 +112,7 @@ def _build_result(
         df=df_orig,
         num_c_cols=num_c_cols,
         c_node_names=c_node_names,
+        undirected_policy=undirected_policy,
     )
 
 
@@ -250,7 +252,7 @@ def phase_three(
         runner-up by at least this *relative* margin, leaving the remaining
         contemporaneous edges undirected -- the analogue of PCMCI+ abstaining
         on an ambiguous link. Callers that convert with
-        ``keep_undirected=False`` then drop them.
+        ``undirected="drop"`` then drop them.
 
     Returns
     -------
@@ -755,8 +757,15 @@ def cdnots_discovery(
             verbose=verbose,
         )
 
+    # CDNOTS keeps unoriented lag-0 edges (o-o -> symmetric 1s); CDNOTS+
+    # drops them. cdnots_to_tigramite_graph's docstring explains when each
+    # rendering is the right one.
     cg_tig = cdnots_to_tigramite_graph(
-        cg_obj, num_lags=num_lags, include_C=include_C, num_c_cols=num_c_cols
+        cg_obj,
+        num_lags=num_lags,
+        include_C=include_C,
+        num_c_cols=num_c_cols,
+        undirected="bidirected",
     )
     result = _build_result(
         cg_obj,
@@ -775,6 +784,7 @@ def cdnots_discovery(
         stable=stable,
         num_c_cols=num_c_cols,
         c_node_names=_c_node_names,
+        undirected_policy="bidirected",
     )
 
     if return_pvals:
@@ -870,6 +880,15 @@ def run_cdnots(
     CdnotsResult
         Self-contained result with graph, p-values, plotting, and
         effect-estimation methods.
+
+    Notes
+    -----
+    Unoriented contemporaneous edges (``o-o``) are **kept**, rendered in
+    ``cg_tig`` as symmetric 1s. :func:`run_cdnots_plus` **drops** them
+    instead. Neither rendering is the CPDAG itself, which is preserved on
+    ``result.graph``. Re-render either way after the
+    fact with ``result.to_binary(undirected=...)``, or losslessly with
+    ``result.to_marks()``.
     """
     validate_priority(priority)
     disc_out = cdnots_discovery(
@@ -996,6 +1015,17 @@ def run_cdnots_plus(
     -------
     CdnotsResult
         Self-contained result.
+
+    Notes
+    -----
+    Unoriented contemporaneous edges (``o-o``) are **dropped** from
+    ``cg_tig``, where :func:`run_cdnots` keeps them as symmetric 1s. The drop
+    suits regimes where lag-0 edges are invalid or confounded; where
+    contemporaneous structure is real it costs recall. Neither rendering
+    discards the CPDAG -- it is preserved on
+    ``result.graph``. Re-render the other way with
+    ``result.to_binary(undirected="bidirected")``, or losslessly with
+    ``result.to_marks()``.
     """
     validate_priority(priority)
     if discrete_cols is None:
@@ -1232,6 +1262,10 @@ def run_cdnots_plus(
             verbose=verbose,
         )
 
+    # CDNOTS+ drops unoriented lag-0 edges, where CDNOTS keeps them: dropping
+    # suits regimes where contemporaneous edges are invalid or confounded.
+    # Score the other way with result.to_binary(undirected="bidirected") --
+    # see the converter docstring.
     cg_tig = cdnots_to_tigramite_graph(
         cg_obj,
         num_lags=num_lags,
@@ -1256,12 +1290,47 @@ def run_cdnots_plus(
         stable=False,
         num_c_cols=num_c_cols,
         c_node_names=_c_node_names,
+        undirected_policy="drop",
     )
 
 
-def cdnots_to_tigramite_graph(
-    gg, num_lags=0, include_C=True, num_c_cols=1, keep_undirected=True
-):
+#: Rendering policies for an unoriented (``o-o``) contemporaneous edge.
+UNDIRECTED_POLICIES = ("bidirected", "drop")
+#: Rendering policies for a conflicting (``x-x``) contemporaneous edge.
+CONFLICT_POLICIES = ("drop", "bidirected")
+
+
+def _resolve_undirected(undirected, keep_undirected):
+    """Reconcile the ``undirected=`` string with the legacy boolean.
+
+    ``keep_undirected`` is the original spelling and stays a silent alias --
+    ``routed_deconf`` and the experiment harnesses pass it, and they are
+    behaving correctly, so there is nothing to warn about.
+    """
+    if undirected is not None and keep_undirected is not None:
+        raise ValueError(
+            "pass either undirected= or keep_undirected=, not both "
+            f"(got undirected={undirected!r}, keep_undirected={keep_undirected!r})"
+        )
+    if undirected is None:
+        if keep_undirected is None:
+            return "bidirected"  # the historical default
+        return "bidirected" if keep_undirected else "drop"
+    if undirected not in UNDIRECTED_POLICIES:
+        raise ValueError(
+            f"undirected must be one of {UNDIRECTED_POLICIES}, got {undirected!r}. "
+            "For the lossless 'o-o' rendering use cdnots_to_tigramite_marks()."
+        )
+    return undirected
+
+
+def _prep_for_conversion(gg, num_lags, include_C, num_c_cols):
+    """Shared front half of both converters.
+
+    Returns ``(g, no_of_inst_var, edge_vars, orig)`` where ``g`` is a private
+    copy with C edges oriented and ``orig`` is a snapshot of the endpoints
+    *before* any policy is applied.
+    """
     no_of_var = gg.G.num_vars
     assert no_of_var % (num_lags + 1) == 0
     no_of_inst_var = no_of_var // (num_lags + 1)
@@ -1288,9 +1357,82 @@ def cdnots_to_tigramite_graph(
     # Decide from a snapshot of the incoming endpoints. The loop below visits
     # both (i, j) and (j, i) and writes in place, so reading the live array
     # would let one visit observe what the mirrored visit just wrote -- e.g.
-    # the o-o branch writes (1, 1) under keep_undirected, which the bi-directed
-    # branch would then mistake for a conflict marker and erase.
-    orig = g.G.graph.copy()
+    # the o-o branch writes (1, 1) under undirected="bidirected", which the
+    # conflict branch would then mistake for an x-x marker and erase.
+    return g, no_of_inst_var, edge_vars, g.G.graph.copy()
+
+
+def _to_tigramite_layout(arr, no_of_inst_var, num_lags):
+    """Reshape a ``(d, d*(num_lags+1))`` matrix to ``(d, d, num_lags+1)``.
+
+    The result is indexed ``[cause, effect, lag]``.
+    """
+    return np.swapaxes(
+        np.swapaxes(
+            arr[:no_of_inst_var].reshape(no_of_inst_var, num_lags + 1, no_of_inst_var),
+            1,
+            2,
+        ),
+        0,
+        1,
+    )
+
+
+def cdnots_to_tigramite_graph(
+    gg,
+    num_lags=0,
+    include_C=True,
+    num_c_cols=1,
+    keep_undirected=None,
+    undirected=None,
+    conflict="drop",
+):
+    """Render a causal-learn CPDAG as a binary ``[cause, effect, lag]`` array.
+
+    Discovery produces a CPDAG; this is a *lossy rendering* of it. A binary
+    array cannot express "adjacent but unoriented", so how the CPDAG's
+    contemporaneous ``o-o`` and ``x-x`` marks are rendered is a policy choice.
+    Use :func:`cdnots_to_tigramite_marks` for the lossless view.
+
+    Parameters
+    ----------
+    undirected : {"bidirected", "drop"}, optional
+        How to render an unoriented contemporaneous edge (causal-learn
+        ``(-1, -1)``, tigramite ``o-o``). ``"bidirected"`` writes symmetric
+        1s -- adjacency is preserved but the pair scores 1 TP + 1 FP against a
+        directed ground truth. ``"drop"`` zeroes both cells, scoring 1 FN.
+        Both cost ``SHD = 1``; the choice moves F1 only, in opposite
+        directions. Defaults to ``"bidirected"``.
+    conflict : {"drop", "bidirected"}, optional
+        How to render a conflicting contemporaneous edge (causal-learn
+        ``(1, 1)`` from ``priority=1`` conflict marking, tigramite ``x-x``).
+        Defaults to ``"drop"``.
+    keep_undirected : bool, optional
+        Legacy spelling of ``undirected``. ``True`` -> ``"bidirected"``,
+        ``False`` -> ``"drop"``. Cannot be combined with ``undirected``.
+
+    Notes
+    -----
+    The two CDNOTS entry points render ``o-o`` **differently**, each suiting
+    a different regime:
+
+    * :func:`run_cdnots` keeps it (``"bidirected"``) -- right when
+      contemporaneous structure is real.
+    * :func:`run_cdnots_plus` drops it -- right when lag-0 edges are invalid
+      or confounded and would otherwise produce a flood of false positives.
+
+    Prefer choosing after the fact via ``CdnotsResult.to_binary()`` rather
+    than reaching for this function directly.
+    """
+    undirected = _resolve_undirected(undirected, keep_undirected)
+    if conflict not in CONFLICT_POLICIES:
+        raise ValueError(
+            f"conflict must be one of {CONFLICT_POLICIES}, got {conflict!r}"
+        )
+
+    g, no_of_inst_var, edge_vars, orig = _prep_for_conversion(
+        gg, num_lags, include_C, num_c_cols
+    )
 
     for i in range(edge_vars):
         for j in range(edge_vars):
@@ -1304,32 +1446,85 @@ def cdnots_to_tigramite_graph(
                     g.G.graph[i, j] = 1
                     g.G.graph[j, i] = 0
                 elif orig[i, j] == 1 and orig[j, i] == 1:
-                    # Bi-directed (i <-> j) from priority=1 conflict marking.
-                    # PCMCI+ records these as 'x-x' and excludes them from the
-                    # binary graph; drop them rather than emitting two
-                    # contradictory directed edges.
-                    g.G.graph[i, j] = 0
-                    g.G.graph[j, i] = 0
+                    # Conflicting orientation (tigramite 'x-x'), from
+                    # priority=1 conflict marking. Dropped by default rather
+                    # than emitting two contradictory directed edges.
+                    mark = 1 if conflict == "bidirected" else 0
+                    g.G.graph[i, j] = mark
+                    g.G.graph[j, i] = mark
                 elif orig[i, j] == -1 and orig[j, i] == -1:
-                    if keep_undirected:
-                        g.G.graph[i, j] = 1
-                        g.G.graph[j, i] = 1
-                    else:
-                        # Drop unresolved edges — matches PCMCI+'s
-                        # treatment of o-o edges.
-                        g.G.graph[i, j] = 0
-                        g.G.graph[j, i] = 0
+                    # Unoriented (tigramite 'o-o'): the CPDAG says the two are
+                    # adjacent but the orientation is not identified. Note
+                    # PCMCI+ *emits and keeps* o-o -- dropping it is this
+                    # library's rendering policy, not tigramite's behaviour.
+                    mark = 1 if undirected == "bidirected" else 0
+                    g.G.graph[i, j] = mark
+                    g.G.graph[j, i] = mark
 
     # Reshape to (no_of_inst_var, no_of_inst_var, num_lags+1) tigramite format
     # Output includes C columns when include_C=True
-    return np.swapaxes(
-        np.swapaxes(
-            g.G.graph[:no_of_inst_var].reshape(
-                no_of_inst_var, num_lags + 1, no_of_inst_var
-            ),
-            1,
-            2,
-        ),
-        0,
-        1,
+    return _to_tigramite_layout(g.G.graph, no_of_inst_var, num_lags)
+
+
+def cdnots_to_tigramite_marks(gg, num_lags=0, include_C=True, num_c_cols=1):
+    """Render a causal-learn CPDAG as a **lossless** tigramite string array.
+
+    Same ``[cause, effect, lag]`` layout as
+    :func:`cdnots_to_tigramite_graph`, but dtype ``<U3`` carrying the endpoint
+    marks instead of 0/1, so nothing is discarded:
+
+    ==================  ==========  ===================================
+    causal-learn        tigramite   meaning
+    ==================  ==========  ===================================
+    ``(-1, 1)``         ``-->``     directed
+    ``(1, -1)``         ``<--``     directed, reversed
+    ``(-1, -1)``        ``o-o``     unoriented (Markov equivalent)
+    ``(1, 1)``          ``x-x``     conflicting orientation
+    ``(0, 0)``          ``""``      no edge
+    ==================  ==========  ===================================
+
+    This is the view that makes CDNOTS output comparable to
+    ``run_pcmciplus`` mark for mark. It cannot be scored by
+    :func:`~causalts.utils.helpers.evaluate_graph` -- use
+    :func:`cdnots_to_tigramite_graph` for that -- but it can be plotted
+    directly.
+
+    Lags >= 1 are time-ordered, so ``o-o`` cannot legitimately occur there;
+    if the underlying graph somehow carries one it is reported rather than
+    silently rewritten.
+    """
+    _, no_of_inst_var, _, orig = _prep_for_conversion(
+        gg, num_lags, include_C, num_c_cols
     )
+
+    # marks[a, b] describes the link b -> a, matching the transpose baked into
+    # _to_tigramite_layout (result[cause, effect, lag] == marks[effect, col]).
+    #
+    # Base rule covers the lagged columns, which cdnots_to_tigramite_graph
+    # also passes through untouched: there a bare 1 already means "this column
+    # causes this row". Lag >= 1 is deliberately *not* mirrored -- tigramite
+    # only fills graph[i, j, tau] for tau > 0, since the transposed cell means
+    # a different lag relationship, not the reverse of this one.
+    marks = np.where(orig == 1, "-->", "").astype("<U3")
+
+    # The whole lag-0 block, C columns included. Contemporaneous marks *are*
+    # mirrored in tigramite ("-->" opposite "<--"), and the cases below are
+    # transpose-consistent by construction. C edges must be in the block: the
+    # C-orientation step in _prep_for_conversion writes (0, 1), not (-1, 1),
+    # so a rule keyed only on (-1, 1) would leave them unmirrored.
+    blk = (slice(0, no_of_inst_var), slice(0, no_of_inst_var))
+    sub = orig[blk]
+    sub_t = sub.T
+    marks[blk] = np.select(
+        [
+            (sub == 1) & (sub_t == 1),  # conflicting -- check before "-->"
+            (sub == 1) & (sub_t != 1),  # (1, -1) directed, or (1, 0) C edge
+            (sub_t == 1) & (sub != 1),  # the mirror of the above
+            (sub == -1) & (sub_t == -1),  # unoriented
+        ],
+        ["x-x", "-->", "<--", "o-o"],
+        default="",
+    )
+    np.fill_diagonal(marks, "")
+
+    return _to_tigramite_layout(marks, no_of_inst_var, num_lags)

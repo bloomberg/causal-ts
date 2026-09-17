@@ -62,6 +62,7 @@ class CdnotsResult(CausalResult):
         df,
         num_c_cols: int = 1,
         c_node_names=None,
+        undirected_policy: str = "bidirected",
     ):
         self.graph = graph
         self.cg_tig = cg_tig
@@ -78,7 +79,103 @@ class CdnotsResult(CausalResult):
         self._df = df
         self.num_c_cols = num_c_cols
         self.c_node_names = c_node_names
+        self.undirected_policy = undirected_policy
         self._scm_cache = {}
+
+    # ------------------------------------------------------------------
+    # CPDAG rendering
+    # ------------------------------------------------------------------
+
+    def to_binary(self, undirected=None, conflict=None):
+        """Render the discovered CPDAG as a binary ``[cause, effect, lag]`` array.
+
+        Called with no arguments this returns :attr:`cg_tig` unchanged --
+        whatever the engine produced, bit for bit. Pass a policy to re-render
+        from :attr:`graph`, which carries the full CPDAG including the
+        ``o-o`` marks that :attr:`cg_tig` may have discarded.
+
+        Parameters
+        ----------
+        undirected : {"bidirected", "drop"}, optional
+            How to render an unoriented contemporaneous edge. ``"bidirected"``
+            writes symmetric 1s (adjacency preserved, 1 TP + 1 FP against a
+            directed ground truth); ``"drop"`` zeroes both cells (1 FN).
+            Both cost ``SHD = 1``.
+        conflict : {"drop", "bidirected"}, optional
+            How to render a conflicting (``x-x``) contemporaneous edge.
+            Defaults to ``"drop"``.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``int8``, shape ``(d, d, max_lag+1)``. For the lossless view use
+            :meth:`to_marks`.
+
+        Notes
+        -----
+        The engines differ in their default: ``run_cdnots`` keeps ``o-o``,
+        ``run_cdnots_plus`` drops it. The policy
+        this result was built with is recorded on
+        :attr:`undirected_policy`, so ``to_binary(undirected=r.undirected_policy)``
+        reproduces ``cg_tig``.
+
+        Examples
+        --------
+        >>> res = run_cdnots_plus(df, ci)          # doctest: +SKIP
+        >>> G = res.to_binary(undirected="bidirected")   # doctest: +SKIP
+        """
+        if undirected is None and conflict is None:
+            return self.cg_tig
+
+        from .phase3_utils import cdnots_to_tigramite_graph
+
+        return cdnots_to_tigramite_graph(
+            self.graph,
+            num_lags=self.num_lags,
+            include_C=self.include_C,
+            num_c_cols=self.num_c_cols,
+            # getattr: results pickled before undirected_policy existed.
+            undirected=(
+                undirected
+                if undirected is not None
+                else getattr(self, "undirected_policy", "bidirected")
+            ),
+            conflict=conflict if conflict is not None else "drop",
+        )
+
+    def to_marks(self):
+        """Render the discovered CPDAG **losslessly** as tigramite edge marks.
+
+        Same ``[cause, effect, lag]`` layout as :meth:`to_binary`, but dtype
+        ``<U3`` carrying ``"-->"``, ``"<--"``, ``"o-o"``, ``"x-x"`` or ``""``
+        instead of 0/1 -- so an unoriented contemporaneous edge survives as
+        itself rather than being forced into a binary cell.
+
+        This is the view that makes CDNOTS output comparable to tigramite's
+        ``run_pcmciplus`` mark for mark.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``<U3``, shape ``(d, d, max_lag+1)``. Cannot be passed to
+            :func:`~causalts.utils.helpers.evaluate_graph` -- use
+            :meth:`to_binary` for scoring. It *can* be passed straight to
+            plotting, or reached via ``result.plot(undirected="keep")``.
+
+        Notes
+        -----
+        "Lossless" is with respect to the *endpoint marks*: an ``o-o`` or
+        ``x-x`` survives as itself. The set of edges is the same one
+        :attr:`cg_tig` was rendered from.
+        """
+        from .phase3_utils import cdnots_to_tigramite_marks
+
+        return cdnots_to_tigramite_marks(
+            self.graph,
+            num_lags=self.num_lags,
+            include_C=self.include_C,
+            num_c_cols=self.num_c_cols,
+        )
 
     # ------------------------------------------------------------------
     # Background knowledge
@@ -154,7 +251,7 @@ class CdnotsResult(CausalResult):
     # Plotting (override to handle C-node)
     # ------------------------------------------------------------------
 
-    def plot(self, var_names=None, exclude_C=False, **kwargs):
+    def plot(self, var_names=None, exclude_C=False, undirected=None, **kwargs):
         """Plot the discovered causal graph.
 
         Parameters
@@ -163,10 +260,22 @@ class CdnotsResult(CausalResult):
             Override variable names shown on the plot.
         exclude_C : bool
             Strip the C node(s) from the plot.
+        undirected : {"keep", "bidirected", "drop"} | None
+            How to render unoriented contemporaneous (``o-o``) edges. Left
+            unset the plot shows ``cg_tig`` exactly as the engine produced it
+            -- which for :func:`run_cdnots_plus` means o-o edges are already
+            gone. ``"keep"`` draws them as genuine ``o-o`` marks via
+            :meth:`to_marks`; the other two re-render the binary graph via
+            :meth:`to_binary`.
         """
         from ..plotting._core import plot_graph as _plot_graph
 
-        graph = self.cg_tig
+        if undirected is None:
+            graph = self.cg_tig
+        elif undirected == "keep":
+            graph = self.to_marks()
+        else:
+            graph = self.to_binary(undirected=undirected)
         names = list(var_names or self.var_names)
 
         if self.include_C:

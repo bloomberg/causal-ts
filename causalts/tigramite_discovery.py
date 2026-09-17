@@ -329,22 +329,30 @@ def _to_tigramite_df(df: pd.DataFrame):
     return TigramiteDF(df.to_numpy(dtype=float), var_names=list(df.columns))
 
 
-def _tigramite_graph_to_binary(
+def tigramite_graph_to_binary(
     tig_graph: np.ndarray,
     p_matrix: np.ndarray | None = None,
     alpha_level: float | None = None,
+    undirected: str = "drop",
+    conflict: str = "drop",
 ) -> np.ndarray:
-    """Convert tigramite string graph to causal-ts binary format.
+    """Convert a tigramite string graph to causal-ts binary format.
 
-    Handles all tigramite edge types:
+    A binary array cannot express "adjacent but unoriented", so this is a
+    **lossy rendering** and how the ambiguous marks are handled is a policy
+    choice, not a property of the edge types:
 
     - ``"-->"`` : directed edge (i causes j at lag tau)
     - ``"<--"`` : reverse directed (j causes i at lag tau)
     - ``"o->"`` : partially oriented (i possibly causes j, from LPCMCI PAGs)
     - ``"<-o"`` : reverse partially oriented
-    - ``"o-o"`` : unoriented (ambiguous, excluded from binary)
-    - ``"x-x"`` : conflicting (excluded from binary)
-    - ``"<->"`` : bidirectional / latent confounder (excluded from binary)
+    - ``"o-o"`` : unoriented, contemporaneous adjacency under Markov
+      equivalence. **PCMCI+ emits and keeps these** -- dropping them is this
+      converter's default, not tigramite's behaviour. See ``undirected``.
+    - ``"x-x"`` : conflicting orientation. See ``conflict``.
+    - ``"<->"`` : latent common cause. **Always excluded**, and not a policy
+      choice: it asserts there is *no* direct edge between i and j, so
+      against a DAG ground truth omitting it is the correct rendering.
 
     Parameters
     ----------
@@ -354,12 +362,33 @@ def _tigramite_graph_to_binary(
         Optional p-value matrix for additional thresholding.
     alpha_level : float or None, optional
         If set with p_matrix, only include edges with p < alpha_level.
+    undirected : {"drop", "bidirected"}, optional
+        How to render ``"o-o"``. ``"drop"`` (default, and the historical
+        behaviour) omits it; ``"bidirected"`` writes symmetric 1s, preserving
+        adjacency. Note the default blinds a PCMCI+ baseline in exactly the
+        same way ``run_cdnots_plus`` is blinded, so like-for-like comparisons
+        are still fair -- but neither sees the contemporaneous adjacencies.
+    conflict : {"drop", "bidirected"}, optional
+        How to render ``"x-x"``. Defaults to ``"drop"``.
 
     Returns
     -------
     numpy.ndarray
         Binary ndarray (d, d, tau_max+1), dtype int8.
     """
+    if undirected not in ("drop", "bidirected"):
+        raise ValueError(
+            f"undirected must be 'drop' or 'bidirected', got {undirected!r}"
+        )
+    if conflict not in ("drop", "bidirected"):
+        raise ValueError(f"conflict must be 'drop' or 'bidirected', got {conflict!r}")
+
+    symmetric = set()
+    if undirected == "bidirected":
+        symmetric.add("o-o")
+    if conflict == "bidirected":
+        symmetric.add("x-x")
+
     d = tig_graph.shape[0]
     tau_max_plus_1 = tig_graph.shape[2]
     G = np.zeros((d, d, tau_max_plus_1), dtype=np.int8)
@@ -378,8 +407,18 @@ def _tigramite_graph_to_binary(
                         if p_matrix[i, j, tau] >= alpha_level:
                             continue
                     G[j, i, tau] = 1
+                elif s in symmetric:
+                    if p_matrix is not None and alpha_level is not None:
+                        if p_matrix[i, j, tau] >= alpha_level:
+                            continue
+                    G[i, j, tau] = 1
+                    G[j, i, tau] = 1
 
     return G
+
+
+#: Private alias kept so the five in-module call sites stay untouched.
+_tigramite_graph_to_binary = tigramite_graph_to_binary
 
 
 def run_pcmciplus(

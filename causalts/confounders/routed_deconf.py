@@ -1225,21 +1225,22 @@ def _discover(
     routed regime, so an already-discovered graph can be reused (see ``run_lucid``'s
     ``discovery=`` argument).
     """
-    if tetrad and keep_undirected:
-        # `keep_undirected` is only meaningful for the CD-NOTS+ orientation tail, and
-        # this build's `run_cdnots_plus` does not expose it. Nothing combines the two
-        # (the lag-0 ablation's keep_all arm runs on pervasive_base="naive", where the
-        # flag is a no-op), so fail loudly rather than silently ignore the request.
-        raise NotImplementedError(
-            "keep_undirected=True is not supported with pervasive_base='tetrad'; "
-            "use the default pervasive_base='naive'."
-        )
     fn = run_cdnots_plus if tetrad else run_cdnots
     kw = dict(
         num_lags=max_lag, include_C=True, c_preset="linear", alpha=alpha, verbose=False
     )
     result = fn(df_obs, ci, **kw)
-    cg = result.cg_tig
+    # `keep_undirected=False` means "whatever the engine does", NOT "drop":
+    # the two engines disagree, with the naive route (`run_cdnots`) keeping
+    # o-o and the tetrad route (`run_cdnots_plus`) dropping it. Requesting
+    # "drop" here would change the naive route, which is the one LUCID runs
+    # by default. `keep_undirected=True` is therefore a no-op on the naive
+    # route and flips CDNOTS+ output to keep on the tetrad route.
+    cg = (
+        result.to_binary(undirected="bidirected")
+        if keep_undirected
+        else result.to_binary()
+    )
     if tetrad:
         cg = apply_tetrad_lag0_filter(
             cg, df_obs, list(df_obs.columns), threshold=tetrad_threshold
@@ -1339,11 +1340,15 @@ def routed_deconfound(
     drop_lag0 : if True (default, shipped behavior), zero out lag-0 edges on the
         pervasive route (Section on undirectable contemporaneous confounder
         footprint); set False for the T0.2 lag-0-contamination ablation.
-    keep_undirected : if True, the pervasive-route CDNOTS+ base engine keeps
-        unresolved (o-o) edges as bidirected instead of dropping them (default
-        False, matching CDNOTS+'s and PCMCI+'s shipped convention). Only
-        relevant with `drop_lag0=False`, since `drop_lag0=True` zeroes lag-0
-        either way.
+    keep_undirected : if True, unresolved (o-o) lag-0 edges are rendered as
+        bidirected. Default False means "leave each base engine at its own
+        default", NOT "drop": the naive route (`run_cdnots`) keeps o-o, the
+        tetrad route (`run_cdnots_plus`) drops it. So on the shipped
+        `pervasive_base="naive"` the flag is a no-op; on "tetrad" it flips
+        CDNOTS+ output to keep. Note PCMCI+ itself emits and keeps o-o --
+        dropping is a rendering convention of this library, not tigramite's.
+        Only relevant with `drop_lag0=False`, since `drop_lag0=True` zeroes
+        lag-0 either way.
     recover_lag0 : if True (default, shipped behavior), reconstruct the pervasive
         branch's lag-0 slice via S-L (`sl_lag0_recover`) instead of blanket-dropping
         it. If False, `drop_lag0` decides whether the lag-0 slice is dropped or kept

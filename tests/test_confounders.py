@@ -306,11 +306,34 @@ def test_invalid_lag0_engine_raises():
         routed_deconfound(_pervasive_data(), MAX_LAG, lag0_engine="adjudicate")
 
 
-def test_keep_undirected_with_tetrad_base_raises():
-    with pytest.raises(NotImplementedError, match="keep_undirected"):
-        routed_deconfound(
-            _pervasive_data(), MAX_LAG, pervasive_base="tetrad", keep_undirected=True
-        )
+def test_keep_undirected_with_tetrad_base_is_supported():
+    """``keep_undirected=True`` is honoured on the tetrad route.
+
+    CDNOTS+ renders o-o as dropped, but the CPDAG survives on
+    ``result.graph``, so ``CdnotsResult.to_binary`` can re-render it as
+    bidirected without re-running discovery.
+    """
+    df = _pervasive_data()
+    kw = dict(pervasive_base="tetrad")
+    kept = np.asarray(routed_deconfound(df, MAX_LAG, keep_undirected=True, **kw))
+    default = np.asarray(routed_deconfound(df, MAX_LAG, **kw))
+    assert kept.shape == default.shape
+    # Keeping o-o can only add lag-0 adjacencies, never remove any.
+    assert np.all(kept[:, :, 0] >= default[:, :, 0])
+
+
+def test_keep_undirected_is_a_no_op_on_the_naive_base():
+    """Default False means "engine's own default", NOT "drop".
+
+    ``run_cdnots`` keeps o-o, so on the default ``pervasive_base="naive"``
+    route the flag changes nothing. Requesting "drop" here instead would
+    alter the route LUCID runs by default.
+    """
+    df = _pervasive_data()
+    assert np.array_equal(
+        np.asarray(routed_deconfound(df, MAX_LAG, keep_undirected=True)),
+        np.asarray(routed_deconfound(df, MAX_LAG)),
+    )
 
 
 # ── cross-type: .deconfound()/.tetrad_filter()/.pds_filter() on non-CDNOTS results ──
