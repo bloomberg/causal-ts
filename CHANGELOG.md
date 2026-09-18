@@ -15,6 +15,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * `pairs_panel()` — scatterplot matrix (histogram+KDE diagonal, scatter+fit, correlation text), colorblind-safe palette.
 * How an unoriented (`o-o`) contemporaneous edge is rendered is now a post-discovery choice, not a hardcoded one: `result.to_binary(undirected=, conflict=)`, the lossless `result.to_marks()`, `result.plot(undirected=)`, `result.undirected_policy`, and the same knobs on `cdnots_to_tigramite_graph()` / `tigramite_graph_to_binary()`. Engine defaults are unchanged — `cg_tig` is bit-identical. `evaluate_graph()` gains `*_lag0`, `*_lag0_adj` and `*_lagpos` metric groups.
 
+### Changed
+
+* `ParCorrGPU.__call__` now reads partial correlation off the cached covariance
+  matrix under `method="precision"` (default) instead of solving OLS every call —
+  5.8x faster. Only benefits scalar callers (Cedar, `run_cdnots(stable=False)`);
+  default `run_cdnots` gets no speedup (it already used the same cache via
+  `batch_test`), but its statistics shift by ~1e-8 from the float32->float64
+  covariance, and any persisted `pvalue_cache` misses across the upgrade.
+  Ill-conditioned tests fall back to the unchanged `method="ols"` path.
+
 ### Fixed
 
 * `sensitivity_analysis()` reports why it cannot run instead of raising (`reason`, `stats`).
