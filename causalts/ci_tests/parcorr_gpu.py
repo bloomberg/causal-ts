@@ -25,6 +25,51 @@ def _data_fingerprint(data):
     return hashlib.md5(data.flat[::step].tobytes()).hexdigest()[:12]
 
 
+# Distinguishes builds whose cached statistic differs numerically, so a
+# pvalue_cache persisted by one build misses rather than being reused by
+# another. "cov64" marks the float64 covariance; earlier builds used float32,
+# whose statistics differ by ~1e-8. Bump on any numeric change to the estimator.
+_STAT_VERSION = "cov64"
+
+# Reciprocal-condition floor for the correlation-scaled sub-covariance. Below
+# this the inverse is dominated by rounding and the partial correlation is not
+# determined, so the precision path declines the test instead of guessing.
+_RCOND = 1e-10
+
+
+def _is_index(v):
+    """True for a scalar integer column index.
+
+    ``bool`` is excluded: it is an ``int`` subclass, so ``True`` would otherwise
+    be silently accepted as column 1.
+    """
+    return isinstance(v, (int, np.integer)) and not isinstance(v, (bool, np.bool_))
+
+
+def _check_index(v, name):
+    """Raise ``TypeError`` unless ``v`` is a valid ``X``/``Y`` index.
+
+    Accepts a scalar integer, or (for ``ParCorrMult``-style multivariate tests)
+    an iterable of them. Must run before ``_get_array_hash`` builds the cache
+    key: that function calls ``int(v)`` unconditionally, so a non-integer index
+    would otherwise be silently coerced into the key of an unrelated, already
+    cached test and returned without ever reaching this check.
+    """
+    if isinstance(v, Iterable):
+        if not all(_is_index(i) for i in v):
+            raise TypeError(f"{name} must contain integer column indices, got {v!r}")
+    elif not _is_index(v):
+        raise TypeError(f"{name} must be an integer column index, got {v!r}")
+
+
+def _check_condition_set(condition_set):
+    """Raise ``TypeError`` unless every element of ``condition_set`` is an index."""
+    if not all(_is_index(z) for z in condition_set):
+        raise TypeError(
+            f"condition_set must contain integer column indices, got {condition_set!r}"
+        )
+
+
 class ParCorrGPU(CIT_Base):
     """GPU-accelerated partial correlation test with batched evaluation.
 
@@ -71,21 +116,15 @@ class ParCorrGPU(CIT_Base):
         # are faster on CPU than GPU due to kernel launch overhead
         self._precision_device = "cpu"
         self._data = data
-        if data is not None:
-            self.data_torch = torch.Tensor(data).to(self.device)
-            # Pre-compute covariance matrix (skip if NaN present)
-            if not np.isnan(data).any():
-                data_t = torch.Tensor(data).to(self._precision_device)
-                data_centered = data_t - data_t.mean(dim=0, keepdim=True)
-                self._cov_matrix = (data_centered.T @ data_centered) / (
-                    data_centered.shape[0] - 1
-                )
-            else:
-                self._cov_matrix = None
-
+        self._cov_matrix = None
+        self._cov_np = None
+        # data_torch and the cached covariance are populated by the `data`
+        # setter, which CIT_Base.__init__ triggers via `self.data = data`.
+        # Building them here as well would do the O(T*d^2) work twice and hold
+        # the first covariance live while the second is formed.
         super().__init__(data, method="parcorr_gpu", **kwargs)
         fp = _data_fingerprint(data)
-        self.param_hash = f"T{data.shape[0]}-analytic-{fp}"
+        self.param_hash = f"T{data.shape[0]}-{self._method}-{_STAT_VERSION}-{fp}"
         self.enable_batching = enable_batching and not self._has_nan
         self.enable_caching = enable_caching
         if not self._has_nan:
@@ -104,14 +143,33 @@ class ParCorrGPU(CIT_Base):
         if d is not None:
             self.data_torch = torch.Tensor(d).to(self.device)
             if not self._has_nan:
-                data_t = torch.Tensor(d).to(self._precision_device)
-                data_centered = data_t - data_t.mean(dim=0, keepdim=True)
-                self._cov_matrix = (data_centered.T @ data_centered) / (
-                    data_centered.shape[0] - 1
-                )
+                self._update_cov(d)
             else:
                 self._cov_matrix = None
-            self.param_hash = f"T{d.shape[0]}-analytic-{_data_fingerprint(d)}"
+                self._cov_np = None
+            self.param_hash = (
+                f"T{d.shape[0]}-{self._method}-{_STAT_VERSION}-{_data_fingerprint(d)}"
+            )
+
+    def _update_cov(self, d):
+        """Cache the covariance matrix backing the precision path.
+
+        Held in float64, so the scalar and batched paths agree to 2e-16. The
+        precision path inverts sub-covariance matrices, whose conditioning is
+        roughly that of the data squared, and lag embedding makes near-collinear
+        conditioning sets routine. The cost is d*d*8 bytes, independent of T,
+        and batched throughput is the same as under float32 (6.62 us/test at
+        T=1000, d=30).
+        """
+        data_t = torch.as_tensor(
+            np.ascontiguousarray(d, dtype=np.float64), device=self._precision_device
+        )
+        data_centered = data_t - data_t.mean(dim=0, keepdim=True)
+        self._cov_matrix = (data_centered.T @ data_centered) / (
+            data_centered.shape[0] - 1
+        )
+        # Zero-copy view; the scalar path indexes it with numpy fancy indexing.
+        self._cov_np = self._cov_matrix.numpy()
 
     def _get_array_hash(self, X, Y, Z):
         """Hash a (X, Y, Z) CI test triple using column indices only.
@@ -149,6 +207,9 @@ class ParCorrGPU(CIT_Base):
         self.n_tests += 1
         if condition_set is None:
             condition_set = []
+        _check_index(X, "X")
+        _check_index(Y, "Y")
+        _check_condition_set(condition_set)
 
         cache_key = self._get_array_hash(X, Y, condition_set)
         cache_key = f"{self.method}-{cache_key}"
@@ -167,7 +228,16 @@ class ParCorrGPU(CIT_Base):
             val = self._compute_parcorr_on(data_clean, X, Y, condition_set)
             pval = self._analytic_pvalue(val, condition_set, n_override=n_valid)
         else:
-            val = self._compute_parcorr(X, Y, condition_set)
+            val = None
+            if (
+                self._method == "precision"
+                and self._cov_np is not None
+                and _is_index(X)
+                and _is_index(Y)
+            ):
+                val = self._compute_parcorr_precision(X, Y, condition_set)
+            if val is None:
+                val = self._compute_parcorr(X, Y, condition_set)
             pval = self._analytic_pvalue(val, condition_set)
 
         self.pvalue_cache[combined_hash] = pval, val
@@ -196,6 +266,83 @@ class ParCorrGPU(CIT_Base):
         # Pearson correlation of residuals
         val = self._pearson_corr(x_resid.squeeze(), y_resid.squeeze())
         return val.item()
+
+    def _compute_parcorr_precision(self, X, Y, condition_set):
+        """Partial correlation read off the cached covariance matrix.
+
+        The estimator ``_batch_test_precision`` uses — invert the (2 + |Z|)
+        sub-covariance and take ``-P01 / sqrt(P00 * P11)`` — applied to a single
+        test, so a scalar call costs one small inversion rather than an OLS
+        solve over all T rows.
+
+        Returns ``None`` when the partial correlation is not numerically
+        determined, leaving the caller to fall back to the OLS path rather than
+        returning a wrong number. ``np.linalg.inv`` raising is not a sufficient
+        test: a sub-covariance can be rank-deficient to working precision, invert
+        without complaint, and yield a plausible-looking but badly wrong rho (or
+        one far outside [-1, 1], which ``_analytic_pvalue`` would then clip to 1
+        and report as p = 0). The conditioning of a covariance is roughly that of
+        the data squared, so the reciprocal-condition test below is the check
+        that actually decides whether the inverse can be trusted.
+        Column order is canonicalized to match ``_get_array_hash``'s cache-key
+        equivalence (``X``/``Y`` sorted, ``condition_set`` sorted) before any
+        arithmetic. ``eigvalsh`` is permutation-invariant mathematically but
+        not bit-for-bit in floating point, so two calls the cache treats as the
+        same test could otherwise evaluate the conditioning check on
+        differently-ordered — and therefore not bit-identical — matrices. That
+        matters exactly at the ``_RCOND`` boundary: measured case, the same
+        data's reciprocal condition varied from 9.99997e-11 to 9.99998e-11
+        across the four ``(X, Y)``/``Z`` orderings of one semantic test, a
+        difference of about 1 part in 1e5 — enough that a different BLAS build
+        landing a hair on the other side of the cutoff for only one ordering
+        would let a cache-equivalent query accept on one call and decline (to
+        the very different `method="ols"` value) on another.
+        """
+        x, y = sorted((int(X), int(Y)))
+        z = sorted(int(i) for i in condition_set)
+        idx = np.array([x, y] + z, dtype=np.intp)
+        sub = self._cov_np[np.ix_(idx, idx)]
+
+        # Each `not (... )` also rejects NaN, which compares False either way.
+        diag = np.diag(sub)
+        if not (diag > 0).all():
+            return None  # constant, negative or NaN variance
+
+        scale = np.sqrt(diag)
+        if len(condition_set) == 0:
+            return float(np.clip(sub[0, 1] / (scale[0] * scale[1]), -1.0, 1.0))
+
+        # Work in the correlation scaling: identical partial correlation, but
+        # unit-invariant, so one threshold is meaningful for any input.
+        corr = sub / scale / scale[:, None]
+
+        # Reciprocal condition number of the correlation-scaled sub-covariance.
+        # A Cholesky-pivot test was tried first but rejected: the smallest
+        # pivot depends on elimination order, which is [X, Y] + condition_set
+        # here — a set whose *sorted* form is the cache key. Two callers
+        # passing the same conditioning set in a different order would then
+        # collide on one cache entry while the pivot test disagreed on whether
+        # to trust the inverse. Measured case: reciprocal condition 4e-18
+        # (should decline) with a pivot test of 3.6e-4 (would accept, and did,
+        # returning rho = -0.17 against a true -0.97) for one ordering, while a
+        # permutation of the same conditioning set correctly declined.
+        # eigvalsh is invariant to the ordering of condition_set by construction.
+        eig = np.linalg.eigvalsh(corr)
+        if not (eig[0] > 0 and eig[0] / eig[-1] > _RCOND):
+            return None
+
+        try:
+            prec = np.linalg.inv(corr)
+        except np.linalg.LinAlgError:
+            return None
+        denom = prec[0, 0] * prec[1, 1]
+        if not (prec[0, 0] > 0 and prec[1, 1] > 0 and denom < np.inf):
+            return None
+
+        rho = -prec[0, 1] / np.sqrt(denom)
+        if not (abs(rho) <= 1.0 + 1e-8):
+            return None
+        return float(np.clip(rho, -1.0, 1.0))
 
     def _standardize(self, v):
         """Standardize tensor along sample dimension (dim=0)."""
