@@ -27,6 +27,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `examples/regime_discovery.ipynb` now seeds each synthetic dataset independently
+  (`np.random.default_rng`), reports detector comparisons as mean ± std across
+  multiple seeds instead of a single misleading run, degrades gracefully when the
+  optional `hmmlearn` dependency is absent, and documents PELT's `signal="volatility"`
+  option (it is not limited to mean shifts).
 * `sensitivity_analysis()` reports why it cannot run instead of raising (`reason`, `stats`).
 * `routed_deconfound(..., keep_undirected=True, pervasive_base="tetrad")` works instead of raising `NotImplementedError`.
 
