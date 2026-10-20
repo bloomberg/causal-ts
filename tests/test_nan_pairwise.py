@@ -41,9 +41,9 @@ def _all_ci_tests(data):
         KCIGPU,
         RCOTGPU,
         CMIknnGPU,
+        LinSigCIGPU,
         ParCorrGPU,
         PartialCorr,
-        SigKCIGPU,
         SplitKCIGPU,
     )
 
@@ -56,7 +56,7 @@ def _all_ci_tests(data):
         ("parcorr", PartialCorr(data=data)),
         ("splitkci", SplitKCIGPU(data, device=DEVICE, sig_samples=20)),
         ("dfcit", DFCITGPU(data, device=DEVICE, n_perm=20)),
-        ("sigkci", SigKCIGPU(data, device=DEVICE, sig_samples=20)),
+        ("linsig", LinSigCIGPU(data, device=DEVICE)),
         ("gcmi", GCMIGPU(data, device=DEVICE)),
     ]
 

@@ -40,7 +40,7 @@ cli
   </div>
   <div class="ct-stat-div"></div>
   <div class="ct-stat">
-    <span class="ct-stat-num">8</span>
+    <span class="ct-stat-num">13</span>
     <span class="ct-stat-label">CI Tests</span>
   </div>
   <div class="ct-stat-div"></div>
@@ -118,7 +118,7 @@ Constraint-based skeleton + neural L0-gated refinement (Hard Concrete). Orientat
 :link-type: doc
 :shadow: sm
 
-From instant linear (`ParCorrGPU`) to distribution-free (`DFCIT`) and signature kernel (`SigKCI`) — unified interface on CUDA, MPS, or CPU.
+From instant linear (`ParCorrGPU`) to distribution-free (`DFCIT`) and linear-signature kernel (`LinSig`) — unified interface on CUDA, MPS, or CPU.
 :::
 
 :::{grid-item-card} {fas}`chart-line;1.1em;sd-text-primary` &nbsp; Effect Estimation

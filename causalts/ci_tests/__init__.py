@@ -14,12 +14,19 @@ _LAZY_REGISTRY = {
     "parcorr": ("causalts.ci_tests.parcorr", "PartialCorr"),
     "splitkci": ("causalts.ci_tests.splitkci_gpu", "SplitKCIGPU"),
     "dfcit": ("causalts.ci_tests.dfcit_gpu", "DFCITGPU"),
+    "linsig": ("causalts.ci_tests.linsig_gpu", "LinSigCIGPU"),
+    # Deprecated alias for "linsig"; warns on construction.
     "sigkci": ("causalts.ci_tests.sigkci_gpu", "SigKCIGPU"),
     "gcmi": ("causalts.ci_tests.gcmi_gpu", "GCMIGPU"),
     "cmiknn-mixed-gpu": ("causalts.ci_tests.cmiknn_mixed_gpu", "CMIknnMixedGPU"),
     "gsquared": ("causalts.ci_tests.causallearn_tests", "CausalLearnGsq"),
     "fisherz": ("causalts.ci_tests.causallearn_tests", "CausalLearnFisherZ"),
     "chisq": ("causalts.ci_tests.causallearn_tests", "CausalLearnChisq"),
+    "gcm": ("causalts.ci_tests.gcm", "GCM"),
+    "wgcm": ("causalts.ci_tests.wgcm", "WGCM"),
+    "pcm": ("causalts.ci_tests.pcm", "PCM"),
+    "raft": ("causalts.ci_tests.raft", "RAFTCI"),
+    "rift": ("causalts.ci_tests.raft", "RIFTCI"),
 }
 
 

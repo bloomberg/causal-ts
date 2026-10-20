@@ -72,10 +72,10 @@
 
 ---
 
-## SigKCIGPU
+## LinSigCIGPU
 
 ```{eval-rst}
-.. autoclass:: causalts.ci_tests.sigkci_gpu.SigKCIGPU
+.. autoclass:: causalts.ci_tests.linsig_gpu.LinSigCIGPU
    :members:
    :show-inheritance:
 ```
@@ -97,5 +97,48 @@
 ```{eval-rst}
 .. autoclass:: causalts.ci_tests.cmiknn_mixed_gpu.CMIknnMixedGPU
    :members:
+   :show-inheritance:
+```
+
+---
+
+## GCM
+
+```{eval-rst}
+.. autoclass:: causalts.ci_tests.gcm.GCM
+   :members:
+   :show-inheritance:
+```
+
+---
+
+## WGCM
+
+```{eval-rst}
+.. autoclass:: causalts.ci_tests.wgcm.WGCM
+   :members:
+   :show-inheritance:
+```
+
+---
+
+## PCM
+
+```{eval-rst}
+.. autoclass:: causalts.ci_tests.pcm.PCM
+   :members:
+   :show-inheritance:
+```
+
+---
+
+## RAFT / RIFT
+
+```{eval-rst}
+.. autoclass:: causalts.ci_tests.raft.RAFTCI
+   :members:
+   :show-inheritance:
+
+.. autoclass:: causalts.ci_tests.raft.RIFTCI
    :show-inheritance:
 ```

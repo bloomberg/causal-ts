@@ -20,7 +20,7 @@ Full API documentation auto-generated from source docstrings (NumPy format).
 :link-type: doc
 :shadow: md
 
-`ParCorrGPU` · `SplitKCIGPU` · `DFCITGPU` · `KCIGPU` · `SigKCIGPU` · `RCOTGPU` · `CMIknnGPU` · `GCMIGPU` · `StratifiedCIT` · `CMIknnMixedGPU`
+`ParCorrGPU` · `SplitKCIGPU` · `DFCITGPU` · `KCIGPU` · `LinSigCIGPU` · `RCOTGPU` · `CMIknnGPU` · `GCMIGPU` · `GCM` · `WGCM` · `PCM` · `RAFTCI` · `RIFTCI` · `StratifiedCIT` · `CMIknnMixedGPU`
 :::
 
 :::{grid-item-card} {fas}`chart-line;1.2em;sd-text-primary` &nbsp; Effect Estimation
