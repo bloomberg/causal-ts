@@ -118,7 +118,7 @@ learn, inspire, and create. Any contributions you make are **greatly
 appreciated**. For detailed contributing guidelines, please see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Contributors ✨
+## Contributors
 
 Thanks goes to these wonderful people
 ([emoji key](https://allcontributors.org/docs/en/emoji-key)):
