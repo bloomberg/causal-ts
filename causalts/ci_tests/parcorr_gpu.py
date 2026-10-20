@@ -28,8 +28,10 @@ def _data_fingerprint(data):
 # Distinguishes builds whose cached statistic differs numerically, so a
 # pvalue_cache persisted by one build misses rather than being reused by
 # another. "cov64" marks the float64 covariance; earlier builds used float32,
-# whose statistics differ by ~1e-8. Bump on any numeric change to the estimator.
-_STAT_VERSION = "cov64"
+# whose statistics differ by ~1e-8. "guard" marks the batched conditioning
+# guard (#74), which changed the batch statistic for ill-conditioned tests.
+# Bump on any numeric change to the estimator.
+_STAT_VERSION = "cov64-guard"
 
 # Reciprocal-condition floor for the correlation-scaled sub-covariance. Below
 # this the inverse is dominated by rounding and the partial correlation is not
@@ -236,6 +238,8 @@ class ParCorrGPU(CIT_Base):
                 and _is_index(Y)
             ):
                 val = self._compute_parcorr_precision(X, Y, condition_set)
+                if val is None:
+                    val = self._compute_parcorr_canonical(X, Y, condition_set)
             if val is None:
                 val = self._compute_parcorr(X, Y, condition_set)
             pval = self._analytic_pvalue(val, condition_set)
@@ -266,6 +270,26 @@ class ParCorrGPU(CIT_Base):
         # Pearson correlation of residuals
         val = self._pearson_corr(x_resid.squeeze(), y_resid.squeeze())
         return val.item()
+
+    def _compute_parcorr_canonical(self, X, Y, condition_set):
+        """``_compute_parcorr`` in ``_get_array_hash``'s canonical column order.
+
+        The OLS fallback for tests the precision guard declines. Float32
+        ``lstsq`` on these rank-deficient inputs is order-sensitive (up to
+        ~0.06 in rho between orderings of one test), so ordering like the
+        cache key keeps cache-equivalent calls, scalar or batched, on one
+        answer. Clipped because float32 rounding can land a near-collinear
+        correlation at 1 + 1.2e-7. Runs on CPU under MPS, which has no
+        ``lstsq``.
+        """
+        x, y = sorted((int(X), int(Y)))
+        z = sorted(int(i) for i in condition_set)
+        if self.data_torch.device.type == "mps":
+            cols = self.data_torch[:, [x, y] + z].cpu()
+            val = self._compute_parcorr_on(cols, 0, 1, list(range(2, 2 + len(z))))
+        else:
+            val = self._compute_parcorr(x, y, z)
+        return float(np.clip(val, -1.0, 1.0))
 
     def _compute_parcorr_precision(self, X, Y, condition_set):
         """Partial correlation read off the cached covariance matrix.
@@ -469,8 +493,11 @@ class ParCorrGPU(CIT_Base):
     def _batch_conditioning_guard(self, sub_cov):
         """Vectorized form of the scalar path's conditioning guard.
 
-        Returns a boolean trust mask: True where inverting this
-        sub-covariance can be believed. Mirrors ``_compute_parcorr_precision``
+        Returns ``(trust, near)`` boolean masks: ``trust`` is True where
+        inverting this sub-covariance can be believed; ``near`` marks rows
+        whose reciprocal condition is within 100x of ``_RCOND``, where torch
+        and NumPy rounding can land on opposite sides of the cutoff, so the
+        caller re-decides them with the scalar guard itself. Mirrors ``_compute_parcorr_precision``
         (#73) entry for entry — reject non-positive or non-finite variance
         first, then, for ``k > 2``, require the reciprocal condition of the
         correlation-scaled matrix to stay above ``_RCOND`` via ``eigvalsh``.
@@ -490,55 +517,15 @@ class ParCorrGPU(CIT_Base):
         diag = torch.diagonal(sub_cov, dim1=-2, dim2=-1)
         ok = (diag > 0).all(dim=-1) & torch.isfinite(sub_cov).all(dim=(-1, -2))
         if k == 2:
-            return ok
+            return ok, torch.zeros_like(ok)
         eye = torch.eye(k, dtype=sub_cov.dtype, device=sub_cov.device)
         sub = torch.where(ok[:, None, None], sub_cov, eye)
         scale = torch.sqrt(torch.diagonal(sub, dim1=-2, dim2=-1))
         corr = sub / scale[:, :, None] / scale[:, None, :]
         eig = torch.linalg.eigvalsh(corr)
-        return ok & (eig[:, 0] > 0) & (eig[:, 0] / eig[:, -1] > _RCOND)
-
-    def _ols_rho(self, tests, batch_idx, T):
-        """Batched OLS partial correlations for ``batch_idx`` (one |Z| group).
-
-        The tensor body of ``_batch_test_ols`` lifted out so the precision
-        path's conditioning fallback (issue #74) recomputes declined tests
-        with exactly the estimator ``method="ols"`` — and the legacy OLS
-        entry point itself — already uses, rather than a second
-        implementation of residualization drifting beside it. All
-        ``batch_idx`` must share one conditioning-set size (both callers
-        group by ``d``).
-        """
-        B = len(batch_idx)
-        x_cols = torch.tensor([tests[idx][0] for idx in batch_idx], dtype=torch.long)
-        y_cols = torch.tensor([tests[idx][1] for idx in batch_idx], dtype=torch.long)
-        # (T, B) -> (B, T, 1)
-        x_batch = self.data_torch[:, x_cols].T.unsqueeze(-1)
-        y_batch = self.data_torch[:, y_cols].T.unsqueeze(-1)
-
-        d = len(tests[batch_idx[0]][2])
-        if d > 0:
-            # Flatten all conditioning columns, gather, reshape
-            z_flat = torch.tensor(
-                [c for idx in batch_idx for c in tests[idx][2]], dtype=torch.long
-            )
-            # (T, B*d) -> (B, d, T) -> (B, T, d)
-            z_batch = self.data_torch[:, z_flat].T.reshape(B, d, T).permute(0, 2, 1)
-
-        # Standardize along T dimension (dim=1)
-        x_batch = self._batch_standardize(x_batch)
-        y_batch = self._batch_standardize(y_batch)
-
-        if d > 0:
-            z_batch = self._batch_standardize(z_batch)
-            x_resid = self._batch_residualize(z_batch, x_batch)
-            y_resid = self._batch_residualize(z_batch, y_batch)
-        else:
-            x_resid = x_batch
-            y_resid = y_batch
-
-        # Batched Pearson correlation
-        return self._batch_pearson_corr(x_resid.squeeze(-1), y_resid.squeeze(-1))
+        rcond = eig[:, 0] / eig[:, -1]
+        near = ok & (rcond > _RCOND / 100) & (rcond < _RCOND * 100)
+        return ok & (eig[:, 0] > 0) & (rcond > _RCOND), near
 
     def _guarded_precision_chunk(self, tests, chunk_idx, T):
         """Evaluate one uniform-|Z| chunk: guarded precision rho, OLS fallback.
@@ -549,10 +536,15 @@ class ParCorrGPU(CIT_Base):
         rank-deficient sub-covariance, which ``_analytic_pvalue`` then clips
         toward p = 0). The guard runs first; every test it declines — or
         whose inverse fails the scalar path's post-inversion checks — is
-        recomputed through ``_ols_rho``, exactly what ``__call__`` does with
-        ``_compute_parcorr`` when the scalar guard returns None. Inverting
-        only identity-replaced matrices keeps an exactly singular input from
-        raising inside ``torch.linalg.inv``.
+        recomputed through ``_compute_parcorr_canonical``, exactly what
+        ``__call__`` does when the scalar guard returns None, so both entry
+        points return the same statistic for a declined test. A batched OLS
+        would not: float32
+        batched and single-matrix ``lstsq`` disagree by up to ~0.3 in rho on
+        these rank-deficient inputs. Declines are rare, so the per-test loop
+        costs nothing measurable. Inverting only identity-replaced matrices
+        keeps an exactly singular input from raising inside
+        ``torch.linalg.inv``.
 
         Row order is canonicalized the way ``_get_array_hash`` sorts the
         cache key (X/Y pair first, then Z), for the same reason the scalar
@@ -582,7 +574,7 @@ class ParCorrGPU(CIT_Base):
         # Extract sub-covariance matrices: (B, k, k)
         sub_cov = self._cov_matrix[idx_array[:, :, None], idx_array[:, None, :]]
 
-        trust = self._batch_conditioning_guard(sub_cov)
+        trust, near = self._batch_conditioning_guard(sub_cov)
         if k == 2:
             rho = sub_cov[:, 0, 1] / torch.sqrt(sub_cov[:, 0, 0] * sub_cov[:, 1, 1])
         else:
@@ -595,6 +587,7 @@ class ParCorrGPU(CIT_Base):
             prec = torch.linalg.inv(safe)
             denom = prec[:, 0, 0] * prec[:, 1, 1]
             rho = -prec[:, 0, 1] / torch.sqrt(denom)
+            pre = trust
             # The scalar path's post-inversion checks, elementwise (NaN
             # comparisons read False, so a poisoned row declines as well).
             trust = (
@@ -604,14 +597,23 @@ class ParCorrGPU(CIT_Base):
                 & (denom < float("inf"))
                 & (rho.abs() <= 1.0 + 1e-8)
             )
+            # Same cutoff hazard for the |rho| check as for the rcond one, and
+            # this raw-covariance inverse can fail where the scalar
+            # correlation-scaled one does not (e.g. overflow at extreme scale).
+            near = near | (rho.abs() > 1.0 - 1e-6) | (pre & ~trust)
 
-        vals_np = rho.detach().cpu().numpy()
+        vals_np = rho.detach().cpu().numpy().astype(np.float64)
         trust_np = trust.cpu().numpy()
-        if not trust_np.all():
-            declined = [chunk_idx[j] for j in np.flatnonzero(~trust_np)]
-            vals_np = vals_np.copy()
-            vals_np[~trust_np] = self._ols_rho(tests, declined, T).cpu().numpy()
+        near_np = near.cpu().numpy()
+        for j in np.flatnonzero(~trust_np | near_np):
+            X, Y, cond = tests[chunk_idx[j]]
+            val = self._compute_parcorr_precision(X, Y, cond) if near_np[j] else None
+            if val is None:
+                val = self._compute_parcorr_canonical(X, Y, cond)
+            vals_np[j] = val
 
+        # Clip before the exact-one check, as `__call__` does.
+        vals_np = np.clip(vals_np, -1.0, 1.0)
         vals_clamped = np.clip(vals_np, -1 + 1e-15, 1 - 1e-15)
 
         deg_f = T - d - 2
@@ -623,7 +625,7 @@ class ParCorrGPU(CIT_Base):
             exact_one = np.abs(np.abs(vals_np) - 1.0) <= sys.float_info.min
             pvals[exact_one] = 0.0
 
-        return pvals, vals_clamped
+        return pvals, vals_np
 
     def _batch_test_fast(self, tests, max_batch_size=50_000):
         """Fast path: skip all SHA1 hashing, caching, and deduplication.
@@ -700,7 +702,44 @@ class ParCorrGPU(CIT_Base):
                 batch_idx = indices[start : start + max_batch_size]
                 B = len(batch_idx)
 
-                vals = self._ols_rho(tests, batch_idx, T)
+                # Vectorized tensor construction via advanced indexing
+                x_cols = torch.tensor(
+                    [tests[idx][0] for idx in batch_idx], dtype=torch.long
+                )
+                y_cols = torch.tensor(
+                    [tests[idx][1] for idx in batch_idx], dtype=torch.long
+                )
+                # (T, B) -> (B, T, 1)
+                x_batch = self.data_torch[:, x_cols].T.unsqueeze(-1)
+                y_batch = self.data_torch[:, y_cols].T.unsqueeze(-1)
+
+                if d > 0:
+                    # Flatten all conditioning columns, gather, reshape
+                    z_flat = torch.tensor(
+                        [c for idx in batch_idx for c in tests[idx][2]],
+                        dtype=torch.long,
+                    )
+                    # (T, B*d) -> (B, d, T) -> (B, T, d)
+                    z_batch = (
+                        self.data_torch[:, z_flat].T.reshape(B, d, T).permute(0, 2, 1)
+                    )
+
+                # Standardize along T dimension (dim=1)
+                x_batch = self._batch_standardize(x_batch)
+                y_batch = self._batch_standardize(y_batch)
+
+                if d > 0:
+                    z_batch = self._batch_standardize(z_batch)
+                    x_resid = self._batch_residualize(z_batch, x_batch)
+                    y_resid = self._batch_residualize(z_batch, y_batch)
+                else:
+                    x_resid = x_batch
+                    y_resid = y_batch
+
+                # Batched Pearson correlation
+                vals = self._batch_pearson_corr(
+                    x_resid.squeeze(-1), y_resid.squeeze(-1)
+                )
 
                 # Vectorized p-value computation
                 vals_np = vals.cpu().numpy()
