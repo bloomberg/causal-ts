@@ -82,10 +82,16 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install linting tools
-        run: pip install black==24.* isort flake8 Flake8-pyproject
+        run: pip install black==24.* isort flake8 Flake8-pyproject "jupytext>=1.16"
       - name: black
         run: black --check .
       - name: isort
         run: isort --check .
       - name: flake8
         run: flake8 .
+      - name: jupytext (paired notebooks in sync)
+        run: |
+          jupytext --sync examples/mixed_data.ipynb examples/cdnots_or_cdnots_plus.ipynb
+          git diff --exit-code -- \
+            examples/mixed_data.ipynb examples/mixed_data.py \
+            examples/cdnots_or_cdnots_plus.ipynb examples/cdnots_or_cdnots_plus.py

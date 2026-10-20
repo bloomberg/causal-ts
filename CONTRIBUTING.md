@@ -37,6 +37,35 @@ We expect new pull requests to include tests for any affected behavior, and, as
 we follow semantic versioning, we may reserve breaking changes until the next
 major version release.
 
+## Notebooks (Jupytext)
+
+Example notebooks can be paired with a text representation using
+[Jupytext](https://github.com/jupytext/jupytext), so code changes show up as
+reviewable `.py` diffs instead of opaque notebook JSON. The trial pairs
+`examples/mixed_data.ipynb` and `examples/cdnots_or_cdnots_plus.ipynb`; the
+remaining notebooks are intentionally unpaired for now.
+
+- **Editing**: edit either side, then run
+  `jupytext --sync examples/<name>.ipynb` and commit both files. Do not run
+  `isort` or `black` on the paired `.py` mirrors: they mirror the notebook
+  source verbatim, and reordering imports across `# %%` cell markers would
+  corrupt the notebook on the next sync.
+- **Outputs and widget state** live only in the `.ipynb`: Read the Docs
+  renders the committed notebooks (`nb_execution_mode = "off"` in
+  `docs/conf.py`), and the `.py` mirror never carries outputs, so output churn
+  stays out of review diffs. `jupytext --sync` preserves outputs even when the
+  `.py` side changed.
+- **Lint**: paired mirrors are excluded from black/isort and skip a few
+  flake8 codes (`examples/*.py` in `pyproject.toml`) for the same reason
+  `lint.yml` exempts notebook cells themselves. Name/syntax checks (`F`
+  codes) still apply.
+- **CI**: the `python-lint` job re-runs `jupytext --sync` and fails if a
+  committed pair has drifted.
+- **Pairing a new notebook**:
+  `jupytext --set-formats ipynb,py:percent <notebook>.ipynb`, then
+  `jupytext --sync <notebook>.ipynb`, then add it to the sync check in
+  `.github/workflows/lint.yml`.
+
 ## Other Ways to Contribute
 
 We welcome anyone that wants to contribute to `causal-ts` to triage and

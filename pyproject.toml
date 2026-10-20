@@ -69,6 +69,7 @@ dev = [
   "isort>=5.12",
   "flake8>=6.0",
   "ipykernel>=6.0",
+  "jupytext>=1.16",
 ]
 
 [tool.setuptools.packages.find]
@@ -85,10 +86,14 @@ causalts = ["py.typed", "skills/*/SKILL.md", "skills/*/agents/*"]
 [tool.black]
 line-length = 88
 target-version = ['py312']
+# Jupytext mirrors of example notebooks (examples/*.py) mirror the notebook
+# source verbatim; the notebooks themselves are lint-exempt (see lint.yml).
+extend-exclude = "examples/.*\\.py$"
 
 [tool.isort]
 profile = "black"
 line_length = 88
+skip_glob = ["examples/*"]
 
 [tool.flake8]
 max-line-length = 88
@@ -105,7 +110,12 @@ exclude = [
   "venv",
 ]
 # __init__.py modules re-export names to form the public API.
-per-file-ignores = ["__init__.py:F401"]
+# examples/*.py are Jupytext notebook mirrors: E4xx/E7xx/E2xx come from
+# notebook cell structure and ordering; F codes (syntax/name errors) still run.
+per-file-ignores = [
+  "__init__.py:F401",
+  "examples/*.py:E401,E402,E701,E702,E221,E231",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
