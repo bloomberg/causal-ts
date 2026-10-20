@@ -28,9 +28,11 @@ Causal-TS is a Python framework for causal discovery in time series data. It imp
 | `gcmi` | Monotone nonlinear | instant |
 | `splitkci` | Nonlinear (kernel) | fast |
 | `rcot` | Nonlinear (RFF) | fast |
-| `sigkci` | Path-space (signature) | moderate |
+| `linsig` | Path-space (linear signature) | moderate |
 | `kci` | Nonlinear (kernel) | slow |
 | `dfcit` | Distribution-free | moderate |
+| `gcm` / `wgcm` / `pcm` | Residual score (regression) | fast |
+| `raft` / `rift` | Random-feature F-test (regression) | fast |
 | `cmiknn-gpu` | Nonparametric (k-NN) | slow |
 
 

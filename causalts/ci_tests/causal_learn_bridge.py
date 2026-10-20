@@ -31,6 +31,7 @@ from .cmiknn_gpu import CMIknnGPU
 from .dfcit_gpu import DFCITGPU
 from .gcmi_gpu import GCMIGPU
 from .kci_gpu import KCIGPU
+from .linsig_gpu import LinSigCIGPU
 from .parcorr_gpu import ParCorrGPU
 from .pyRcot_gpu import RCOTGPU
 from .sigkci_gpu import SigKCIGPU
@@ -44,7 +45,8 @@ _REGISTRY = {
     "rcot_gpu": RCOTGPU,
     "cmiknn_gpu": CMIknnGPU,
     "gcmi_gpu": GCMIGPU,
-    "sigkci_gpu": SigKCIGPU,
+    "linsig_gpu": LinSigCIGPU,
+    "sigkci_gpu": SigKCIGPU,  # deprecated alias for linsig_gpu
 }
 
 

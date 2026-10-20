@@ -13,10 +13,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 * `corr_table()` — APA-style correlation table (r, stars, M/SD, CI, footnote), prints via `_repr_html_`/`__repr__`.
 * `pairs_panel()` — scatterplot matrix (histogram+KDE diagonal, scatter+fit, correlation text), colorblind-safe palette.
+* CI tests `gcm`, `wgcm`, `pcm` (residual-score) and `raft`, `rift` (random-feature F-tests).
 * How an unoriented (`o-o`) contemporaneous edge is rendered is now a post-discovery choice, not a hardcoded one: `result.to_binary(undirected=, conflict=)`, the lossless `result.to_marks()`, `result.plot(undirected=)`, `result.undirected_policy`, and the same knobs on `cdnots_to_tigramite_graph()` / `tigramite_graph_to_binary()`. Engine defaults are unchanged — `cg_tig` is bit-identical. `evaluate_graph()` gains `*_lag0`, `*_lag0_adj` and `*_lagpos` metric groups.
 
 ### Changed
 
+* `sigkci` / `SigKCIGPU` renamed to `linsig` / `LinSigCIGPU` (old names deprecated). Results
+  change: kernel-scaled ridge (`ridge`, replaces `lamda`), no spurious lag-2 self-loops.
+* `RCOTGPU` defaults: `num_f2=min(25, floor(sqrt(T)))`, `n_avg=1`, `seed=42`
+  (was `25, 5, None`).
 * `ParCorrGPU.__call__` now reads partial correlation off the cached covariance
   matrix under `method="precision"` (default) instead of solving OLS every call —
   5.8x faster. Only benefits scalar callers (Cedar, `run_cdnots(stable=False)`);
@@ -27,6 +32,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `CIT_Base.set_data` wrote buffered cache rows into the new data's cache file.
+* `RCOTGPU` p-values depended on the order of the conditioning set.
 * `examples/regime_discovery.ipynb` now seeds each synthetic dataset independently
   (`np.random.default_rng`), reports detector comparisons as mean ± std across
   multiple seeds instead of a single misleading run, degrades gracefully when the

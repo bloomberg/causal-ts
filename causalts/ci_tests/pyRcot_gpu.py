@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from scipy.stats import gamma
 
-from .cit_test import CIT_Base
+from .cit_test import CIT_Base, stable_seed
 
 
 def normalize_gpu(a):
@@ -62,12 +62,15 @@ def random_fourier_features(
         sigma = 1
 
     if w is None:
-        if seed is not None:
-            torch.manual_seed(seed)
+        # A local generator, not torch.manual_seed: a seeded call must not reset the
+        # process-wide RNG under other torch code. Draws stay on the CPU, so w and b
+        # equal those of the old global seeding.
+        gen = None if seed is None else torch.Generator().manual_seed(seed)
 
-        w = torch.randn((num_f, c), dtype=torch.double).to(device) / sigma
+        w = torch.randn((num_f, c), dtype=torch.double, generator=gen).to(device)
+        w = w / sigma
 
-        b = torch.rand(num_f, dtype=torch.double).to(device)
+        b = torch.rand(num_f, dtype=torch.double, generator=gen).to(device)
         b = 2 * pi * b.reshape(-1, 1)
         # b = 2 * pi * b.repeat_interleave(T,dim=0).reshape(-1,T)
     feat = np.sqrt(2) * (torch.cos(w @ x.T + b)).T
@@ -175,8 +178,9 @@ def RIT(
     Sta = Sta_perm(f_x, f_y, T, num_f2).item()
     if approx == "perm":
         Stas = []
+        gen = None if seed is None else torch.Generator().manual_seed(seed)
         for i in range(nperm):
-            perm = torch.randperm(T)
+            perm = torch.randperm(T, generator=gen)
             Sta_p = Sta_perm(f_x[perm, :], f_y, T, num_f2)
             Stas.append(Sta_p)
         Stas = np.array(torch.tensor(Stas).cpu())
@@ -326,8 +330,9 @@ def rcot(
     if approx == "perm":
         Sta = Sta_perm(res_x, res_y, T, num_f2).item()
         Stas = []
+        gen = None if seed is None else torch.Generator().manual_seed(seed)
         for i in range(nperm):
-            perm = torch.randperm(T)
+            perm = torch.randperm(T, generator=gen)
             Sta_p = Sta_perm(res_x[perm], res_y, T, num_f2)
             Stas.append(Sta_p)
         # Stas = np.array(Stas)
@@ -373,12 +378,12 @@ class RCOTGPU(CIT_Base):
         self,
         data=None,
         num_f=25,
-        num_f2=25,
+        num_f2=None,
         approx="hbe",
         nperm=200,
         max_sample_4_std_es=500,
-        seed=None,
-        n_avg=5,
+        seed=42,
+        n_avg=1,
         device=None,
         **kwargs,
     ):
@@ -391,20 +396,31 @@ class RCOTGPU(CIT_Base):
         num_f : int, optional
             Number of Fourier features for Z. Default is 25.
         num_f2 : int, optional
-            Number of Fourier features for X and Y. Default is 25.
+            Number of Fourier features for X and Y. Default ``None`` uses
+            ``min(25, floor(sqrt(T)))`` (at least 2): the statistic estimates a
+            ``num_f2**2``-square covariance from ``T`` rows, which is rank-deficient
+            once ``num_f2**2 > T``, so the cap changes nothing from T=625 up. At
+            T=50 a fixed 25 decomposes a 625x625 covariance of rank at most 50; on
+            a d=30 CDNOTS run that measured 29x the runtime of ``num_f2=10``.
+            Resolved on every call from the rows actually tested, so it follows
+            data assigned after construction and the pairwise-complete subset
+            used when the data has NaNs.
         approx : str, optional
             Approximation method ('hbe', 'sw', or 'perm'). Default is 'hbe'.
         nperm : int, optional
             Number of permutations for permutation testing. Default is 200.
         max_sample_4_std_es : int, optional
             Sample size for std estimation. Default is 500.
-        seed : int, optional
-            Base random seed for ensemble draws. Default is None (fully random
-            draws each call, which is appropriate for n_avg>1).
+        seed : int or None, optional
+            Seed for the Fourier features and, with ``approx="perm"``, the
+            permutations. Each test derives its own seed from this value and its
+            data, so tests get independent draws while the same data gives the
+            same p-value on every run. Default is 42. ``None`` draws fresh ones on
+            every call (not reproducible).
         n_avg : int, optional
             Number of independent RFF draws whose p-values are combined via
-            harmonic mean. Reduces variance caused by RFF randomness at small
-            T. Default is 5. Set to 1 to match original single-draw behaviour.
+            harmonic mean, applied only when T <= 300. Default is 1 (a single
+            draw); averaging costs ``n_avg`` times the runtime.
         device : str, optional
             Device to use ('cuda' or 'cpu'). Default is None.
         """
@@ -425,9 +441,11 @@ class RCOTGPU(CIT_Base):
         self.nperm = nperm  # for perm method only
         self.max_sample_4_std_es = max_sample_4_std_es
         rcot_backend = kwargs.get("rcot_backend", "python")
+        xy = "auto" if num_f2 is None else num_f2
         self.param_hash = (
-            f"T{data.shape[0]}-z{num_f}-xy{num_f2}-{approx}-{nperm}-"
-            f"navg{self.n_avg}-bknd_{rcot_backend}"
+            f"T{data.shape[0]}-z{num_f}-xy{xy}-{approx}-{nperm}-"
+            f"navg{self.n_avg}-seed{seed}-bknd_{rcot_backend}"
+            f"-ms{max_sample_4_std_es}-min{self._min_samples}-c2"
         )
         self._data = data
 
@@ -443,6 +461,13 @@ class RCOTGPU(CIT_Base):
             self.data_torch = torch.Tensor(np.asarray(d).copy()).to(self.device)
         else:
             self._has_nan = False
+
+    def _num_f2_for(self, T):
+        """X/Y Fourier features for ``T`` rows: the explicit value, or the
+        ``min(25, floor(sqrt(T)))`` cap (at least 2) when ``num_f2`` is None."""
+        if self.num_f2 is not None:
+            return self.num_f2
+        return max(2, min(25, int(T**0.5)))
 
     def __call__(self, X, Y, condition_set=None):
         """Perform the RCOT test for given variables.
@@ -465,6 +490,10 @@ class RCOTGPU(CIT_Base):
         """
 
         self.n_tests += 1
+        # Same column order as the cache key: the seeded random features are
+        # assigned by position, so [2, 3] and [3, 2] must build the same Z.
+        if condition_set is not None and len(condition_set) > 0:
+            condition_set = sorted(condition_set)
         cache_key = self._get_array_hash(X, Y, condition_set)
         cache_key = f"{self.method}-{cache_key}"
         combined_hash = cache_key, self.param_hash
@@ -492,7 +521,7 @@ class RCOTGPU(CIT_Base):
             y=data_t[:, Y],
             z=z,
             num_f=self.num_f,
-            num_f2=self.num_f2,
+            num_f2=self._num_f2_for(data_t.shape[0]),
             device=self.device,
             approx=self.approx,
             nperm=self.nperm,
@@ -504,9 +533,12 @@ class RCOTGPU(CIT_Base):
         # already stable, so a single draw is sufficient and much faster.
         T = data_t.shape[0]
         effective_n_avg = self.n_avg if T <= 300 else 1
+        # One reproducible draw per test: the seed is combined with the test's
+        # data hash, so tests do not all share a single (possibly poor) draw.
+        base_seed = None if self.seed is None else stable_seed(self.seed, cache_key)
 
         if effective_n_avg == 1:
-            p, stat = rcot(seed=self.seed, **rcot_kwargs)
+            p, stat = rcot(seed=base_seed, **rcot_kwargs)
         else:
             # Combine p-values from effective_n_avg independent RFF draws via the
             # harmonic mean (Wilson 2019, PNAS). Unlike arithmetic mean, the harmonic
@@ -515,7 +547,7 @@ class RCOTGPU(CIT_Base):
             # sharing the same data.
             ps, stat = [], None
             for i in range(effective_n_avg):
-                seed_i = None if self.seed is None else self.seed + i
+                seed_i = None if base_seed is None else base_seed + i
                 p_i, stat_i = rcot(seed=seed_i, **rcot_kwargs)
                 ps.append(max(p_i, 1e-300))  # guard against exact zero
                 if stat is None:
