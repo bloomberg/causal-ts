@@ -377,7 +377,7 @@ def skeleton_discovery(
                             and comb_idx >= max_combinations
                         ):
                             break
-                        p, stat = ci_test(x, y, S)
+                        p, stat = ci_test(x, y, list(S))
                         _update_strength(x, y, stat)
                         if return_pvals:
                             pvals.append((x, y, S, p))
@@ -412,7 +412,7 @@ def skeleton_discovery(
                             and comb_idx >= max_combinations
                         ):
                             break
-                        p, stat = ci_test(x, y, S)
+                        p, stat = ci_test(x, y, list(S))
                         _update_strength(x, y, stat)
                         if return_pvals:
                             pvals.append((x, y, S, p))
@@ -475,6 +475,9 @@ def skeleton_discovery_pervar(
     return_pvals=False,
     max_degree=None,
     num_lags=0,
+    *,
+    include_C: bool = False,
+    num_c_cols: int = 0,
 ) -> CausalGraph:
     """Per-variable PC skeleton discovery (CDNOTS+ phase 1).
 
@@ -508,6 +511,9 @@ def skeleton_discovery_pervar(
         Max conditioning dimension.
     num_lags : int
         Number of lags in embedding.
+    include_C, num_c_cols : bool, int
+        Screen the lag-0 C nodes (the last ``num_c_cols`` of each slice) as
+        candidate parents too. Off by default.
 
     Returns
     -------
@@ -549,16 +555,22 @@ def skeleton_discovery_pervar(
                     naive_remove_edge(nx, ny)
 
     # Per-variable skeleton: each variable j is processed independently
-    # with its own parent list, matching PCMCI+'s run_pc_stable. Only
-    # LAGGED parents (tau >= 1) are tested here; contemporaneous edges
-    # are handled in Phase 2 (MCI). Edge removals are deferred until ALL
-    # variables are processed so that each variable starts from the same
-    # initial graph.
+    # with its own parent list, matching PCMCI+'s run_pc_stable. LAGGED
+    # parents (tau >= 1) are tested here, and so are the lag-0 C nodes: C is
+    # exogenous (it can only be a cause), so it is screened with the past.
+    # Other contemporaneous edges are handled in Phase 2 (MCI). Edge removals
+    # are deferred until ALL variables are processed so that each variable
+    # starts from the same initial graph.
+    c_start = no_of_inst_var - num_c_cols if include_C else no_of_inst_var
 
-    # Cache initial LAGGED neighbors for each variable BEFORE any removals.
+    # Cache initial candidate parents for each variable BEFORE any removals.
     initial_parents = {}
     for j in range(no_of_inst_var):
         initial_parents[j] = [p for p in cg.neighbors(j) if p >= no_of_inst_var]
+        if j < c_start:
+            initial_parents[j] += [
+                p for p in cg.neighbors(j) if c_start <= p < no_of_inst_var
+            ]
 
     # Per-variable results: surviving parents after PC testing
     surviving_parents = {}
@@ -603,7 +615,11 @@ def skeleton_discovery_pervar(
 
                     p_val, stat = ci_test(parent, j, list(S))
                     if return_pvals:
-                        pvals.append((parent, j, S, p_val))
+                        # (effect, cause, cond, p), matching build_pvalue_matrix's
+                        # convention and the plain (non-per-var) skeleton function
+                        # above -- NOT the (X, Y) argument order ci_test was called
+                        # with.
+                        pvals.append((j, parent, S, p_val))
 
                     s = abs(stat) if stat is not None and stat != 0 else 0
                     val_min[parent] = min(val_min[parent], s)
@@ -634,8 +650,8 @@ def skeleton_discovery_pervar(
 
         surviving_parents[j] = set(parents)
 
-    # Apply all lagged edge removals at once (after all variables processed).
-    # Contemporaneous edges are untouched here — handled in Phase 2 (MCI).
+    # Apply all removals at once (after all variables processed). Lag-0
+    # edges other than C's are untouched here — handled in Phase 2 (MCI).
     for j in range(no_of_inst_var):
         for parent in initial_parents[j]:
             if parent not in surviving_parents[j]:
@@ -664,6 +680,7 @@ def mci_skeleton(
     return_pvals: bool = False,
     no_of_var_ext: int | None = None,
     background_knowledge=None,
+    *,
     legacy_mci_conds: bool = False,
 ) -> CausalGraph:
     """MCI skeleton pruning (phase 2 of CDNOTS+).
@@ -755,6 +772,10 @@ def mci_skeleton(
         """Return True if node index idx is a C column (in any lag slice)."""
         return idx % no_of_inst_var >= c_start
 
+    def _is_lag0_c(idx):
+        """Return True if node index idx is a C column of the lag-0 slice."""
+        return c_start <= idx < no_of_inst_var
+
     # Phase 2: per-DEPTH (breadth-first) skeleton — matches PCMCI+'s approach.
     # At each conditioning depth, all (parent→j) pairs across ALL variables are
     # tested before any edges are removed. This ensures every test at depth k
@@ -770,10 +791,13 @@ def mci_skeleton(
     for j in range(no_of_inst_var):
         if _is_c_node(j):
             continue
-        p_list = [p for p in cg.neighbors(j) if not _is_c_node(p)]
+        # C nodes are tested as parents too (they can only be causes), but
+        # never enter the contemporaneous conditioning subsets: they are
+        # always conditioned on through the base set below.
+        p_list = [p for p in cg.neighbors(j) if not _is_c_node(p) or _is_lag0_c(p)]
         all_parents[j] = p_list
         all_val_min[j] = {p: np.inf for p in p_list}
-        all_contemp[j] = [p for p in p_list if p < no_of_inst_var]
+        all_contemp[j] = [p for p in p_list if p < no_of_inst_var and not _is_lag0_c(p)]
         base_j = [p for p in lagged_parents.get(j, []) if not _is_c_node(p)]
         if max_conds_py is not None:
             base_j = base_j[:max_conds_py]
@@ -850,7 +874,9 @@ def mci_skeleton(
 
                     p_val, stat = ci_test(parent, j, Z)
                     if return_pvals:
-                        pvals.append((parent, j, tuple(Z), p_val))
+                        # (effect, cause, cond, p) -- see the matching fix/comment
+                        # in skeleton_discovery_pervar above.
+                        pvals.append((j, parent, tuple(Z), p_val))
 
                     s = abs(stat) if stat is not None and stat != 0 else 0
                     val_min[parent] = min(val_min[parent], s)
@@ -884,6 +910,10 @@ def mci_skeleton(
                 all_val_min[j].pop(parent, None)
                 if parent in all_contemp.get(j, []):
                     all_contemp[j].remove(parent)
+                # A removed C parent leaves the base set; lagged parents stay,
+                # as in PCMCI+ (the base is fixed by phase 1).
+                if _is_c_node(parent) and parent in all_base_j.get(j, []):
+                    all_base_j[j].remove(parent)
             # Contemporaneous edges are undirected: also remove j from parent's lists
             if parent < no_of_inst_var:
                 if j in all_parents.get(parent, []):
@@ -1040,6 +1070,11 @@ def lag_verification_pass(
             for n in cg.neighbors(x)
             if n >= no_of_inst_var and not _is_c_node(n) and n not in y_nodes
         ]
+        # Surviving lag-0 C neighbours too: otherwise lags created only by a
+        # shared trend or season are never explained away.
+        other_parents += [
+            n for n in cg.neighbors(x) if n < no_of_inst_var and _is_c_node(n)
+        ]
 
         for tau, y in lag_list:
             # Conditioning set: the OTHER lags of X_j in this pair + other parents.
@@ -1079,7 +1114,24 @@ def lag_verification_pass(
     return cg, stats
 
 
-def c_lag_cnst(cgg, num_lags=0, include_C=True, num_c_cols=1):
+def _remove_forbidden_c_edge(cg, c_idx, c_node, x_node):
+    """Drop a C - X edge that survived the CI tests but is forbidden.
+
+    The pair is recorded in ``cg.knowledge_removed`` so the collider step does
+    not read the placeholder empty sepset as a statistical separation.
+    """
+    x_idx = cg.G.nodes.index(x_node)
+    cg.G.remove_edge(cg.G.get_edge(c_node, x_node))
+    append_value(cg.sepset, c_idx, x_idx, ())
+    append_value(cg.sepset, x_idx, c_idx, ())
+    if not hasattr(cg, "knowledge_removed"):
+        cg.knowledge_removed = set()
+    cg.knowledge_removed.update({(c_idx, x_idx), (x_idx, c_idx)})
+
+
+def c_lag_cnst(
+    cgg, num_lags=0, include_C=True, num_c_cols=1, background_knowledge=None
+):
     """Adjust the causal graph by orienting edges based on lagged variables.
 
     Parameters
@@ -1092,6 +1144,9 @@ def c_lag_cnst(cgg, num_lags=0, include_C=True, num_c_cols=1):
         Whether the time index variable C is included in the data.
     num_c_cols : int
         Number of C columns (nonstationarity indicators). Default 1.
+    background_knowledge : BackgroundKnowledge, optional
+        C can only be a cause, so a C - X edge whose C -> X is forbidden (and
+        not required) is removed instead of oriented.
 
     Returns
     -------
@@ -1108,8 +1163,16 @@ def c_lag_cnst(cgg, num_lags=0, include_C=True, num_c_cols=1):
             for c_col in range(num_c_cols):
                 c_indx_id = (time_index + 1) * num_of_inst_vars - num_c_cols + c_col
                 # orient the direction from c_indx to X
-                for i in cg.G.get_adjacent_nodes(cg.G.nodes[c_indx_id]):
-                    cg.G.add_directed_edge(cg.G.nodes[c_indx_id], i)
+                c_node = cg.G.nodes[c_indx_id]
+                for i in cg.G.get_adjacent_nodes(c_node):
+                    if (
+                        background_knowledge is not None
+                        and background_knowledge.is_forbidden(c_node, i)
+                        and not background_knowledge.is_required(c_node, i)
+                    ):
+                        _remove_forbidden_c_edge(cg, c_indx_id, c_node, i)
+                    else:
+                        cg.G.add_directed_edge(c_node, i)
 
     if num_lags > 0:
         for t in range(num_lags):

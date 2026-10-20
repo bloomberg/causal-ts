@@ -120,11 +120,20 @@ def test_run_cdnots_still_renders_undirected_edges():
     priority=1 conflict marker. A bi-directed branch reading the live array
     would erase them on the mirrored visit, silently dropping every o-o edge
     from plain CDNOTS's output.
+
+    ``_data`` alone no longer qualifies: Meek R1 now orients from lagged
+    parents, which resolves all of its lag-0 edges. Two extra i.i.d. columns
+    with a contemporaneous link have no lagged parents and no collider, so
+    that edge is unorientable and must stay o-o. alpha=0.01 keeps a spurious
+    self-lag on X6 (which would make X6 a collider) out of the skeleton.
     """
     df = _data()
+    rng = np.random.default_rng(1)
+    df["X6"] = rng.standard_normal(len(df))
+    df["X7"] = 0.8 * df["X6"] + rng.standard_normal(len(df))
     ci = ParCorrGPU(np.zeros((2, 2)), device="cpu")
     g = run_cdnots(
-        df, ci, num_lags=2, include_C=False, alpha=0.05, show_progress=False
+        df, ci, num_lags=2, include_C=False, alpha=0.01, show_progress=False
     ).cg_tig
     contemp = g[:, :, 0]
     assert (contemp & contemp.T).any(), (
@@ -167,6 +176,100 @@ def test_keep_undirected_survives_bidirected_branch():
         cg, num_lags=num_lags, include_C=False, keep_undirected=False
     )
     assert dropped[0, 1, 0] == 0 and dropped[1, 0, 0] == 0
+
+
+def test_prefix_reuse_matches_direct_call():
+    """Reusing a CdnotsPlusPrefix must equal calling run_cdnots_plus directly.
+
+    The sweep harness scores many orient_margin values against one skeleton +
+    collider phase (~96% of runtime). That is only sound if the shared tail is
+    the *same* code the normal entry point runs, and if reusing a prefix does
+    not mutate it -- meek and phase_three each deepcopy, but a regression there
+    would silently corrupt every margin after the first.
+    """
+    from causalts.cdnots.phase3_utils import finish_cdnots_plus
+
+    df = _data()
+    margins = [0.0, 0.05, 0.10]
+
+    direct = {}
+    for m in margins:
+        ci = ParCorrGPU(np.zeros((2, 2)), device="cpu")
+        direct[m] = run_cdnots_plus(
+            df,
+            ci,
+            num_lags=2,
+            include_C=True,
+            c_preset="linear",
+            alpha=0.05,
+            orient_margin=m,
+            show_progress=False,
+        ).cg_tig
+
+    ci = ParCorrGPU(np.zeros((2, 2)), device="cpu")
+    prefix = run_cdnots_plus(
+        df,
+        ci,
+        num_lags=2,
+        include_C=True,
+        c_preset="linear",
+        alpha=0.05,
+        show_progress=False,
+        return_prefix=True,
+    )
+    # Deliberately not in the same order, and 0.0 revisited last, to catch
+    # any state carried between finishes.
+    for m in [0.10, 0.05, 0.0, 0.10]:
+        got = finish_cdnots_plus(prefix, orient_margin=m).cg_tig
+        np.testing.assert_array_equal(
+            got, direct[m], err_msg=f"prefix reuse diverged at orient_margin={m}"
+        )
+
+
+@pytest.mark.parametrize(
+    "kwargs, margin",
+    [({}, 0.1), ({"orient_margin": 0.05}, 0.05)],
+)
+def test_prefix_finish_defaults_match_direct_call(kwargs, margin, monkeypatch):
+    """finish_cdnots_plus(prefix) with no overrides must equal the direct call.
+
+    finish_cdnots_plus used to default orient_margin to 0.0 while
+    run_cdnots_plus defaults to 0.1, so the documented bit-identical reuse
+    silently diverged unless orient_margin was passed again.
+    """
+    from causalts.cdnots import phase3_utils
+    from causalts.cdnots.phase3_utils import finish_cdnots_plus
+
+    # The margin rarely flips an edge on data this small, so check that it
+    # reaches phase_three rather than relying on the output alone.
+    seen = []
+    real_phase_three = phase3_utils.phase_three
+
+    def spy(*args, **kw):
+        seen.append(kw["orient_margin"])
+        return real_phase_three(*args, **kw)
+
+    monkeypatch.setattr(phase3_utils, "phase_three", spy)
+
+    df = _data()
+    common = dict(num_lags=2, include_C=True, c_preset="linear", alpha=0.05, **kwargs)
+    direct = run_cdnots_plus(
+        df, ParCorrGPU(np.zeros((2, 2)), device="cpu"), show_progress=False, **common
+    ).cg_tig
+    prefix = run_cdnots_plus(
+        df,
+        ParCorrGPU(np.zeros((2, 2)), device="cpu"),
+        show_progress=False,
+        return_prefix=True,
+        **common,
+    )
+    np.testing.assert_array_equal(finish_cdnots_plus(prefix).cg_tig, direct)
+    assert seen == [margin, margin]
+
+    # Explicit arguments still override the stored ones.
+    seen.clear()
+    finish_cdnots_plus(prefix, orient_margin=0.0)
+    assert seen == [0.0]
 
 
 if __name__ == "__main__":

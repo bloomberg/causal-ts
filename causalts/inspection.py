@@ -434,7 +434,7 @@ def discover_df(
     ----------
     alpha : float, optional
         Significance level. ``None`` (default) means "use the algorithm's own
-        default" — 0.05 for the CDNOTS family and GRACE's skeleton, 0.01 for
+        default" — 0.05 for CDNOTS and GRACE's skeleton, 0.01 for CDNOTS+ and
         Cedar's ``alpha_cond1`` / ``alpha_cond2``. Passing a float applies it
         to all of them.
     include_C : bool, default False

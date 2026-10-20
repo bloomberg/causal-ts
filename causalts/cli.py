@@ -295,7 +295,13 @@ def inspect(data, var_names, max_lag):
     help="Conditional independence test. Run 'ci-test-info' for selection guidance.",
 )
 @click.option("--max-lag", type=int, default=3, help="Maximum time lag.")
-@click.option("--alpha", type=float, default=0.05, help="Significance level.")
+@click.option(
+    "--alpha",
+    type=float,
+    default=None,
+    help="Significance level for cdnots, cdnots+ and grace/grace-ss (default: 0.01 "
+    "for cdnots+, 0.05 otherwise). Cedar uses --alpha-cond1/--alpha-cond2.",
+)
 @click.option(
     "--lag-list", type=str, default=None, help="Comma-separated lag list (e.g. 1,3,12)."
 )
@@ -543,6 +549,9 @@ def discover(
     window_frac,
 ):
     """Run causal discovery on a time series file (CSV, parquet, or feather)."""
+    if alpha is None:
+        # Each engine's own default: CDNOTS+ runs at 0.01, like run_cdnots_plus.
+        alpha = 0.01 if algorithm == "cdnots+" else 0.05
     if do_validate and algorithm in ("grace", "grace-ss"):
         raise click.BadParameter(
             "--validate is not supported for GRACE (bootstrapping neural-gate "

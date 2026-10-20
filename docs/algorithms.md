@@ -111,7 +111,7 @@ from causalts import run_cdnots_plus
 # dense or variables are highly coupled (hub-structured graphs).
 res = run_cdnots_plus(
     df=df, indep_test=ci_test, num_lags=3,
-    include_C=True, alpha=0.05,
+    include_C=True, alpha=0.01,
 )
 ```
 :::

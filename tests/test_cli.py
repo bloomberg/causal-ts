@@ -192,3 +192,48 @@ def test_dowhy_validate_history_skips_a_contemporaneous_only_graph(tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert "contemporaneous-only" in result.output
+
+
+def test_discover_alpha_defaults_per_algorithm(tmp_path):
+    """CDNOTS+ runs at 0.01 by default (like run_cdnots_plus), CDNOTS at 0.05,
+    and an explicit --alpha always wins."""
+    import inspect
+    import json
+
+    from causalts.cdnots.phase3_utils import run_cdnots, run_cdnots_plus
+
+    assert inspect.signature(run_cdnots_plus).parameters["alpha"].default == 0.01
+    assert inspect.signature(run_cdnots).parameters["alpha"].default == 0.05
+
+    rng = np.random.default_rng(0)
+    csv_path = tmp_path / "data.csv"
+    pd.DataFrame(rng.standard_normal((80, 3)), columns=list("ABC")).to_csv(
+        csv_path, index=False
+    )
+    for algorithm, extra, expected in (
+        ("cdnots+", [], 0.01),
+        ("cdnots", [], 0.05),
+        ("cdnots+", ["--alpha", "0.2"], 0.2),
+    ):
+        result = CliRunner().invoke(
+            main,
+            [
+                "--quiet",
+                "-o",
+                str(tmp_path),
+                "discover",
+                str(csv_path),
+                "--algorithm",
+                algorithm,
+                "--ci-test",
+                "parcorr-gpu",
+                "--max-lag",
+                "1",
+                "--no-plot",
+                "--json",
+                *extra,
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        summary = json.loads(result.output[result.output.index("{") :])
+        assert summary["alpha"] == expected, (algorithm, extra)
