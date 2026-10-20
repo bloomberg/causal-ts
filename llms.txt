@@ -22,7 +22,7 @@ causal-ts -s 42 generate --dataset ex1 -T 500
 causal-ts -s 42 -d cpu discover data.csv -a cdnots --ci-test parcorr-gpu --max-lag 3
 causal-ts -s 42 -d cpu discover data.csv -a cdnots --ci-test splitkci --max-lag 3
 causal-ts -s 42 -d cpu discover data.csv -a cdnots --ci-test dfcit --max-lag 3
-causal-ts -s 42 -d cpu discover data.csv -a cdnots --ci-test sigkci --max-lag 3
+causal-ts -s 42 -d cpu discover data.csv -a cdnots --ci-test linsig --max-lag 3
 causal-ts -s 42 -d cpu discover data.csv -a cedar --lag-method dcor --max-lag 5
 
 # Print CI test selection guide
@@ -250,18 +250,17 @@ ci = DFCITGPU(np.zeros((2, 2)), device="cpu", n_perm=500)
 - **Limitation:** False-positive rate can rise under near-collinear conditioning at large T.
 - **Use when:** Nonlinear data when recall is the priority; distribution-free guarantee needed.
 
-### SigKCIGPU — Signature Kernel CI Test (Path-space / SDEs)
+### LinSigCIGPU — Linear-Signature-Kernel CI Test (Path-space / SDEs)
 
 ```python
-from causalts.ci_tests.sigkci_gpu import SigKCIGPU
-ci = SigKCIGPU(np.zeros((2, 2)), device="cpu", sigma=2.0, time_delay_dim=2)
+from causalts.ci_tests.linsig_gpu import LinSigCIGPU
+ci = LinSigCIGPU(np.zeros((2, 2)), device="cpu", sigma="median", time_delay_dim=3)
 ```
 
-- **Detects:** Dependencies in path-space via signature kernels (Goursat PDE solver). Captures temporal trajectory structure beyond pointwise correlations.
-- **Speed:** Fast after vectorisation — O(T² × L²) where L is path length (typically 2–3). ~0.002–0.008s/test.
-- **Benchmarks:** ex1 F1=0.364–0.526 depending on params. Tends to over-discover on tabular lag-embedded data.
-- **Key params:** `sigma=2.0`, `time_delay_dim=2` (path window size), `approx='gamma'`, `lamda=0.001`.
-- **Use when:** Data comes from continuous-time stochastic processes or SDEs where the *path* of a variable matters, not just its pointwise value.
+- **Detects:** Dependencies in path-space via a closed-form linear signature kernel (Goursat PDE recursion) + classic KCI conditioning + gamma/HBE null. Captures temporal trajectory structure beyond pointwise correlations.
+- **Speed:** Fast — O(T² × L²) where L is path length. Dependency-free; kernel is always linear.
+- **Key params:** `sigma="median"`, `time_delay_dim=3` (path window size), `approx='hbe'`, `ridge=1e-3` (KCI ridge, relative to the kernel's scale). Cannot adjust for a trend-like conditioning variable such as CDNOTS's C node.
+- **Use when:** Data comes from continuous-time stochastic processes or SDEs where the *path* of a variable matters, not just its pointwise value; a fast, dependency-free signature baseline.
 
 ### RCOTGPU — Randomized Conditional Correlation (Nonlinear, fast)
 
@@ -271,7 +270,7 @@ ci = RCOTGPU(np.zeros((2, 2)), device="cpu")
 ```
 
 - **Detects:** Nonlinear dependencies via Random Fourier Features approximation to kernel CI.
-- **Speed:** Fast. At T≤300, auto-averages 5 RFF draws to reduce variance.
+- **Speed:** Fast. X/Y features sized to the sample, `min(25, floor(sqrt(T)))`; deterministic (`seed=42`).
 - **Limitation:** RFF approximation quality depends on bandwidth; can be inconsistent on strongly nonlinear data.
 - **Use when:** Fast nonlinear option; runtime-constrained settings.
 
@@ -285,6 +284,56 @@ ci = CMIknnGPU(np.zeros((2, 2)), device="cpu", k=0.2, early_stop=True)
 - **Detects:** Arbitrary nonlinear dependencies via k-NN density estimation. No bandwidth tuning.
 - **Speed:** O(T²) k-NN search. Slow at large T.
 - **Use when:** Nonparametric baseline; sensitive to many dependency types.
+
+### GCM — Generalised Covariance Measure (Residual score, fast)
+
+```python
+from causalts.ci_tests.gcm import GCM
+ci = GCM(np.zeros((2, 2)))
+```
+
+- **Detects:** Nonlinear dependence via a nuisance regression you choose (ridge/spline/tree); tests whether the residual product has non-zero mean. Analytic p-value.
+- **Speed:** Very fast; one-dimensional score, HAC variance by default.
+- **Limitation:** Tests a residual moment, not full CI — blind to variance-only edges and to conditional covariance that changes sign across Z.
+- **Use when:** Fast regression-based residual test; you can specify a good nuisance regression.
+
+### WGCM — Weighted GCM (Residual score, sign-changing covariance)
+
+```python
+from causalts.ci_tests.wgcm import WGCM
+ci = WGCM(np.zeros((2, 2)))
+```
+
+- **Detects:** Alternatives where the conditional covariance flips sign across Z (which plain GCM cancels to zero), via a weight bank `w(Z)` calibrated by a multiplier bootstrap.
+- **Speed:** Moderate (bootstrap-calibrated maximum).
+- **Limitation:** Still a residual-moment test; a wider bank widens the joint null and costs power at small T.
+- **Use when:** You suspect a sign-changing conditional covariance.
+
+### PCM — Projected Covariance Measure (Residual score, conditional-mean)
+
+```python
+from causalts.ci_tests.pcm import PCM
+ci = PCM(np.zeros((2, 2)))
+```
+
+- **Detects:** Conditional-mean dependence; learns the direction of the alternative on held-out blocks instead of guessing it (no weight bank needed).
+- **Speed:** Moderate (cross-fitted).
+- **Limitation:** Tests conditional-**mean** independence only (`inferential_target = "conditional_mean"`) — will not see variance-only or tail-only edges.
+- **Use when:** Edges act through the conditional mean and you want minimax-optimal power for that problem.
+
+### RAFT / RIFT — Random-feature F-tests (Regression, conditional-mean, fast)
+
+```python
+from causalts.ci_tests.raft import RAFTCI, RIFTCI
+ci = RAFTCI(np.zeros((2, 2)))  # "raft": additive in Z
+ci = RIFTCI(np.zeros((2, 2)))  # "rift": also adjusts for interactions/wiggly effects of Z
+```
+
+- **Detects:** Nonlinear conditional-mean dependence: partial F test of X's random Fourier features in a regression of Y on Z (and symmetrically), dependent-wild-bootstrap p-value.
+- **Speed:** Fast (raft ~2-10 ms per cold call at T=250-1000, much of it cached within a discovery run; rift about 2x raft per graph).
+- **Defaults (raft and rift, bootstrap null):** Huber-clipped residual (`robust="huber"`), one sine/cosine pair per ~100 rows for the tested variables (`n_rff_tested="auto"`), Cauchy combination (`combine="cauchy"`), Z adjusted by its linear terms plus a GCV-ridge random-feature dictionary (`z_ridge=True`; rift adds its terms to it), leverage-rescaled bootstrap (`hc2=True`) and a linear-only channel up to 512 rows (`linear_channel=512`); the original settings are `robust=False, n_rff_tested=8, combine="bonferroni", z_ridge=False, hc2=False, linear_channel=False`. With skewed noise whose scale depends non-additively on Z, Huber makes raft liberal (about 0.17 at alpha=0.05, T=1000; `robust=False` gives 0.06). Do not rank-transform the inputs: with two or more conditioning variables it makes an additive conditional mean non-additive and the test liberal.
+- **Limitation:** Mean-only. raft's Z model is additive and smooth, so it rejects true CI when X and Y share an interaction of conditioning variables or a very wiggly function of one (e.g. sin(6z); sin(4z) only partly); rift absorbs smooth interactions and wiggly marginal effects (multi-scale sines/cosines, GCV ridge) but only partly rough ones.
+- **Use when:** Fast nonlinear test with smooth additive mechanisms (raft), or interacting/wiggly conditioning effects (rift).
 
 ### Decision Guide
 
@@ -302,8 +351,11 @@ High collinearity in conditioning sets?
   NO  → splitkci or dfcit (high recall)
 
 Special cases:
-  Stochastic processes / SDEs → sigkci
-  Runtime-constrained         → parcorr-gpu or gcmi
+  Stochastic processes / SDEs      → linsig
+  Runtime-constrained              → parcorr-gpu or gcmi
+  Regression-based residual test   → gcm; sign-changing covariance → wgcm;
+    conditional-mean only          → pcm
+  Additive nonlinear, fast         → raft; interacting or wiggly Z → rift
 ```
 
 **Key tradeoffs:**

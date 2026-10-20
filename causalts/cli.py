@@ -41,14 +41,47 @@ Conditional Independence Test Selection Guide
                columns natively. Results vary by graph structure.
 
   rcot         Randomised conditional correlation (Random Fourier Features).
-               Fast. At T<=300, auto-averages 5 RFF draws to reduce variance.
+               Fast. X/Y features sized to the sample; deterministic (seed=42).
 
   cmiknn-gpu   k-NN conditional mutual information. Nonparametric, no bandwidth.
                Sensitive to many dependency types but slow (O(T^2) k-NN search).
                The permutation null stops early once the p-value is decided.
 
-  sigkci       Signature kernel CI for path-valued data (SDEs, diffusions).
-               Captures temporal structure that pointwise tests ignore.
+  linsig       Linear-signature-kernel CI for path-valued data (SDEs,
+               diffusions). Fast, dependency-free: a closed-form linear
+               signature kernel + classic KCI (Zhang et al. 2011) + gamma/HBE
+               null. Captures temporal structure that pointwise tests ignore.
+
+  sigkci       Deprecated alias for linsig; will be removed in a future release.
+
+  gcm          Generalised covariance measure (Shah & Peters 2020). Fast,
+               analytic p-value. Residual moment, not full CI: blind to
+               variance-only edges.
+
+  wgcm         Weighted GCM (Scheidegger et al. 2022). Adds weights w(Z) to
+               recover alternatives where the conditional covariance changes
+               sign across Z.
+
+  pcm          Projected covariance measure (Lundborg et al. 2024). Learns the
+               alternative's direction; tests conditional-MEAN independence
+               only.
+
+  raft         Random-feature Additive F-test: partial F of X's random
+               Fourier features for Y given an additive adjustment for Z
+               (linear terms plus a GCV-ridge random-feature dictionary),
+               dependent-wild-bootstrap p-value. About 2-10 ms per cold
+               call; bootstrap memory grows as T x n_boot (~1.6 kB per row).
+               Mean-only; liberal when X and Y share an interaction of
+               conditioning variables. By default Huber-clipped residuals,
+               a Cauchy combination and, up to 512 rows, a linear-only
+               channel for power at small T.
+
+  rift         Random-feature Interaction-adjusted F-test: raft with
+               multi-scale sine/cosine and spline tensor terms added to its
+               ridge-penalized adjustment, for interactions among, and wiggly
+               effects of, conditioning variables. Same defaults as raft;
+               about 2x raft per graph. Rough interactions only partly
+               absorbed.
 
   cmiknn-mixed-gpu  k-NN CMI for mixed discrete-continuous data, using MSinf
                stratification so k-NN balls never cross discrete values. Use
@@ -77,7 +110,9 @@ When to use what
   Nonlinear, sufficient data       -> splitkci (best speed/F1 tradeoff)
   Nonlinear, high collinearity     -> kci (uses all data, most robust)
   Monotone nonlinear, fast needed  -> gcmi (analytic, near-instant)
-  Stochastic processes / SDEs      -> sigkci
+  Additive nonlinear, fast needed  -> raft (bootstrap null, ~2-10 ms/test)
+  Interacting or wiggly cond. vars -> rift (adaptive-adjustment raft)
+  Stochastic processes / SDEs      -> linsig
   All columns categorical          -> chisq or gsquared
   Mixed discrete and continuous    -> dfcit, then cmiknn-mixed-gpu
   Runtime-constrained              -> parcorr-gpu or gcmi

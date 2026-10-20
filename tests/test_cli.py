@@ -27,12 +27,14 @@ def test_ci_test_info(options):
         ("kci", "Most general kernel test. O(T^3) — slow at large T."),
         ("splitkci", "data. Performance improves with larger T."),
         ("dfcit", "columns natively. Results vary by graph structure."),
-        ("rcot", "Fast. At T<=300, auto-averages 5 RFF draws to reduce variance."),
+        ("rcot", "Fast. X/Y features sized to the sample; deterministic (seed=42)."),
         (
             "cmiknn-gpu",
             "The permutation null stops early once the p-value is decided.",
         ),
-        ("sigkci", "Captures temporal structure that pointwise tests ignore."),
+        ("linsig", "Captures temporal structure that pointwise tests ignore."),
+        ("sigkci", "Deprecated alias for linsig; will be removed in a future release."),
+        ("raft", "channel for power at small T."),
     ],
 )
 def test_ci_test_info_filters_summary(test_name, last_line):

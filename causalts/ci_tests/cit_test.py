@@ -12,6 +12,20 @@ import numpy as np
 import pandas as pd
 
 
+def stable_seed(*parts):
+    """Deterministic 32-bit seed from arbitrary values.
+
+    ``hash()`` must not be used for this. Python randomises string hashing per
+    process (PYTHONHASHSEED), so a seed derived from it changes between runs:
+    a bootstrap or permutation test reseeded that way silently returns a
+    different p-value in every process, and any harness pairing methods on a
+    shared draw stops being paired. blake2b is stable across processes,
+    platforms and versions.
+    """
+    h = hashlib.blake2b(repr(parts).encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(h, "big") % (2**32)
+
+
 class CIT_Base(object):
     """Unified CIT_Base (consolidated from former cit_test and cit_base).
 
@@ -199,6 +213,8 @@ class CIT_Base(object):
         """
         if not isinstance(data, np.ndarray):
             raise TypeError("data must be a numpy array.")
+        # Buffered rows belong to the old data's cache file; write them there first.
+        self.flush_cache()
         self.data = data
         self.sample_size, self.num_features = data.shape
         self._has_nan = bool(np.isnan(data).any())
