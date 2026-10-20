@@ -3,8 +3,11 @@
 
 """Tests for ParCorrGPU conditional independence test."""
 
+import itertools
+
 import numpy as np
 import pytest
+import torch
 
 from causalts.ci_tests import ParCorrGPU
 
@@ -122,6 +125,25 @@ def _near_singular_case(eps=1e-8, n=300, seed=0):
     return np.column_stack([x, y, z, z + eps * w])
 
 
+def _reciprocal_condition_case(seed=0, k=14, T=40, a=0.05):
+    """Data whose (X, Y, Z) sub-covariance has reciprocal condition ~4e-18.
+
+    Every column after the first is ``sqrt(1 - a**2)`` times a unit vector over
+    the previous columns plus an ``a``-scaled noise term, so conditioning
+    collapses as ``k`` grows. The construction from #73's permutation test,
+    reused as issue #74's reproduction.
+    """
+    rng = np.random.default_rng(seed)
+    L = np.zeros((k, k))
+    L[0, 0] = 1.0
+    for i in range(1, k):
+        v = rng.standard_normal(i)
+        v /= np.linalg.norm(v)
+        L[i, :i] = np.sqrt(1 - a * a) * v
+        L[i, i] = a
+    return rng.standard_normal((T, k)) @ L.T
+
+
 def test_declined_precision_falls_back_to_the_existing_ols_path():
     """A declined precision test must reproduce ``method="ols"`` exactly.
 
@@ -229,16 +251,7 @@ def test_conditioning_guard_is_permutation_invariant():
     the pivot test for one ordering of a 12-element Z while a permutation of
     the same set correctly declined, disagreeing by rho = -0.17 vs -0.97.
     """
-    rng = np.random.default_rng(0)
-    k, T, a = 14, 40, 0.05
-    L = np.zeros((k, k))
-    L[0, 0] = 1.0
-    for i in range(1, k):
-        v = rng.standard_normal(i)
-        v /= np.linalg.norm(v)
-        L[i, :i] = np.sqrt(1 - a * a) * v
-        L[i, i] = a
-    data = rng.standard_normal((T, k)) @ L.T
+    data = _reciprocal_condition_case()
     ci = ParCorrGPU(data, device=DEVICE)
 
     z_a = list(range(1, 13))
@@ -363,3 +376,155 @@ def test_precision_decision_invariant_near_boundary_property_sweep():
         ), f"seed {seed}: orderings disagree, rcond={rcond:.3e}"
 
     assert n_checked >= 20, "sweep should reliably land several cases in the band"
+
+
+def _fresh_scalar(data, X, Y, Z):
+    """``__call__`` on a new instance, so no earlier result is served from cache."""
+    return ParCorrGPU(data, device=DEVICE)(X, Y, Z)
+
+
+def test_batch_paths_decline_where_the_scalar_guard_declines():
+    """Issue #74: both batched entry points must fall back where #73 declines.
+
+    On the ~4e-18 construction, ``_batch_test_precision`` and
+    ``_batch_test_fast`` inverted unconditionally and returned rho ~ -0.138
+    / p ~ 0.485 while the guarded scalar path gives rho ~ -0.023 / p ~ 0.91 —
+    the same test answering differently depending only on which entry point
+    reached it. The batched fallback must return exactly the scalar answer.
+    """
+    data = _reciprocal_condition_case()
+    z = list(range(1, 13))
+    assert ParCorrGPU(data, device=DEVICE)._compute_parcorr_precision(0, 13, z) is None
+
+    want = _fresh_scalar(data, 0, 13, z)
+    for kwargs in ({}, {"enable_caching": False}):
+        got = ParCorrGPU(data, device=DEVICE, **kwargs).batch_test([(0, 13, z)])[0]
+        assert got == want
+
+
+def test_batch_declined_and_accepted_tests_share_one_chunk():
+    """A mixed chunk routes declined tests to OLS and keeps accepted ones exact.
+
+    Covers the two hazards issue #74 flagged around the fallback: it must not
+    break dedup (cache-equivalent orderings of a declined test share one
+    result) or caching (a rerun is served from ``pvalue_cache``), and the
+    well-conditioned members of the same |Z| chunk must still match the
+    scalar precision path as ``test_scalar_matches_batch`` demands.
+    """
+    rng = np.random.default_rng(1)
+    data = np.column_stack([_near_singular_case(), rng.standard_normal((300, 2))])
+    tests = [
+        (0, 1, [2, 3]),  # rank-deficient → OLS fallback
+        (1, 0, [3, 2]),  # same test, other order → dedup
+        (0, 4, [2, 3]),  # another rank-deficient test, distinct key
+        (0, 1, [4, 5]),  # well-conditioned → precision, same chunk
+        (0, 1, [2]),  # well-conditioned, other chunk
+    ]
+    ci = ParCorrGPU(data, device=DEVICE)
+    for i, t in enumerate(tests):
+        assert (ci._compute_parcorr_precision(*t) is None) == (i < 3)
+    results = ci.batch_test(list(tests))
+
+    assert results[0] == results[1]
+    for i in (0, 2):
+        assert results[i] == _fresh_scalar(data, *tests[i])
+    for i in (3, 4):
+        p_s, s_s = _fresh_scalar(data, *tests[i])
+        assert np.isclose(results[i][1], s_s, rtol=0, atol=1e-12)
+        assert np.isclose(results[i][0], p_s, rtol=0, atol=1e-12)
+
+    # Cache: a rerun is served, not recomputed.
+    assert ci.batch_test(list(tests)) == results
+
+    # Without dedup each ordering is evaluated on its own; same answers.
+    fast = ParCorrGPU(data, device=DEVICE, enable_caching=False)
+    assert fast.batch_test(list(tests)) == results
+
+
+@pytest.mark.parametrize("eps", [1.000043771885943e-4, 1.000043971985993e-4])
+def test_batch_matches_scalar_at_the_rcond_cutoff(eps):
+    """Rows near ``_RCOND`` take the scalar guard's decision, not torch's.
+
+    NumPy and batched torch ``eigvalsh`` differ by ~1e-6 relative in rcond.
+    On the macOS CPU BLAS this was measured on, these two inputs fall on
+    opposite sides of the cutoff in each direction (NumPy 1.0000005e-10 vs
+    torch 0.9999994e-10, and 0.99999999e-10 vs 1.0000010e-10). The
+    assertion holds on any BLAS, but only exercises the fix where it flips.
+    """
+    data = _near_singular_case(eps=eps)
+    t = (0, 1, [2, 3])
+    want = _fresh_scalar(data, *t)
+    for kwargs in ({}, {"enable_caching": False}):
+        assert ParCorrGPU(data, device=DEVICE, **kwargs).batch_test([t]) == [want]
+
+
+def test_batch_exact_correlation_gets_zero_pvalue():
+    """A raw rho of 1 + 2e-16 is clipped before the exact-one check."""
+    rng = np.random.default_rng(2)
+    x = rng.standard_normal(31)
+    data = np.column_stack([x, x + 1e-12 * rng.standard_normal(31)])
+    want = _fresh_scalar(data, 0, 1, [])
+    assert want == (0.0, 1.0)
+    for kwargs in ({}, {"enable_caching": False}):
+        got = ParCorrGPU(data, device=DEVICE, **kwargs).batch_test([(0, 1, [])])
+        assert got == [want]
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="needs MPS")
+def test_declined_fallback_runs_on_mps():
+    """MPS has no ``lstsq``; the declined fallback runs on CPU instead."""
+    data = _near_singular_case()
+    t = (0, 1, [2, 3])
+    want = ParCorrGPU(data, device="cpu")(*t)
+    assert ParCorrGPU(data, device="mps")(*t) == want
+    for kwargs in ({}, {"enable_caching": False}):
+        assert ParCorrGPU(data, device="mps", **kwargs).batch_test([t]) == [want]
+
+
+def test_batch_unconditional_constant_column_falls_back():
+    """The k == 2 variance gate must match the scalar path (issue #74 scope).
+
+    A constant column makes the (X, Y) sub-covariance singular. The scalar
+    path has always declined it and answered through OLS (rho = 0, p = 1);
+    the batched paths computed ``cov / sqrt(var * 0)`` and returned
+    ``(nan, nan)`` — an invalid p-value.
+    """
+    rng = np.random.default_rng(2)
+    base = rng.standard_normal((200, 4))
+    data = np.column_stack([base, np.ones(200)])
+    tests = [(0, 4, []), (1, 4, [])]
+
+    want = [_fresh_scalar(data, *t) for t in tests]
+    assert want == [(1.0, 0.0)] * 2
+    for kwargs in ({}, {"enable_caching": False}):
+        got = ParCorrGPU(data, device=DEVICE, **kwargs).batch_test(list(tests))
+        assert got == want
+
+
+def test_declined_fallback_is_order_invariant_and_in_range():
+    """Cache-equivalent orderings of a declined test must agree, in [-1, 1].
+
+    Float32 ``lstsq`` on these inputs moved rho by up to 0.06 between
+    orderings of one test, and could return 1 + 1.2e-7 (e.g. seed 2,
+    a = 0.05, X, Y = 0, 1 on this BLAS). Both entry points canonicalize and
+    clip the fallback, so every ordering and path gives one in-range answer.
+    """
+    n_declined = 0
+    for seed in range(4):
+        for a in (0.02, 0.05):
+            data = _reciprocal_condition_case(seed=seed, k=8, T=60, a=a)
+            ci = ParCorrGPU(data, device=DEVICE)
+            for X, Y in itertools.combinations(range(8), 2):
+                z = [c for c in range(8) if c not in (X, Y)][:5]
+                if ci._compute_parcorr_precision(X, Y, z) is not None:
+                    continue
+                n_declined += 1
+                orderings = [(X, Y, z), (Y, X, z[::-1])]
+                want = _fresh_scalar(data, *orderings[0])
+                assert abs(want[1]) <= 1.0
+                for t in orderings:
+                    assert _fresh_scalar(data, *t) == want
+                    for kwargs in ({}, {"enable_caching": False}):
+                        batch = ParCorrGPU(data, device=DEVICE, **kwargs)
+                        assert batch.batch_test([t]) == [want]
+    assert n_declined >= 50

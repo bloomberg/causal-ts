@@ -44,6 +44,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 * `CIT_Base.set_data` wrote buffered cache rows into the new data's cache file.
 * `RCOTGPU` p-values depended on the order of the conditioning set.
+* `ParCorrGPU.batch_test` (precision method) now runs the same
+  reciprocal-condition guard the scalar path got in #73, instead of inverting
+  every sub-covariance blindly and returning a near-random statistic for
+  ill-conditioned tests (issue #74). Declined tests fall back to the same OLS
+  computation `__call__` uses, so both entry points return identical results.
+  That fallback now uses the cache key's column order and is clipped to
+  [-1, 1]; previously, reorderings of one declined test could differ by up to
+  0.06 in the statistic, which could also exceed 1 by float32 rounding. On
+  MPS, which lacks `lstsq`, the fallback runs on CPU instead of raising.
+  Well-conditioned results are unchanged up to rounding. The persisted p-value
+  cache key changes, so caches written by earlier builds are recomputed.
 * `examples/regime_discovery.ipynb` now seeds each synthetic dataset independently
   (`np.random.default_rng`), reports detector comparisons as mean ± std across
   multiple seeds instead of a single misleading run, degrades gracefully when the

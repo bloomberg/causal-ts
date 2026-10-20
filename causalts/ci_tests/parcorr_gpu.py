@@ -28,8 +28,10 @@ def _data_fingerprint(data):
 # Distinguishes builds whose cached statistic differs numerically, so a
 # pvalue_cache persisted by one build misses rather than being reused by
 # another. "cov64" marks the float64 covariance; earlier builds used float32,
-# whose statistics differ by ~1e-8. Bump on any numeric change to the estimator.
-_STAT_VERSION = "cov64"
+# whose statistics differ by ~1e-8. "guard" marks the batched conditioning
+# guard (#74), which changed the batch statistic for ill-conditioned tests.
+# Bump on any numeric change to the estimator.
+_STAT_VERSION = "cov64-guard"
 
 # Reciprocal-condition floor for the correlation-scaled sub-covariance. Below
 # this the inverse is dominated by rounding and the partial correlation is not
@@ -236,6 +238,8 @@ class ParCorrGPU(CIT_Base):
                 and _is_index(Y)
             ):
                 val = self._compute_parcorr_precision(X, Y, condition_set)
+                if val is None:
+                    val = self._compute_parcorr_canonical(X, Y, condition_set)
             if val is None:
                 val = self._compute_parcorr(X, Y, condition_set)
             pval = self._analytic_pvalue(val, condition_set)
@@ -266,6 +270,26 @@ class ParCorrGPU(CIT_Base):
         # Pearson correlation of residuals
         val = self._pearson_corr(x_resid.squeeze(), y_resid.squeeze())
         return val.item()
+
+    def _compute_parcorr_canonical(self, X, Y, condition_set):
+        """``_compute_parcorr`` in ``_get_array_hash``'s canonical column order.
+
+        The OLS fallback for tests the precision guard declines. Float32
+        ``lstsq`` on these rank-deficient inputs is order-sensitive (up to
+        ~0.06 in rho between orderings of one test), so ordering like the
+        cache key keeps cache-equivalent calls, scalar or batched, on one
+        answer. Clipped because float32 rounding can land a near-collinear
+        correlation at 1 + 1.2e-7. Runs on CPU under MPS, which has no
+        ``lstsq``.
+        """
+        x, y = sorted((int(X), int(Y)))
+        z = sorted(int(i) for i in condition_set)
+        if self.data_torch.device.type == "mps":
+            cols = self.data_torch[:, [x, y] + z].cpu()
+            val = self._compute_parcorr_on(cols, 0, 1, list(range(2, 2 + len(z))))
+        else:
+            val = self._compute_parcorr(x, y, z)
+        return float(np.clip(val, -1.0, 1.0))
 
     def _compute_parcorr_precision(self, X, Y, condition_set):
         """Partial correlation read off the cached covariance matrix.
@@ -466,6 +490,143 @@ class ParCorrGPU(CIT_Base):
 
         return results
 
+    def _batch_conditioning_guard(self, sub_cov):
+        """Vectorized form of the scalar path's conditioning guard.
+
+        Returns ``(trust, near)`` boolean masks: ``trust`` is True where
+        inverting this sub-covariance can be believed; ``near`` marks rows
+        whose reciprocal condition is within 100x of ``_RCOND``, where torch
+        and NumPy rounding can land on opposite sides of the cutoff, so the
+        caller re-decides them with the scalar guard itself. Mirrors ``_compute_parcorr_precision``
+        (#73) entry for entry — reject non-positive or non-finite variance
+        first, then, for ``k > 2``, require the reciprocal condition of the
+        correlation-scaled matrix to stay above ``_RCOND`` via ``eigvalsh``.
+        Matrices failing the variance gate are replaced by the identity before
+        ``eigvalsh`` so one degenerate test cannot poison the whole chunk with
+        NaN (LAPACK rejects non-finite input outright and would take the
+        batch down with it).
+
+        ``k == 2`` needs no eigenvalue sweep: with no conditioning set there
+        is no inverse to guard, and the scalar path gates that case on the
+        variance alone. The guard runs in float64 (the covariance cache is
+        float64) because a reciprocal condition of 4e-18 — the issue #74
+        construction — drowns below float32's ~1e-7 eigenvalue noise, which
+        would let the check accept exactly the matrices it exists to reject.
+        """
+        k = sub_cov.shape[-1]
+        diag = torch.diagonal(sub_cov, dim1=-2, dim2=-1)
+        ok = (diag > 0).all(dim=-1) & torch.isfinite(sub_cov).all(dim=(-1, -2))
+        if k == 2:
+            return ok, torch.zeros_like(ok)
+        eye = torch.eye(k, dtype=sub_cov.dtype, device=sub_cov.device)
+        sub = torch.where(ok[:, None, None], sub_cov, eye)
+        scale = torch.sqrt(torch.diagonal(sub, dim1=-2, dim2=-1))
+        corr = sub / scale[:, :, None] / scale[:, None, :]
+        eig = torch.linalg.eigvalsh(corr)
+        rcond = eig[:, 0] / eig[:, -1]
+        near = ok & (rcond > _RCOND / 100) & (rcond < _RCOND * 100)
+        return ok & (eig[:, 0] > 0) & (rcond > _RCOND), near
+
+    def _guarded_precision_chunk(self, tests, chunk_idx, T):
+        """Evaluate one uniform-|Z| chunk: guarded precision rho, OLS fallback.
+
+        The precision estimator the scalar path guards in
+        ``_compute_parcorr_precision`` (issue #74: the batched paths inverted
+        unconditionally and could return a badly wrong rho for a
+        rank-deficient sub-covariance, which ``_analytic_pvalue`` then clips
+        toward p = 0). The guard runs first; every test it declines — or
+        whose inverse fails the scalar path's post-inversion checks — is
+        recomputed through ``_compute_parcorr_canonical``, exactly what
+        ``__call__`` does when the scalar guard returns None, so both entry
+        points return the same statistic for a declined test. A batched OLS
+        would not: float32
+        batched and single-matrix ``lstsq`` disagree by up to ~0.3 in rho on
+        these rank-deficient inputs. Declines are rare, so the per-test loop
+        costs nothing measurable. Inverting only identity-replaced matrices
+        keeps an exactly singular input from raising inside
+        ``torch.linalg.inv``.
+
+        Row order is canonicalized the way ``_get_array_hash`` sorts the
+        cache key (X/Y pair first, then Z), for the same reason the scalar
+        guard canonicalizes: one semantic test must evaluate one matrix, or
+        two orderings the cache treats as one entry could land on opposite
+        sides of ``_RCOND`` in floating point.
+
+        Returns ``(pvals, vals)`` numpy arrays aligned with ``chunk_idx``.
+        """
+        dev = self._precision_device
+        d = len(tests[chunk_idx[0]][2])
+        k = d + 2
+        B = len(chunk_idx)
+
+        idx_array = torch.zeros(B, k, dtype=torch.long, device=dev)
+        for b, idx in enumerate(chunk_idx):
+            X, Y, cond = tests[idx]
+            idx_array[b, 0] = X
+            idx_array[b, 1] = Y
+            for j, zj in enumerate(cond):
+                idx_array[b, 2 + j] = zj
+
+        head = torch.sort(idx_array[:, :2], dim=1).values
+        tail = torch.sort(idx_array[:, 2:], dim=1).values if k > 2 else idx_array[:, 2:]
+        idx_array = torch.cat((head, tail), dim=1)
+
+        # Extract sub-covariance matrices: (B, k, k)
+        sub_cov = self._cov_matrix[idx_array[:, :, None], idx_array[:, None, :]]
+
+        trust, near = self._batch_conditioning_guard(sub_cov)
+        if k == 2:
+            rho = sub_cov[:, 0, 1] / torch.sqrt(sub_cov[:, 0, 0] * sub_cov[:, 1, 1])
+        else:
+            eye = torch.eye(k, dtype=sub_cov.dtype, device=dev)
+            safe = (
+                sub_cov
+                if bool(trust.all())
+                else torch.where(trust[:, None, None], sub_cov, eye)
+            )
+            prec = torch.linalg.inv(safe)
+            denom = prec[:, 0, 0] * prec[:, 1, 1]
+            rho = -prec[:, 0, 1] / torch.sqrt(denom)
+            pre = trust
+            # The scalar path's post-inversion checks, elementwise (NaN
+            # comparisons read False, so a poisoned row declines as well).
+            trust = (
+                trust
+                & (prec[:, 0, 0] > 0)
+                & (prec[:, 1, 1] > 0)
+                & (denom < float("inf"))
+                & (rho.abs() <= 1.0 + 1e-8)
+            )
+            # Same cutoff hazard for the |rho| check as for the rcond one, and
+            # this raw-covariance inverse can fail where the scalar
+            # correlation-scaled one does not (e.g. overflow at extreme scale).
+            near = near | (rho.abs() > 1.0 - 1e-6) | (pre & ~trust)
+
+        vals_np = rho.detach().cpu().numpy().astype(np.float64)
+        trust_np = trust.cpu().numpy()
+        near_np = near.cpu().numpy()
+        for j in np.flatnonzero(~trust_np | near_np):
+            X, Y, cond = tests[chunk_idx[j]]
+            val = self._compute_parcorr_precision(X, Y, cond) if near_np[j] else None
+            if val is None:
+                val = self._compute_parcorr_canonical(X, Y, cond)
+            vals_np[j] = val
+
+        # Clip before the exact-one check, as `__call__` does.
+        vals_np = np.clip(vals_np, -1.0, 1.0)
+        vals_clamped = np.clip(vals_np, -1 + 1e-15, 1 - 1e-15)
+
+        deg_f = T - d - 2
+        if deg_f < 1:
+            pvals = np.full(B, np.nan)
+        else:
+            trafo_vals = vals_clamped * np.sqrt(deg_f / (1.0 - vals_clamped**2))
+            pvals = stats.t.sf(np.abs(trafo_vals), deg_f) * 2
+            exact_one = np.abs(np.abs(vals_np) - 1.0) <= sys.float_info.min
+            pvals[exact_one] = 0.0
+
+        return pvals, vals_np
+
     def _batch_test_fast(self, tests, max_batch_size=50_000):
         """Fast path: skip all SHA1 hashing, caching, and deduplication.
 
@@ -490,46 +651,13 @@ class ParCorrGPU(CIT_Base):
             return results
 
         T = self.data_torch.shape[0]
-        dev = self._precision_device
 
         for d, indices in groups.items():
-            k = d + 2
             for chunk_start in range(0, len(indices), max_batch_size):
                 chunk_idx = indices[chunk_start : chunk_start + max_batch_size]
-                B = len(chunk_idx)
-
-                idx_array = torch.zeros(B, k, dtype=torch.long, device=dev)
-                for b, idx in enumerate(chunk_idx):
-                    X, Y, cond = tests[idx]
-                    idx_array[b, 0] = X
-                    idx_array[b, 1] = Y
-                    for j, zj in enumerate(cond):
-                        idx_array[b, 2 + j] = zj
-
-                sub_cov = self._cov_matrix[idx_array[:, :, None], idx_array[:, None, :]]
-
-                if k == 2:
-                    rho = sub_cov[:, 0, 1] / torch.sqrt(
-                        sub_cov[:, 0, 0] * sub_cov[:, 1, 1]
-                    )
-                else:
-                    prec = torch.linalg.inv(sub_cov)
-                    rho = -prec[:, 0, 1] / torch.sqrt(prec[:, 0, 0] * prec[:, 1, 1])
-
-                vals_np = rho.cpu().numpy()
-                vals_clamped = np.clip(vals_np, -1 + 1e-15, 1 - 1e-15)
-
-                deg_f = T - d - 2
-                if deg_f < 1:
-                    pvals = np.full(B, np.nan)
-                else:
-                    trafo_vals = vals_clamped * np.sqrt(deg_f / (1.0 - vals_clamped**2))
-                    pvals = stats.t.sf(np.abs(trafo_vals), deg_f) * 2
-                    exact_one = np.abs(np.abs(vals_np) - 1.0) <= sys.float_info.min
-                    pvals[exact_one] = 0.0
-
+                pvals, vals = self._guarded_precision_chunk(tests, chunk_idx, T)
                 for j, idx in enumerate(chunk_idx):
-                    results[idx] = (float(pvals[j]), float(vals_clamped[j]))
+                    results[idx] = (float(pvals[j]), float(vals[j]))
 
         return results
 
@@ -544,48 +672,17 @@ class ParCorrGPU(CIT_Base):
         Tests are processed in chunks of ``max_batch_size`` to bound memory
         usage (at d=50 scale-free, a single depth can produce 7M+ tests;
         processing them all at once would allocate multi-GB tensors).
+        Each chunk runs through ``_guarded_precision_chunk``: the scalar
+        path's conditioning guard, with per-test OLS fallback for anything it
+        declines (issue #74).
         """
-        dev = self._precision_device
         for d, indices in groups.items():
-            k = d + 2  # X, Y, + conditioning set
-
             for chunk_start in range(0, len(indices), max_batch_size):
                 chunk_idx = indices[chunk_start : chunk_start + max_batch_size]
-                B = len(chunk_idx)
-
-                idx_array = torch.zeros(B, k, dtype=torch.long, device=dev)
-                for b, idx in enumerate(chunk_idx):
-                    X, Y, cond = tests[idx]
-                    idx_array[b, 0] = X
-                    idx_array[b, 1] = Y
-                    for j, zj in enumerate(cond):
-                        idx_array[b, 2 + j] = zj
-
-                # Extract sub-covariance matrices: (B, k, k)
-                sub_cov = self._cov_matrix[idx_array[:, :, None], idx_array[:, None, :]]
-
-                if k == 2:
-                    rho = sub_cov[:, 0, 1] / torch.sqrt(
-                        sub_cov[:, 0, 0] * sub_cov[:, 1, 1]
-                    )
-                else:
-                    prec = torch.linalg.inv(sub_cov)
-                    rho = -prec[:, 0, 1] / torch.sqrt(prec[:, 0, 0] * prec[:, 1, 1])
-
-                vals_np = rho.cpu().numpy()
-                vals_clamped = np.clip(vals_np, -1 + 1e-15, 1 - 1e-15)
-
-                deg_f = T - d - 2
-                if deg_f < 1:
-                    pvals = np.full(B, np.nan)
-                else:
-                    trafo_vals = vals_clamped * np.sqrt(deg_f / (1.0 - vals_clamped**2))
-                    pvals = stats.t.sf(np.abs(trafo_vals), deg_f) * 2
-                    exact_one = np.abs(np.abs(vals_np) - 1.0) <= sys.float_info.min
-                    pvals[exact_one] = 0.0
+                pvals, vals = self._guarded_precision_chunk(tests, chunk_idx, T)
 
                 for j, idx in enumerate(chunk_idx):
-                    p, v = float(pvals[j]), float(vals_clamped[j])
+                    p, v = float(pvals[j]), float(vals[j])
                     result = (p, v)
                     combined_hash = hashes[idx]
                     self.pvalue_cache[combined_hash] = result
