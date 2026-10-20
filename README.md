@@ -6,6 +6,7 @@
 [![Lint](https://github.com/bloomberg/causal-ts/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/marketplace/actions/super-linter)
 [![Tests](https://github.com/bloomberg/causal-ts/actions/workflows/test.yml/badge.svg)](https://github.com/bloomberg/causal-ts/actions/workflows/test.yml)
 [![Contributor-Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-fbab2c.svg)](CODE_OF_CONDUCT.md)
+[![All Contributors](https://allcontributors.org/badge.svg)](#contributors)
 
 ## About the Project
 
@@ -116,6 +117,36 @@ Contributions are what make the open source community such an amazing place to
 learn, inspire, and create. Any contributions you make are **greatly
 appreciated**. For detailed contributing guidelines, please see
 [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Contributors
+
+Thanks goes to these wonderful people
+([emoji key](https://allcontributors.org/docs/en/emoji-key)):
+
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/Arun-Verma"><img src="https://avatars.githubusercontent.com/u/5639113?v=4" width="100px;" alt="Arun Verma"/><br /><sub><b>Arun Verma</b></sub></a><br /><a href="https://github.com/bloomberg/causal-ts/commits?author=Arun-Verma" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/chaimhaas"><img src="https://avatars.githubusercontent.com/u/29457495?v=4" width="100px;" alt="Chaim Haas"/><br /><sub><b>Chaim Haas</b></sub></a><br /><a href="https://github.com/bloomberg/causal-ts/commits?author=chaimhaas" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/ChakriCherukuri"><img src="https://avatars.githubusercontent.com/u/5638994?v=4" width="100px;" alt="Chakri Cherukuri"/><br /><sub><b>Chakri Cherukuri</b></sub></a><br /><a href="https://github.com/bloomberg/causal-ts/commits?author=ChakriCherukuri" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/fbourgey"><img src="https://avatars.githubusercontent.com/u/10298716?v=4" width="100px;" alt="Florian Bourgey"/><br /><sub><b>Florian Bourgey</b></sub></a><br /><a href="https://github.com/bloomberg/causal-ts/commits?author=fbourgey" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/fesanghary"><img src="https://avatars.githubusercontent.com/u/12377980?v=4" width="100px;" alt="Mohammad Fesanghary"/><br /><sub><b>Mohammad Fesanghary</b></sub></a><br /><a href="https://github.com/bloomberg/causal-ts/commits?author=fesanghary" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/hemv-857"><img src="https://avatars.githubusercontent.com/u/218273197?v=4" width="100px;" alt="Hemang Varshney"/><br /><sub><b>Hemang Varshney</b></sub></a><br /><a href="https://github.com/bloomberg/causal-ts/commits?author=hemv-857" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/jmlinx"><img src="https://avatars.githubusercontent.com/u/30658965?v=4" width="100px;" alt="Jimin Lin"/><br /><sub><b>Jimin Lin</b></sub></a><br /><a href="https://github.com/bloomberg/causal-ts/commits?author=jmlinx" title="Code">💻</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/kudala-bharani"><img src="https://avatars.githubusercontent.com/u/121555407?v=4" width="100px;" alt="Kudala Bharani Kumar Reddy"/><br /><sub><b>Kudala Bharani Kumar Reddy</b></sub></a><br /><a href="https://github.com/bloomberg/causal-ts/commits?author=kudala-bharani" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/mikemikimike"><img src="https://avatars.githubusercontent.com/u/186855910?v=4" width="100px;" alt="mikemikimike"/><br /><sub><b>mikemikimike</b></sub></a><br /><a href="https://github.com/bloomberg/causal-ts/commits?author=mikemikimike" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/mittal-aakriti"><img src="https://avatars.githubusercontent.com/u/31776192?v=4" width="100px;" alt="Aakriti Mittal"/><br /><sub><b>Aakriti Mittal</b></sub></a><br /><a href="https://github.com/bloomberg/causal-ts/commits?author=mittal-aakriti" title="Code">💻</a></td>
+    </tr>
+  </tbody>
+</table>
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+<!-- ALL-CONTRIBUTORS-LIST:END -->
 
 ## License
 
