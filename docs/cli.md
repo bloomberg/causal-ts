@@ -71,7 +71,7 @@ causal-ts discover DATA.csv [OPTIONS]
 | `-a, --algorithm` | `cdnots` | `cdnots`, `cdnots+`, `cedar`, `grace`, `grace-ss` |
 | `--ci-test` | `parcorr-gpu` | CI test — see `ci-test-info` |
 | `--max-lag INT` | `3` | Maximum time lag |
-| `--alpha FLOAT` | `0.05` | Significance level (`0.01` recommended for better results, required for CDNOTS+) |
+| `--alpha FLOAT` | `0.01` for `cdnots+`, else `0.05` | Significance level for `cdnots`, `cdnots+`, `grace`, `grace-ss` (`0.01` recommended); Cedar uses `--alpha-cond1`/`--alpha-cond2` |
 | `--lag-list TEXT` | — | Comma-separated explicit lags, e.g. `1,3,12` |
 | `--var-names TEXT` | from CSV | Comma-separated variable names |
 

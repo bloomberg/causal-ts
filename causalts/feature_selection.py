@@ -600,12 +600,30 @@ def _select_fastpc(
     return None, feats, var_names, n_c, None
 
 
+def _unique_c_labels(var_names, c_names):
+    """C-node labels that don't collide with observed names (or each other).
+
+    A clash (an observed column named ``C1``, say) would make the C node and
+    the variable indistinguishable by name, so feature and spouse lookups
+    would silently resolve to the wrong node. Prefix ``_`` until unique.
+    """
+    taken = set(var_names)
+    out = []
+    for name in c_names:
+        while name in taken:
+            name = "_" + name
+        taken.add(name)
+        out.append(name)
+    return out
+
+
 def _cpdag_names(res, graph):
     """Variable names for a CDNOTS result, padded to include C columns."""
-    names = list(res.var_names) + list(getattr(res, "c_node_names", []) or [])
-    while len(names) < graph.shape[0]:
-        names.append(f"C{len(names)}")
-    return names
+    var_names = list(res.var_names)
+    c_names = list(getattr(res, "c_node_names", []) or [])
+    while len(var_names) + len(c_names) < graph.shape[0]:
+        c_names.append(f"C{len(var_names) + len(c_names)}")
+    return var_names + _unique_c_labels(var_names, c_names)
 
 
 def _features_from_cpdag(
@@ -709,7 +727,9 @@ def _spouses_from_cpdag(graph, target_idx, names, n_c, include_children_feats):
     children = [
         (f.variable, f.lag) for f in include_children_feats if f.role == ROLE_CHILD
     ]
-    name_to_idx = {names[i]: i for i in range(d_all)}
+    # Children are observed variables (C is only ever a cause), so look them
+    # up among observed names only; a C label equal to one can't shadow it.
+    name_to_idx = {names[i]: i for i in range(d_x)}
     for e_name, a in children:
         e = name_to_idx[e_name]
         for z in range(d_x):
@@ -958,9 +978,18 @@ def select_features(
     if from_result is not None:
         res = from_result
         var_names = list(res.var_names)
-        n_c = len(getattr(res, "c_node_names", []) or [])
         if target not in var_names:
             raise ValueError(f"target {target!r} not in result var_names")
+        # Cedar lists its C nodes in var_names; CDNOTS does not, and leaves
+        # c_node_names unset for a custom c_array. Pad the names to the graph.
+        c_names = list(getattr(res, "c_node_names", []) or [])
+        n_unnamed = res.cg_tig.shape[0] - len(var_names)
+        if n_unnamed > 0:  # CDNOTS: C nodes are not in var_names
+            if len(c_names) != n_unnamed:
+                c_names = [f"C{i + 1}" for i in range(n_unnamed)]
+            c_names = _unique_c_labels(var_names, c_names)
+            var_names += c_names
+        n_c = len(c_names)
         target_idx = var_names.index(target)
         val_matrix = getattr(res, "val_matrix", None)
         feats = _features_from_graph(
@@ -1032,13 +1061,9 @@ def select_features(
         if from_result is not None:
             # children already came from _features_from_graph (outgoing edges);
             # add spouses read straight from the provided full graph.
-            fr_names = list(res.var_names) + list(
-                getattr(res, "c_node_names", []) or []
-            )
-            while len(fr_names) < res.cg_tig.shape[0]:
-                fr_names.append(f"C{len(fr_names)}")
+            # var_names is already padded to the graph (see above).
             feats = feats + _spouses_from_cpdag(
-                res.cg_tig, fr_names.index(target), fr_names, n_c, feats
+                res.cg_tig, target_idx, var_names, n_c, feats
             )
         else:
             existing_vars = {(f.variable, f.lag) for f in feats}

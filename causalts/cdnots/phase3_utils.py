@@ -8,13 +8,15 @@ Original License: MIT License
 
 import warnings
 from copy import deepcopy
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 import torch
 
 from ..ci_tests.kci_gpu import apply_H, rbf_kernel_gpu
-from .meek import meek
+from .ancestral import count_c_cols
+from .meek import completes_forbidden_path, meek, reaches
 from .result import CdnotsResult
 from .skeleton_discovery import (
     c_lag_cnst,
@@ -214,6 +216,33 @@ def infer_nonsta_dir(X, Y, c_indx, width="empirical"):
     return testStat
 
 
+def _orient(graph, x, y):
+    """Write x -> y into a causal-learn endpoint matrix."""
+    graph[x, y] = -1
+    graph[y, x] = 1
+
+
+def _can_orient(cg, x, y, background_knowledge, forbidden_ancestor_pairs):
+    """Whether phase three may orient the undirected edge x - y as x -> y.
+
+    Not if y already reaches x (a directed cycle), background knowledge
+    forbids x -> y or requires y -> x, or a forbidden ancestor pair (a, d)
+    would get a directed path a ->...-> x -> y ->...-> d.
+    """
+    if not cg.is_undirected(x, y):
+        return False  # already oriented (or bidirected): leave it alone
+    graph = cg.G.graph
+    if reaches(graph, y, x):
+        return False
+    if background_knowledge is not None:
+        nodes = cg.G.nodes
+        if background_knowledge.is_forbidden(
+            nodes[x], nodes[y]
+        ) or background_knowledge.is_required(nodes[y], nodes[x]):
+            return False
+    return not completes_forbidden_path(graph, x, y, forbidden_ancestor_pairs)
+
+
 def phase_three(
     g,
     data,
@@ -223,6 +252,8 @@ def phase_three(
     include_C=True,
     num_c_cols=1,
     orient_margin=0.0,
+    background_knowledge=None,
+    forbidden_ancestor_pairs=None,
 ):
     """Estimate the adjacency matrix of phase 3, contemporaneous dependency.
 
@@ -253,6 +284,10 @@ def phase_three(
         contemporaneous edges undirected -- the analogue of PCMCI+ abstaining
         on an ambiguous link. Callers that convert with
         ``undirected="drop"`` then drop them.
+    background_knowledge, forbidden_ancestor_pairs : optional
+        The constraints the earlier Meek call used. Phase three never orients
+        an edge against them, nor one that would close a directed cycle, and
+        passes them to its final Meek call.
 
     Returns
     -------
@@ -260,9 +295,17 @@ def phase_three(
         Adjacency matrix after phase 3.
     """
 
+    def _meek(cg):
+        return meek(
+            cg=cg,
+            background_knowledge=background_knowledge,
+            num_lags=num_lags,
+            forbidden_ancestor_pairs=forbidden_ancestor_pairs,
+        )
+
     if not include_C:
         # No C variable — skip nonstationarity-based orientation, just apply Meek
-        return meek(cg=deepcopy(g), num_lags=num_lags)
+        return _meek(deepcopy(g))
 
     no_of_var = g.G.num_vars
     assert no_of_var % (num_lags + 1) == 0
@@ -299,6 +342,16 @@ def phase_three(
             Vns_un.append(Vns[i])
     Vns = Vns_un
     gns = deepcopy(g)
+    conflicts = getattr(g, "conflict_edges", set())
+    forb_pairs = forbidden_ancestor_pairs or ()
+
+    def _orient_copies(c, sink):
+        # direction stability over diagonal; _can_orient also requires the
+        # shifted edge to exist
+        for ll in range(1, num_lags + 1):
+            cx, cy = c + ll * no_of_inst_var, sink + ll * no_of_inst_var
+            if _can_orient(gns, cx, cy, background_knowledge, forb_pairs):
+                _orient(gns.G.graph, cx, cy)
 
     data = pd.DataFrame(data)
     while len(Vns) > 1:
@@ -348,18 +401,31 @@ def phase_three(
                     break
 
         sink = Vns[idd]
-        gns.G.graph[hypo_cau[idd], hypo_eff[idd]] = -1
-        gns.G.graph[hypo_eff[idd], hypo_cau[idd]] = 1
-
-        if num_lags != 0:  # direction stability over diagonal
-            for ll in range(1, num_lags + 1):
-                cau = [x + (ll * no_of_inst_var) for x in hypo_cau[idd]]
-                gns.G.graph[cau, hypo_eff[idd] + (ll * no_of_inst_var)] = -1
-                gns.G.graph[hypo_eff[idd] + (ll * no_of_inst_var), cau] = 1
+        # Edges Meek found conflicting (R1 implied both directions) stay
+        # undirected; they still count as candidate causes in the score.
+        # Causes are taken in index order. Without forbidden ancestor pairs
+        # the result does not depend on it (each edge points into the sink,
+        # so no orientation can enable or block another); with them, as in
+        # Meek, the first admissible orientations win.
+        causes = [c for c in hypo_cau[idd] if (c, sink) not in conflicts]
+        for c in causes:
+            if not gns.is_fully_directed(c, sink):
+                if not _can_orient(gns, c, sink, background_knowledge, forb_pairs):
+                    continue
+                _orient(gns.G.graph, c, sink)
+            _orient_copies(c, sink)
 
         Vns = [i for i in Vns if i != sink]
 
-    return meek(cg=gns, num_lags=num_lags)
+    # The loop stops before the last candidate (or early, at the margin), so
+    # those never get their lag copies above. Copy the directions they
+    # already have; nothing new is oriented here.
+    for v in Vns:
+        for c in range(c_start):
+            if gns.is_fully_directed(c, v):
+                _orient_copies(c, v)
+
+    return _meek(gns)
 
 
 def build_pvalue_matrix(pvals, num_vars, max_lag, aggregation="min"):
@@ -440,6 +506,88 @@ def _detect_discrete_cols(df, T):
     return discrete
 
 
+def _set_discrete_indices(indep_test, embedded_disc):
+    """Point an index-based discrete-aware CI test at embedded columns."""
+    indep_test.discrete_cols = embedded_disc
+    if hasattr(indep_test, "_disc_set"):
+        indep_test._disc_set = set(embedded_disc)
+    if hasattr(indep_test, "_disc_global"):
+        indep_test._disc_global = set(embedded_disc)
+
+
+def _majority_collider_step(
+    cg,
+    indep_test,
+    df,
+    data,
+    lags,
+    num_lags,
+    discrete_cols,
+    lagged_parents,
+    data_ext=None,
+    **uc_kwargs,
+):
+    """Run the CDNOTS+ (PCMCI+-style) majority-rule collider step.
+
+    A lagged endpoint is conditioned on its parents shifted by its lag, which
+    can reach lag ``2 * num_lags``, so with contiguous lags the CI test reads a
+    ``2 * num_lags``-deep embedding of ``df`` (which already holds any C
+    columns) for this step, as MCI does. Its first columns are exactly
+    ``data``: same lags, same ``2 * num_lags`` rows dropped. With a gapped
+    ``lag_list`` that no longer holds, so ``data`` is kept and shifted parents
+    outside it are dropped. ``indep_test.data`` and its discrete-column
+    indices are restored afterwards, also on error.
+    """
+    from ..ci_tests.stratified_cit import compute_discrete_indices
+
+    use_ext = num_lags > 0 and lags == list(range(num_lags + 1))
+    swap_disc = use_ext and bool(discrete_cols) and hasattr(indep_test, "discrete_cols")
+    old_disc = list(indep_test.discrete_cols) if swap_disc else None
+    has_lags = hasattr(indep_test, "set_lag_structure")
+    try:
+        if use_ext:
+            if data_ext is None:
+                data_ext = (
+                    pd.concat([df.shift(i) for i in range(2 * num_lags + 1)], axis=1)
+                    .iloc[2 * num_lags :]
+                    .values
+                )
+            indep_test.data = data_ext
+            if has_lags:
+                # e.g. residual-score tests size their CV embargo from it.
+                indep_test.set_lag_structure(
+                    n_vars=df.shape[1], lags=list(range(2 * num_lags + 1))
+                )
+            if swap_disc:
+                # df already includes the C columns, hence include_C=False.
+                _set_discrete_indices(
+                    indep_test,
+                    compute_discrete_indices(
+                        discrete_cols,
+                        df,
+                        list(range(2 * num_lags + 1)),
+                        include_C=False,
+                    ),
+                )
+        return uc_sepset(
+            cg,
+            num_lags=num_lags,
+            contemp_collider_rule="majority",
+            ci_test=indep_test,
+            lagged_parents=lagged_parents,
+            no_of_var_ext=data_ext.shape[1] if use_ext else data.shape[1],
+            lags=lags,
+            majority_mode="mci",
+            **uc_kwargs,
+        )
+    finally:
+        indep_test.data = data
+        if use_ext and has_lags:
+            indep_test.set_lag_structure(n_vars=df.shape[1], lags=lags)
+        if swap_disc:
+            _set_discrete_indices(indep_test, old_disc)
+
+
 def _is_discrete_aware(indep_test):
     """Return True if the CI test natively handles discrete columns."""
     from ..ci_tests.cmiknn_mixed_gpu import CMIknnMixedGPU
@@ -448,12 +596,34 @@ def _is_discrete_aware(indep_test):
     return isinstance(indep_test, (StratifiedCIT, CMIknnMixedGPU))
 
 
+def _resolve_knowledge(
+    knowledge, background_knowledge, var_names, num_lags, include_C, num_c_cols
+):
+    """AncestralKnowledge -> (BackgroundKnowledge, forbidden-ancestor pairs).
+
+    An explicit ``background_knowledge`` wins over ``knowledge``'s edge
+    constraints; the pairs are None when there are no forbidden ancestors.
+    """
+    forb_ancestor_pairs = None
+    if knowledge is not None:
+        if background_knowledge is None:
+            background_knowledge = knowledge.to_background_knowledge(
+                var_names, num_lags, include_C, num_c_cols=num_c_cols
+            )
+        if knowledge._forbidden_ancestors:
+            forb_ancestor_pairs = knowledge.resolve_forbidden_ancestor_pairs(
+                var_names, num_lags, include_C, num_c_cols=num_c_cols
+            )
+    return background_knowledge, forb_ancestor_pairs
+
+
 def make_background_knowledge(
     var_names,
     num_lags,
     include_C=True,
     forbidden=None,
     required=None,
+    num_c_cols=None,
 ):
     """Build a BackgroundKnowledge object for use with cdnots_discovery.
 
@@ -476,6 +646,9 @@ def make_background_knowledge(
 
     required : list of tuple, optional
         Edges to require. Same format as ``forbidden``.
+    num_c_cols : int, optional
+        Number of C columns (e.g. 2 for ``c_preset="linear+sin"``); defaults
+        to 1 when ``include_C`` is set.
 
     Returns
     -------
@@ -495,7 +668,7 @@ def make_background_knowledge(
     from causallearn.utils.PCUtils.BackgroundKnowledge import BackgroundKnowledge
 
     d = len(var_names)
-    n_per_lag = d + (1 if include_C else 0)
+    n_per_lag = d + count_c_cols(include_C, num_c_cols)
 
     def _node_pattern(var_name, lag):
         var_idx = var_names.index(var_name)
@@ -543,8 +716,51 @@ def cdnots_discovery(
     knowledge=None,
     lag_verify=False,
     alpha_lv=None,
+    *,
+    contemp_collider_rule: str | None = "majority",
     orient_margin=0.0,
+    collider_search="full",
 ):
+    """Discover a CDNOTS causal graph.
+
+    Most arguments control the skeleton and CI testing. One orientation option
+    is exposed here:
+
+    contemp_collider_rule : {"majority", None}, default "majority"
+        How unshielded colliders whose middle node is contemporaneous (lag-0)
+        are oriented:
+
+        - ``"majority"`` — majority rule: re-test the pair over a family of
+          conditioning sets (see ``collider_search``) and declare a collider
+          only if the middle node appears in fewer than half of the separating
+          sets. An exact 50% tie, or no separating set, leaves the triple
+          ambiguous and unoriented. More conservative about declaring
+          colliders.
+        - ``None`` — classic rule: declare a collider iff the middle node is in
+          *no* separating set found by the skeleton search.
+
+    collider_search : {"full", "sepset"}, default "full"
+        Conditioning sets of the majority rule. ``"full"``: every subset of
+        the window neighbours of either endpoint (lagged ones included), at
+        most ``max_combinations`` per size per endpoint and none larger than
+        ``max_degree``, the skeleton's budget; neighbours in the skeleton's
+        separating sets for the pair are tried first. ``"sepset"``: only the
+        subsets of the skeleton's separating set plus the middle node; it
+        costs about as much as the old contemporaneous-only rule and is far
+        cheaper than ``"full"``, but orients fewer edges. Ignored when
+        ``contemp_collider_rule`` is None.
+    """
+    validate_priority(priority)
+    if contemp_collider_rule not in ("majority", None):
+        raise ValueError(
+            "contemp_collider_rule must be 'majority' or None, "
+            f"got {contemp_collider_rule!r}"
+        )
+    _COLLIDER_SEARCH = {"full": "pc", "sepset": "pc_sepset"}
+    if collider_search not in _COLLIDER_SEARCH:
+        raise ValueError(
+            "collider_search must be 'full' or 'sepset', " f"got {collider_search!r}"
+        )
     # --- Discrete column handling ---
     # discrete_cols=None  → auto-detect from df
     # discrete_cols=[]    → explicit "no discrete columns" (opt-out)
@@ -609,18 +825,6 @@ def cdnots_discovery(
     _df_orig = df.copy()
     _var_names_orig = list(df.columns)
 
-    # Resolve AncestralKnowledge → BackgroundKnowledge (edge constraints)
-    _forb_ancestor_pairs = None
-    if knowledge is not None:
-        if background_knowledge is None:
-            background_knowledge = knowledge.to_background_knowledge(
-                _var_names_orig, num_lags, include_C
-            )
-        if knowledge._forbidden_ancestors:
-            _forb_ancestor_pairs = knowledge.resolve_forbidden_ancestor_pairs(
-                _var_names_orig, num_lags, include_C
-            )
-
     if include_C:
         T = df.shape[0]
         if c_array is not None:
@@ -644,10 +848,21 @@ def cdnots_discovery(
         num_c_cols = 0
         _c_node_names = None
 
+    # Needs the number of C columns, so it comes after C is built.
+    background_knowledge, _forb_ancestor_pairs = _resolve_knowledge(
+        knowledge,
+        background_knowledge,
+        _var_names_orig,
+        num_lags,
+        include_C,
+        num_c_cols,
+    )
+
     data_lagged = pd.concat([df.shift(i) for i in lags], axis=1)
     # Drop 2*tau_max rows to match tigramite's sample alignment.
     n_drop = 2 * max(lags) if lags else 0
     data = data_lagged.iloc[n_drop:].values
+
     indep_test.data = data
 
     if hasattr(indep_test, "set_lag_structure"):
@@ -657,14 +872,11 @@ def cdnots_discovery(
     if discrete_cols and hasattr(indep_test, "discrete_cols"):
         from ..ci_tests.stratified_cit import compute_discrete_indices
 
+        # df already includes the C columns, hence include_C=False.
         embedded_disc = compute_discrete_indices(
-            discrete_cols, df, lags, include_C=include_C
+            discrete_cols, df, lags, include_C=False
         )
-        indep_test.discrete_cols = embedded_disc
-        if hasattr(indep_test, "_disc_set"):
-            indep_test._disc_set = set(embedded_disc)
-        if hasattr(indep_test, "_disc_global"):
-            indep_test._disc_global = set(embedded_disc)
+        _set_discrete_indices(indep_test, embedded_disc)
 
     cg_i = initialize_graph(data, None)
     cg_i_cnst = skeleton_cnst(
@@ -706,17 +918,29 @@ def cdnots_discovery(
         )
 
     cg_skel_cnst = c_lag_cnst(
-        cg_skel, num_lags, include_C=include_C, num_c_cols=num_c_cols
+        cg_skel,
+        num_lags,
+        include_C=include_C,
+        num_c_cols=num_c_cols,
+        background_knowledge=background_knowledge,
     )
+    # The majority rule searches the window neighbours of both endpoints,
+    # lagged ones included, as PC on the window does. Restricting it to
+    # contemporaneous neighbours (the old behaviour) means no separating set
+    # can contain a lagged node, which in autocorrelated data turns true
+    # colliders into "non-colliders".
     cg_sepset = uc_sepset(
         cg_skel_cnst,
         priority=priority,
         num_lags=num_lags,
         background_knowledge=background_knowledge,
-        contemp_collider_rule="majority",
+        contemp_collider_rule=contemp_collider_rule,
         ci_test=indep_test,
         alpha=alpha,
         lagged_parents=None,
+        majority_mode=_COLLIDER_SEARCH[collider_search],
+        max_subsets_per_size=max_combinations,
+        max_subset_size=max_degree,
     )
     cg_meek = meek(
         cg_sepset,
@@ -742,6 +966,8 @@ def cdnots_discovery(
         include_C=include_C,
         num_c_cols=num_c_cols,
         orient_margin=orient_margin,
+        background_knowledge=background_knowledge,
+        forbidden_ancestor_pairs=_forb_ancestor_pairs,
     )
     if knowledge is not None and knowledge.has_path_constraints:
         from .ancestral import apply_ancestral_constraints
@@ -752,14 +978,15 @@ def cdnots_discovery(
             _var_names_orig,
             num_lags,
             include_C,
+            num_c_cols=num_c_cols,
             background_knowledge=background_knowledge,
             df=_df_orig,
             verbose=verbose,
         )
 
-    # CDNOTS keeps unoriented lag-0 edges (o-o -> symmetric 1s); CDNOTS+
-    # drops them. cdnots_to_tigramite_graph's docstring explains when each
-    # rendering is the right one.
+    # CDNOTS keeps unoriented lag-0 edges (o-o -> symmetric 1s). CDNOTS+
+    # drops them; see finish_cdnots_plus. Both defaults are deliberate --
+    # cdnots_to_tigramite_graph's docstring explains when each is right.
     cg_tig = cdnots_to_tigramite_graph(
         cg_obj,
         num_lags=num_lags,
@@ -819,7 +1046,9 @@ def run_cdnots(
     lag_verify=False,
     alpha_lv=None,
     return_pvals=False,
+    *,
     orient_margin=0.0,
+    collider_search="full",
 ):
     """CDNOTS causal discovery — returns a single :class:`CdnotsResult` object.
 
@@ -870,10 +1099,13 @@ def run_cdnots(
     return_pvals : bool
         If True, stores all CI test p-values in the result object,
         enabling result.pvalue_matrix and result.plot_pvalues().
-    orient_margin : float
-        Confidence gate on the ``include_C`` nonstationarity orientation
-        (see :func:`phase_three`). ``0.0`` (default) preserves the existing
-        behaviour, which commits every contemporaneous edge to a direction.
+    collider_search : {"full", "sepset"}
+        Conditioning sets the lag-0 collider vote searches. ``"full"``
+        (default): every subset of the endpoints' window neighbours, within
+        the skeleton's budget (``max_combinations`` per size per endpoint,
+        ``max_degree``); most accurate, but more CI tests. ``"sepset"``: only subsets of the
+        skeleton's separating set plus the middle node; about the cost of the
+        old contemporaneous-only rule, with fewer edges oriented.
 
     Returns
     -------
@@ -885,12 +1117,11 @@ def run_cdnots(
     -----
     Unoriented contemporaneous edges (``o-o``) are **kept**, rendered in
     ``cg_tig`` as symmetric 1s. :func:`run_cdnots_plus` **drops** them
-    instead. Neither rendering is the CPDAG itself, which is preserved on
-    ``result.graph``. Re-render either way after the
+    instead. Both defaults are deliberate; neither is the CPDAG itself,
+    which is preserved on ``result.graph``. Re-render either way after the
     fact with ``result.to_binary(undirected=...)``, or losslessly with
     ``result.to_marks()``.
     """
-    validate_priority(priority)
     disc_out = cdnots_discovery(
         df=df,
         indep_test=indep_test,
@@ -915,6 +1146,7 @@ def run_cdnots(
         lag_verify=lag_verify,
         alpha_lv=alpha_lv,
         orient_margin=orient_margin,
+        collider_search=collider_search,
     )
     return disc_out[0]
 
@@ -943,8 +1175,10 @@ def run_cdnots_plus(
     lag_verify=False,
     alpha_lv=None,
     return_pvals=False,
+    *,
     legacy_mci_conds=False,
     orient_margin=0.1,
+    return_prefix=False,
 ):
     """CDNOTS+ causal discovery (PCMCI+-style two-phase skeleton).
 
@@ -967,8 +1201,8 @@ def run_cdnots_plus(
         Include the time-index nonstationarity node C.
     alpha : float
         Significance level for both skeleton phases. Default 0.01, matching
-        PCMCI+'s default and the setting empirically better for CDNOTS+ (the
-        opposite is true for plain CDNOTS, which defaults to 0.05).
+        PCMCI+'s default and the setting empirically better for CDNOTS+ (plain
+        CDNOTS keeps 0.05).
     max_degree : int or None
         Maximum conditioning-set size in phase 1.
     max_conds_py : int or None
@@ -976,10 +1210,8 @@ def run_cdnots_plus(
     max_conds_px : int or None
         Maximum parents of X in phase 2 MCI conditioning.
     priority : int
-        Collider conflict resolution strategy (0-4). Default 1 (orient
-        bi-directed): contradictory collider orientations are marked
-        conflicting and dropped, matching PCMCI+'s ``x-x`` treatment, rather
-        than tie-broken into a committed direction.
+        Collider conflict resolution strategy: 0 (overwrite),
+        1 (abstain on conflicts) or 2 (keep the first collider).
     verbose : bool
         Print CI test results.
     show_progress : bool
@@ -1001,28 +1233,33 @@ def run_cdnots_plus(
         If True, stores all CI test p-values. Set to False for large
         d to save memory.
     legacy_mci_conds : bool
-        Restore the pre-alignment phase-2 conditioning rule, which dropped
-        every lag-copy of a tested variable from the conditioning set rather
-        than only the exact tested node. Default False matches PCMCI+'s
-        ``_run_pcalg_test``.
+        Restore the pre-alignment phase-2 conditioning rule. The default
+        (False) matches PCMCI+'s ``_run_pcalg_test``.
+    return_prefix : bool
+        Return the :class:`CdnotsPlusPrefix` computed just before Meek
+        orientation instead of a result, so several ``orient_margin`` values
+        can share one skeleton + collider phase. Feed it to
+        :func:`finish_cdnots_plus`. ``orient_margin`` is stored on the prefix
+        as the default ``finish_cdnots_plus`` uses.
     orient_margin : float
         Confidence gate on the ``include_C`` nonstationarity orientation
-        (see :func:`phase_three`). Default 0.1. ``0.0`` restores the
-        original behaviour, which commits every contemporaneous edge to a
-        direction. No effect when ``include_C=False``.
+        (see :func:`phase_three`). ``0.0`` commits every contemporaneous edge
+        to a direction. Positive values (default ``0.1``) leave ambiguous
+        contemporaneous edges undirected, and CDNOTS+ then drops them. No
+        effect when ``include_C=False``.
 
     Returns
     -------
-    CdnotsResult
-        Self-contained result.
+    CdnotsResult or CdnotsPlusPrefix
+        Self-contained result, or the prefix when ``return_prefix=True``.
 
     Notes
     -----
     Unoriented contemporaneous edges (``o-o``) are **dropped** from
     ``cg_tig``, where :func:`run_cdnots` keeps them as symmetric 1s. The drop
     suits regimes where lag-0 edges are invalid or confounded; where
-    contemporaneous structure is real it costs recall. Neither rendering
-    discards the CPDAG -- it is preserved on
+    contemporaneous structure is real it costs recall. Both defaults are
+    deliberate, and neither discards the CPDAG -- it is preserved on
     ``result.graph``. Re-render the other way with
     ``result.to_binary(undirected="bidirected")``, or losslessly with
     ``result.to_marks()``.
@@ -1069,18 +1306,6 @@ def run_cdnots_plus(
     _df_orig = df.copy()
     _var_names_orig = list(df.columns)
 
-    # Resolve AncestralKnowledge → BackgroundKnowledge (edge constraints)
-    _forb_ancestor_pairs = None
-    if knowledge is not None:
-        if background_knowledge is None:
-            background_knowledge = knowledge.to_background_knowledge(
-                _var_names_orig, num_lags, include_C
-            )
-        if knowledge._forbidden_ancestors:
-            _forb_ancestor_pairs = knowledge.resolve_forbidden_ancestor_pairs(
-                _var_names_orig, num_lags, include_C
-            )
-
     if include_C:
         T = df.shape[0]
         if c_array is not None:
@@ -1104,12 +1329,23 @@ def run_cdnots_plus(
         num_c_cols = 0
         _c_node_names = None
 
+    # Needs the number of C columns, so it comes after C is built.
+    background_knowledge, _forb_ancestor_pairs = _resolve_knowledge(
+        knowledge,
+        background_knowledge,
+        _var_names_orig,
+        num_lags,
+        include_C,
+        num_c_cols,
+    )
+
     data_lagged = pd.concat([df.shift(i) for i in lags], axis=1)
     # Drop 2*tau_max rows to match tigramite's sample alignment: ensures
     # consistent effective T across Phase 1 and Phase 2 (MCI), and matches
     # PCMCI+'s _get_array which uses T - 2*tau_max samples.
     n_drop = 2 * max(lags) if lags else 0
     data = data_lagged.iloc[n_drop:].values
+
     indep_test.data = data
 
     if hasattr(indep_test, "set_lag_structure"):
@@ -1118,14 +1354,11 @@ def run_cdnots_plus(
     if discrete_cols and hasattr(indep_test, "discrete_cols"):
         from ..ci_tests.stratified_cit import compute_discrete_indices
 
+        # df already includes the C columns, hence include_C=False.
         embedded_disc = compute_discrete_indices(
-            discrete_cols, df, lags, include_C=include_C
+            discrete_cols, df, lags, include_C=False
         )
-        indep_test.discrete_cols = embedded_disc
-        if hasattr(indep_test, "_disc_set"):
-            indep_test._disc_set = set(embedded_disc)
-        if hasattr(indep_test, "_disc_global"):
-            indep_test._disc_global = set(embedded_disc)
+        _set_discrete_indices(indep_test, embedded_disc)
 
     cg_i = initialize_graph(data, None)
     cg_i_cnst = skeleton_cnst(
@@ -1144,6 +1377,8 @@ def run_cdnots_plus(
         max_degree=max_degree,
         num_lags=num_lags,
         background_knowledge=background_knowledge,
+        include_C=include_C,
+        num_c_cols=num_c_cols,
     )
     if return_pvals:
         cg_skel, pvals_phase1 = skel_result
@@ -1157,36 +1392,61 @@ def run_cdnots_plus(
         lagged_parents[j] = [p for p in cg_skel.neighbors(j) if p >= no_of_inst_var]
 
     # --- Extend data to 2×num_lags depth for phase 2 conditioning ---
-    if num_lags > 0:
-        ext_lags = list(range(2 * num_lags + 1))
-        data_ext = (
-            pd.concat([df.shift(i) for i in ext_lags], axis=1)
-            .iloc[2 * num_lags :]
-            .values
-        )
-        indep_test.data = data_ext
-        no_of_var_ext = data_ext.shape[1]
-    else:
-        no_of_var_ext = data.shape[1]
-
-    # --- Phase 2: MCI re-test ---
-    mci_result = mci_skeleton(
-        cg=cg_skel,
-        ci_test=indep_test,
-        alpha=alpha,
-        lagged_parents=lagged_parents,
-        num_lags=num_lags,
-        include_C=include_C,
-        num_c_cols=num_c_cols,
-        max_conds_py=max_conds_py,
-        max_conds_px=max_conds_px,
-        verbose=verbose,
-        show_progress=show_progress,
-        return_pvals=return_pvals,
-        no_of_var_ext=no_of_var_ext,
-        background_knowledge=background_knowledge,
-        legacy_mci_conds=legacy_mci_conds,
+    # MCI reads a deeper array; indep_test.data and its discrete indices are
+    # restored afterwards, also on error.
+    swap_disc = (
+        num_lags > 0 and bool(discrete_cols) and hasattr(indep_test, "discrete_cols")
     )
+    try:
+        if num_lags > 0:
+            ext_lags = list(range(2 * num_lags + 1))
+            data_ext = (
+                pd.concat([df.shift(i) for i in ext_lags], axis=1)
+                .iloc[2 * num_lags :]
+                .values
+            )
+            indep_test.data = data_ext
+            no_of_var_ext = data_ext.shape[1]
+            if hasattr(indep_test, "set_lag_structure"):
+                indep_test.set_lag_structure(n_vars=df.shape[1], lags=ext_lags)
+            if swap_disc:
+                from ..ci_tests.stratified_cit import compute_discrete_indices
+
+                # MCI conditions on columns of the deeper array too; their
+                # discrete flags must cover it.
+                _set_discrete_indices(
+                    indep_test,
+                    compute_discrete_indices(
+                        discrete_cols, df, ext_lags, include_C=False
+                    ),
+                )
+        else:
+            no_of_var_ext = data.shape[1]
+
+        # --- Phase 2: MCI re-test ---
+        mci_result = mci_skeleton(
+            cg=cg_skel,
+            ci_test=indep_test,
+            alpha=alpha,
+            lagged_parents=lagged_parents,
+            num_lags=num_lags,
+            include_C=include_C,
+            num_c_cols=num_c_cols,
+            max_conds_py=max_conds_py,
+            max_conds_px=max_conds_px,
+            verbose=verbose,
+            show_progress=show_progress,
+            return_pvals=return_pvals,
+            no_of_var_ext=no_of_var_ext,
+            background_knowledge=background_knowledge,
+            legacy_mci_conds=legacy_mci_conds,
+        )
+    finally:
+        indep_test.data = data
+        if num_lags > 0 and hasattr(indep_test, "set_lag_structure"):
+            indep_test.set_lag_structure(n_vars=df.shape[1], lags=lags)
+        if swap_disc:
+            _set_discrete_indices(indep_test, embedded_disc)
     if return_pvals:
         cg_skel_mci, pvals_phase2 = mci_result
     else:
@@ -1208,90 +1468,59 @@ def run_cdnots_plus(
             verbose=verbose,
             alpha_lv=alpha_lv,
         )
-        indep_test.data = data
 
     # --- Orientation pipeline (same as CDNOTS) ---
     cg_skel_cnst = c_lag_cnst(
-        cg_skel_mci, num_lags, include_C=include_C, num_c_cols=num_c_cols
+        cg_skel_mci,
+        num_lags,
+        include_C=include_C,
+        num_c_cols=num_c_cols,
+        background_knowledge=background_knowledge,
     )
-    cg_sepset = uc_sepset(
+    cg_sepset = _majority_collider_step(
         cg_skel_cnst,
-        priority=priority,
-        num_lags=num_lags,
-        background_knowledge=background_knowledge,
-        contemp_collider_rule="majority",
-        ci_test=indep_test,
-        alpha=alpha,
-        lagged_parents=lagged_parents,
-    )
-    cg_meek = meek(
-        cg_sepset,
-        background_knowledge=background_knowledge,
-        num_lags=num_lags,
-        forbidden_ancestor_pairs=_forb_ancestor_pairs,
-    )
-
-    if include_C:
-        no_of_inst_var_ph3 = data.shape[1] // (num_lags + 1)
-        c_start_ph3 = no_of_inst_var_ph3 - num_c_cols
-        c_indx_for_phase3 = pd.DataFrame(data[:, c_start_ph3:no_of_inst_var_ph3])
-    else:
-        c_indx_for_phase3 = None
-
-    cg_obj = phase_three(
-        cg_meek,
+        indep_test,
+        df,
         data,
-        c_indx=c_indx_for_phase3,
-        num_lags=num_lags,
-        width="median",
-        include_C=include_C,
-        num_c_cols=num_c_cols,
-        orient_margin=orient_margin,
-    )
-    if knowledge is not None and knowledge.has_path_constraints:
-        from .ancestral import apply_ancestral_constraints
-
-        cg_obj, _ = apply_ancestral_constraints(
-            cg_obj,
-            knowledge,
-            _var_names_orig,
-            num_lags,
-            include_C,
-            background_knowledge=background_knowledge,
-            df=_df_orig,
-            verbose=verbose,
-        )
-
-    # CDNOTS+ drops unoriented lag-0 edges, where CDNOTS keeps them: dropping
-    # suits regimes where contemporaneous edges are invalid or confounded.
-    # Score the other way with result.to_binary(undirected="bidirected") --
-    # see the converter docstring.
-    cg_tig = cdnots_to_tigramite_graph(
-        cg_obj,
-        num_lags=num_lags,
-        include_C=include_C,
-        num_c_cols=num_c_cols,
-        keep_undirected=False,
-    )
-    return _build_result(
-        cg_obj,
-        cg_tig,
-        pvalue_matrix,
-        pvals,
-        _df_orig,
-        _var_names_orig,
         lags,
-        lag_list,
-        include_C,
-        _lv_stats,
-        num_lags=num_lags,
-        alpha=alpha,
+        num_lags,
+        discrete_cols,
+        lagged_parents,
+        data_ext=data_ext if num_lags > 0 else None,
         priority=priority,
-        stable=False,
+        background_knowledge=background_knowledge,
+        alpha=alpha,
+        max_conds_py=max_conds_py,
+        max_conds_px=max_conds_px,
+    )
+    state = CdnotsPlusPrefix(
+        cg_sepset=cg_sepset,
+        data=data,
+        pvals=pvals,
+        pvalue_matrix=pvalue_matrix,
+        lv_stats=_lv_stats,
+        df_orig=_df_orig,
+        var_names_orig=_var_names_orig,
+        lags=lags,
+        lag_list=lag_list,
+        num_lags=num_lags,
+        include_C=include_C,
         num_c_cols=num_c_cols,
         c_node_names=_c_node_names,
-        undirected_policy="drop",
+        alpha=alpha,
+        priority=priority,
+        background_knowledge=background_knowledge,
+        forbidden_ancestor_pairs=_forb_ancestor_pairs,
+        knowledge=knowledge,
+        verbose=verbose,
+        orient_margin=orient_margin,
     )
+    if return_prefix:
+        # Caller may evaluate several orientation settings against this one
+        # (expensive) collider phase; finish_cdnots_plus(state) with no
+        # overrides reproduces the direct call below.
+        return state
+    return finish_cdnots_plus(state)
 
 
 #: Rendering policies for an unoriented (``o-o``) contemporaneous edge.
@@ -1413,8 +1642,8 @@ def cdnots_to_tigramite_graph(
 
     Notes
     -----
-    The two CDNOTS entry points render ``o-o`` **differently**, each suiting
-    a different regime:
+    The two CDNOTS entry points render ``o-o`` **differently**, and both
+    defaults are deliberate:
 
     * :func:`run_cdnots` keeps it (``"bidirected"``) -- right when
       contemporaneous structure is real.
@@ -1528,3 +1757,134 @@ def cdnots_to_tigramite_marks(gg, num_lags=0, include_C=True, num_c_cols=1):
     np.fill_diagonal(marks, "")
 
     return _to_tigramite_layout(marks, no_of_inst_var, num_lags)
+
+
+@dataclass
+class CdnotsPlusPrefix:
+    """Everything :func:`run_cdnots_plus` computes before Meek orientation.
+
+    The expensive part of CDNOTS+ is the skeleton search and, dominantly, the
+    majority-rule collider phase in ``uc_sepset`` -- together ~96% of runtime
+    at d=40. Neither depends on ``orient_margin``, which only reaches
+    :func:`phase_three`. Holding a prefix lets a caller score many margins
+    against a single collider phase.
+
+    Get one via ``run_cdnots_plus(..., return_prefix=True)``, then call
+    :func:`finish_cdnots_plus` on it repeatedly. Reuse is safe: ``meek`` and
+    ``phase_three`` both deepcopy their input, so ``cg_sepset`` is never
+    mutated.
+    """
+
+    cg_sepset: object
+    data: object
+    pvals: list
+    pvalue_matrix: object
+    lv_stats: object
+    df_orig: object
+    var_names_orig: list
+    lags: list
+    lag_list: object
+    num_lags: int
+    include_C: bool
+    num_c_cols: int
+    c_node_names: object
+    alpha: float
+    priority: int
+    background_knowledge: object = None
+    forbidden_ancestor_pairs: object = None
+    knowledge: object = None
+    verbose: bool = False
+    orient_margin: float = 0.1
+
+
+def finish_cdnots_plus(state, orient_margin=None):
+    """Run the orientation tail of CDNOTS+ on a :class:`CdnotsPlusPrefix`.
+
+    Meek rules -> nonstationarity orientation -> tigramite conversion.
+    :func:`run_cdnots_plus` calls exactly this function, so reusing a prefix
+    is bit-identical to calling ``run_cdnots_plus`` directly with the same
+    ``orient_margin`` -- there is no second implementation to drift.
+
+    ``orient_margin`` defaults to the value stored on ``state`` (the one passed
+    to ``run_cdnots_plus``), so ``finish_cdnots_plus(state)`` reproduces the
+    direct call. Pass it to override.
+    """
+    if orient_margin is None:
+        orient_margin = state.orient_margin
+    num_lags = state.num_lags
+    include_C = state.include_C
+    num_c_cols = state.num_c_cols
+    data = state.data
+
+    cg_meek = meek(
+        state.cg_sepset,
+        background_knowledge=state.background_knowledge,
+        num_lags=num_lags,
+        forbidden_ancestor_pairs=state.forbidden_ancestor_pairs,
+    )
+
+    if include_C:
+        no_of_inst_var_ph3 = data.shape[1] // (num_lags + 1)
+        c_start_ph3 = no_of_inst_var_ph3 - num_c_cols
+        c_indx_for_phase3 = pd.DataFrame(data[:, c_start_ph3:no_of_inst_var_ph3])
+    else:
+        c_indx_for_phase3 = None
+
+    cg_obj = phase_three(
+        cg_meek,
+        data,
+        c_indx=c_indx_for_phase3,
+        num_lags=num_lags,
+        width="median",
+        include_C=include_C,
+        num_c_cols=num_c_cols,
+        orient_margin=orient_margin,
+        background_knowledge=state.background_knowledge,
+        forbidden_ancestor_pairs=state.forbidden_ancestor_pairs,
+    )
+    knowledge = state.knowledge
+    if knowledge is not None and knowledge.has_path_constraints:
+        from .ancestral import apply_ancestral_constraints
+
+        cg_obj, _ = apply_ancestral_constraints(
+            cg_obj,
+            knowledge,
+            state.var_names_orig,
+            num_lags,
+            include_C,
+            num_c_cols=num_c_cols,
+            background_knowledge=state.background_knowledge,
+            df=state.df_orig,
+            verbose=state.verbose,
+        )
+
+    # CDNOTS+ drops unoriented lag-0 edges, where CDNOTS keeps them. This is
+    # deliberate, not an oversight: it suits regimes where contemporaneous
+    # edges are invalid or confounded. Score the other way with
+    # result.to_binary(undirected="bidirected") -- see the converter docstring.
+    cg_tig = cdnots_to_tigramite_graph(
+        cg_obj,
+        num_lags=num_lags,
+        include_C=include_C,
+        num_c_cols=num_c_cols,
+        undirected="drop",
+    )
+    return _build_result(
+        cg_obj,
+        cg_tig,
+        state.pvalue_matrix,
+        state.pvals,
+        state.df_orig,
+        state.var_names_orig,
+        state.lags,
+        state.lag_list,
+        include_C,
+        state.lv_stats,
+        num_lags=num_lags,
+        alpha=state.alpha,
+        priority=state.priority,
+        stable=False,
+        num_c_cols=num_c_cols,
+        c_node_names=state.c_node_names,
+        undirected_policy="drop",
+    )

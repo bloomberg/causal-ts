@@ -16,6 +16,13 @@ from collections import deque
 import numpy as np
 
 
+def count_c_cols(include_C, num_c_cols=None):
+    """Number of C columns per lag slice (``num_c_cols`` wins if given)."""
+    if not include_C:
+        return 0
+    return 1 if num_c_cols is None else int(num_c_cols)
+
+
 class AncestralKnowledge:
     """Unified causal background knowledge: edge constraints + path constraints.
 
@@ -119,7 +126,9 @@ class AncestralKnowledge:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def to_background_knowledge(self, var_names, num_lags, include_C=False):
+    def to_background_knowledge(
+        self, var_names, num_lags, include_C=False, num_c_cols=None
+    ):
         """Convert edge constraints to a causal-learn BackgroundKnowledge object.
 
         Used internally by run_cdnots / run_cdnots_plus for the skeleton phase.
@@ -130,6 +139,7 @@ class AncestralKnowledge:
             var_names=var_names,
             num_lags=num_lags,
             include_C=include_C,
+            num_c_cols=num_c_cols,
             forbidden=self._forbidden_edges or None,
             required=self._required_edges or None,
         )
@@ -140,7 +150,11 @@ class AncestralKnowledge:
         return var_names.index(var_name) + lag * n_per_lag
 
     def resolve_forbidden_ancestor_pairs(
-        self, var_names: list, num_lags: int, include_C: bool = False
+        self,
+        var_names: list,
+        num_lags: int,
+        include_C: bool = False,
+        num_c_cols: int | None = None,
     ) -> list[tuple[int, int]]:
         """Return (a_idx, d_idx) pairs for all lag copies of each forbidden ancestor.
 
@@ -149,32 +163,36 @@ class AncestralKnowledge:
         """
         if not self._forbidden_ancestors:
             return []
-        n_per_lag = len(var_names) + (1 if include_C else 0)
+        n_per_lag = len(var_names) + count_c_cols(include_C, num_c_cols)
         pairs = []
-        for anc, desc in self._forbidden_ancestors:
-            if anc not in var_names or desc not in var_names:
+        for ancestor, desc in self._forbidden_ancestors:
+            if ancestor not in var_names or desc not in var_names:
                 continue
             d_idx = self._node_idx(desc, 0, var_names, n_per_lag)
             for lag in range(num_lags + 1):
-                a_idx = self._node_idx(anc, lag, var_names, n_per_lag)
+                a_idx = self._node_idx(ancestor, lag, var_names, n_per_lag)
                 if a_idx != d_idx:
                     pairs.append((a_idx, d_idx))
         return pairs
 
     def resolve_required_ancestor_pairs(
-        self, var_names: list, num_lags: int, include_C: bool = False
+        self,
+        var_names: list,
+        num_lags: int,
+        include_C: bool = False,
+        num_c_cols: int | None = None,
     ) -> list[tuple[int, int]]:
         """Return (a_idx, d_idx) pairs for all lag copies of each required ancestor."""
         if not self._required_ancestors:
             return []
-        n_per_lag = len(var_names) + (1 if include_C else 0)
+        n_per_lag = len(var_names) + count_c_cols(include_C, num_c_cols)
         pairs = []
-        for anc, desc in self._required_ancestors:
-            if anc not in var_names or desc not in var_names:
+        for ancestor, desc in self._required_ancestors:
+            if ancestor not in var_names or desc not in var_names:
                 continue
             d_idx = self._node_idx(desc, 0, var_names, n_per_lag)
             for lag in range(num_lags + 1):
-                a_idx = self._node_idx(anc, lag, var_names, n_per_lag)
+                a_idx = self._node_idx(ancestor, lag, var_names, n_per_lag)
                 if a_idx != d_idx:
                     pairs.append((a_idx, d_idx))
         return pairs
@@ -285,6 +303,7 @@ def apply_ancestral_constraints(
     background_knowledge=None,
     df=None,
     verbose: bool = False,
+    num_c_cols: int | None = None,
 ) -> tuple:
     """Enforce ancestral constraints on an oriented CausalGraph.
 
@@ -311,7 +330,7 @@ def apply_ancestral_constraints(
     from causallearn.graph.Edge import Edge
     from causallearn.graph.Endpoint import Endpoint
 
-    from .meek import meek
+    from .meek import meek, reaches
 
     # Warn on conflicting constraints before doing anything
     conflicts = knowledge.validate()
@@ -329,9 +348,9 @@ def apply_ancestral_constraints(
         return cg, violations
 
     n = cg.G.num_vars
-    n_per_lag = len(var_names) + (1 if include_C else 0)
+    n_per_lag = len(var_names) + count_c_cols(include_C, num_c_cols)
     forb_pairs = knowledge.resolve_forbidden_ancestor_pairs(
-        var_names, num_lags, include_C
+        var_names, num_lags, include_C, num_c_cols=num_c_cols
     )
 
     def _var_label(idx: int) -> str:
@@ -386,9 +405,15 @@ def apply_ancestral_constraints(
         return lagged  # lag-0 excluded: use add_required_edge(cause_lag=0) for contemporaneous
 
     def _orient_edge(xi: int, xj: int) -> None:
+        # Required-ancestor knowledge is a hard constraint: it may orient an
+        # edge Meek left undirected as a conflict, which then is one no more.
+        conflicts = getattr(cg, "conflict_edges", None)
+        if conflicts:
+            conflicts.discard((xi, xj))
+            conflicts.discard((xj, xi))
         edge1 = cg.G.get_edge(cg.G.nodes[xi], cg.G.nodes[xj])
         if edge1 is not None:
-            if not cg.G.is_ancestor_of(cg.G.nodes[xj], cg.G.nodes[xi]):
+            if not reaches(cg.G.graph, xj, xi):
                 cg.G.remove_edge(edge1)
         cg.G.add_edge(
             Edge(cg.G.nodes[xi], cg.G.nodes[xj], Endpoint.TAIL, Endpoint.ARROW)
@@ -407,10 +432,7 @@ def apply_ancestral_constraints(
 
         # Already satisfied by any lag copy?
         already_satisfied = any(
-            cg.G.is_ancestor_of(
-                cg.G.nodes[var_names.index(anc_name) + lag * n_per_lag],
-                cg.G.nodes[d_idx],
-            )
+            reaches(cg.G.graph, var_names.index(anc_name) + lag * n_per_lag, d_idx)
             for lag in range(num_lags + 1)
             if var_names.index(anc_name) + lag * n_per_lag < n
         )
@@ -550,6 +572,22 @@ def apply_ancestral_constraints(
     # Pass 2: If a genuine multi-hop path still exists, remove last-hop Y→D.
     # Undirected Y—D is never touched; proactive Meek guard prevents →D.
 
+    def _mark_new_triples_ambiguous(a: int, b: int) -> None:
+        """Mark the triples a - m - b that removing a - b unshields as ambiguous.
+
+        The collider step never classified them, so Meek must not treat them
+        as known non-colliders and orient through them.
+        """
+        common = set(cg.neighbors(a)) & set(cg.neighbors(b))
+        if not common:
+            return
+        if not hasattr(cg, "ambiguous_triples"):
+            cg.ambiguous_triples = set()
+        for m in common:
+            if cg.is_fully_directed(a, m) and cg.is_fully_directed(b, m):
+                continue  # already an oriented collider
+            cg.ambiguous_triples.update({(a, int(m), b), (b, int(m), a)})
+
     def _remove_edge_with_lags(xi: int, xj: int) -> bool:
         """Remove xi→xj and all lag-shifted copies; return True if anything removed."""
         did_remove = False
@@ -566,6 +604,7 @@ def apply_ancestral_constraints(
             e = cg.G.get_edge(cg.G.nodes[nx], cg.G.nodes[ny])
             if e is not None:
                 cg.G.remove_edge(e)
+                _mark_new_triples_ambiguous(nx, ny)
                 did_remove = True
                 if verbose:
                     print(
@@ -615,8 +654,7 @@ def apply_ancestral_constraints(
             a_idx = var_names.index(anc_name) + lag * n_per_lag
             if a_idx >= n:
                 continue
-            node_a = cg.G.nodes[a_idx]
-            if not cg.G.is_ancestor_of(node_a, node_d):
+            if not reaches(cg.G.graph, a_idx, d_idx):
                 continue  # pass 1 already broke this path
 
             for y_idx in range(n):
@@ -625,10 +663,11 @@ def apply_ancestral_constraints(
                 if not cg.is_fully_directed(y_idx, d_idx):
                     continue
                 node_y = cg.G.nodes[y_idx]
-                if y_idx == a_idx or cg.G.is_ancestor_of(node_a, node_y):
+                if y_idx == a_idx or reaches(cg.G.graph, a_idx, y_idx):
                     e = cg.G.get_edge(node_y, node_d)
                     if e is not None:
                         cg.G.remove_edge(e)
+                        _mark_new_triples_ambiguous(y_idx, d_idx)
                         removed_any_p2 = True
                         if verbose:
                             print(
@@ -649,7 +688,7 @@ def apply_ancestral_constraints(
     for a_idx, d_idx in forb_pairs:
         if a_idx >= n or d_idx >= n:
             continue
-        if cg.G.is_ancestor_of(cg.G.nodes[a_idx], cg.G.nodes[d_idx]):
+        if reaches(cg.G.graph, a_idx, d_idx):
             violations["forbidden"].append((_var_label(a_idx), _var_label(d_idx)))
             if verbose:
                 print(

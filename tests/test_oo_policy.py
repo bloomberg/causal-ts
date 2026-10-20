@@ -6,7 +6,7 @@
 Discovery produces a CPDAG. ``cg_tig`` is a *lossy rendering* of it, and the
 two CDNOTS entry points render an unoriented contemporaneous edge
 **differently** -- ``run_cdnots`` keeps it as symmetric 1s, ``run_cdnots_plus``
-zeroes it.
+zeroes it. Both defaults are deliberate.
 
 What must not regress:
 
@@ -35,8 +35,13 @@ from causalts.utils.helpers import evaluate_graph
 ENGINES = [("run_cdnots", run_cdnots, "bidirected"), ("plus", run_cdnots_plus, "drop")]
 
 
-def _data(T=300, d=5, seed=0):
-    """Mixed lagged + contemporaneous chain, dense enough to leave o-o edges."""
+def _data(T=300, d=7, seed=0):
+    """Mixed lagged + contemporaneous chain, plus an i.i.d. pair X5 - X6.
+
+    Meek R1 orients both chain links from their lagged parents, so the o-o
+    edges come from X5 - X6: no lagged parents and no collider leave it
+    unorientable.
+    """
     rng = np.random.default_rng(seed)
     x = rng.standard_normal((T, d))
     for t in range(1, T):
@@ -44,6 +49,7 @@ def _data(T=300, d=5, seed=0):
         x[t, 2] += 0.7 * x[t, 1]
         x[t, 3] += 0.5 * x[t - 1, 2]
         x[t, 4] += 0.6 * x[t, 3]
+        x[t, 6] += 0.7 * x[t, 5]
     return pd.DataFrame(x, columns=[f"X{i}" for i in range(d)])
 
 

@@ -15,6 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * `pairs_panel()` — scatterplot matrix (histogram+KDE diagonal, scatter+fit, correlation text), colorblind-safe palette.
 * CI tests `gcm`, `wgcm`, `pcm` (residual-score) and `raft`, `rift` (random-feature F-tests).
 * How an unoriented (`o-o`) contemporaneous edge is rendered is now a post-discovery choice, not a hardcoded one: `result.to_binary(undirected=, conflict=)`, the lossless `result.to_marks()`, `result.plot(undirected=)`, `result.undirected_policy`, and the same knobs on `cdnots_to_tigramite_graph()` / `tigramite_graph_to_binary()`. Engine defaults are unchanged — `cg_tig` is bit-identical. `evaluate_graph()` gains `*_lag0`, `*_lag0_adj` and `*_lagpos` metric groups.
+* `run_cdnots(collider_search="full"|"sepset")`: which conditioning sets the lag-0 collider
+  vote searches. `run_cdnots_plus(return_prefix=True)` + `finish_cdnots_plus()` reuse one
+  skeleton for several `orient_margin` values.
 
 ### Changed
 
@@ -29,6 +32,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `batch_test`), but its statistics shift by ~1e-8 from the float32->float64
   covariance, and any persisted `pvalue_cache` misses across the upgrade.
   Ill-conditioned tests fall back to the unchanged `method="ols"` path.
+* `discover -a cdnots+` defaults `--alpha` to 0.01, matching `run_cdnots_plus`.
+* Keyword-only: `orient_margin` in `cdnots_discovery` / `run_cdnots`, `legacy_mci_conds` and
+  `orient_margin` in `run_cdnots_plus`, and `legacy_mci_conds` in `mci_skeleton`, along with
+  the new options. Passing them positionally now raises `TypeError`.
+* Results change (fixes below): CDNOTS and CDNOTS+ lag-0 orientations; with
+  `include_C=True`, CDNOTS+ C-node edges and lagged edges whose MCI tests conditioned on C;
+  lagged edges under `lag_verify=True`.
 
 ### Fixed
 
@@ -41,6 +51,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   option (it is not limited to mean shifts).
 * `sensitivity_analysis()` reports why it cannot run instead of raising (`reason`, `stats`).
 * `routed_deconfound(..., keep_undirected=True, pervasive_base="tetrad")` works instead of raising `NotImplementedError`.
+* CDNOTS / CDNOTS+ lag-0 orientation: Meek R1 orients from lagged parents and runs to
+  closure; collider votes condition on correctly shifted lagged parents (plain CDNOTS also
+  on lagged neighbours); ambiguous triples and conflicting orientations stay undirected;
+  colliders that would close a lag-0 cycle are re-selected.
+* `run_cdnots_plus(include_C=True)` never tested C's lag-0 edges, so every variable came
+  out C-adjacent.
+* C-node handling: `knowledge=` with several C columns, forbidden `C -> X`, `lag_verify`
+  ignoring C, `select_features(from_result=...)` `IndexError` on results with a C edge.
+* Orientation guards: lag-copied orientations respect the skeleton and knowledge; the
+  C-node phase respects knowledge and acyclicity; cycle checks use the live graph.
+* Discrete-column indices were misaligned with `include_C=True` (`StratifiedCIT`,
+  `CMIknnMixedGPU`).
+* CDNOTS+ `pvalue_matrix` (`return_pvals=True`) dropped every lagged test and transposed the
+  lag-0 ones: its raw `pvals` records were `(cause, effect, ...)`. They are now
+  `(effect, cause, ...)`, as in CDNOTS.
+* `select_features(algo="cdnots", markov_blanket=True)` with a custom `c_array` silently
+  dropped spouses whose column name equalled the C node's label (e.g. `C3`). Colliding C
+  labels now get a `_` prefix (`_C3`).
 
 ## [0.27.0]
 

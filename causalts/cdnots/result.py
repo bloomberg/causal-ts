@@ -113,8 +113,8 @@ class CdnotsResult(CausalResult):
 
         Notes
         -----
-        The engines differ in their default: ``run_cdnots`` keeps ``o-o``,
-        ``run_cdnots_plus`` drops it. The policy
+        The engines disagree on the default and that is deliberate:
+        ``run_cdnots`` keeps ``o-o``, ``run_cdnots_plus`` drops it. The policy
         this result was built with is recorded on
         :attr:`undirected_policy`, so ``to_binary(undirected=r.undirected_policy)``
         reproduces ``cg_tig``.
@@ -161,12 +161,6 @@ class CdnotsResult(CausalResult):
             :func:`~causalts.utils.helpers.evaluate_graph` -- use
             :meth:`to_binary` for scoring. It *can* be passed straight to
             plotting, or reached via ``result.plot(undirected="keep")``.
-
-        Notes
-        -----
-        "Lossless" is with respect to the *endpoint marks*: an ``o-o`` or
-        ``x-x`` survives as itself. The set of edges is the same one
-        :attr:`cg_tig` was rendered from.
         """
         from .phase3_utils import cdnots_to_tigramite_marks
 
@@ -245,6 +239,7 @@ class CdnotsResult(CausalResult):
             include_C=self.include_C,
             forbidden=forbidden,
             required=required,
+            num_c_cols=self.num_c_cols,
         )
 
     # ------------------------------------------------------------------
