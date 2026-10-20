@@ -60,7 +60,9 @@ remaining notebooks are intentionally unpaired for now.
   `lint.yml` exempts notebook cells themselves. Name/syntax checks (`F`
   codes) still apply.
 - **CI**: the `python-lint` job re-runs `jupytext --sync` and fails if a
-  committed pair has drifted.
+  committed pair has drifted. Jupytext is pinned (dev extra and CI) because
+  the `.py` header records the generating jupytext version — regenerating
+  with a different version shows up as drift.
 - **Pairing a new notebook**:
   `jupytext --set-formats ipynb,py:percent <notebook>.ipynb`, then
   `jupytext --sync <notebook>.ipynb`, then add it to the sync check in

@@ -69,7 +69,7 @@ dev = [
   "isort>=5.12",
   "flake8>=6.0",
   "ipykernel>=6.0",
-  "jupytext>=1.16",
+  "jupytext==1.19.6",
 ]
 
 [tool.setuptools.packages.find]

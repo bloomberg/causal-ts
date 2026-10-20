@@ -82,7 +82,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install linting tools
-        run: pip install black==24.* isort flake8 Flake8-pyproject "jupytext>=1.16"
+        run: pip install black==24.* isort flake8 Flake8-pyproject jupytext==1.19.6
       - name: black
         run: black --check .
       - name: isort
