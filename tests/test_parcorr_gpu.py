@@ -122,6 +122,25 @@ def _near_singular_case(eps=1e-8, n=300, seed=0):
     return np.column_stack([x, y, z, z + eps * w])
 
 
+def _reciprocal_condition_case(seed=0, k=14, T=40, a=0.05):
+    """Data whose (X, Y, Z) sub-covariance has reciprocal condition ~4e-18.
+
+    Every column after the first is ``sqrt(1 - a**2)`` times a unit vector over
+    the previous columns plus an ``a``-scaled noise term, so conditioning
+    collapses as ``k`` grows. The construction from #73's permutation test,
+    reused as issue #74's reproduction.
+    """
+    rng = np.random.default_rng(seed)
+    L = np.zeros((k, k))
+    L[0, 0] = 1.0
+    for i in range(1, k):
+        v = rng.standard_normal(i)
+        v /= np.linalg.norm(v)
+        L[i, :i] = np.sqrt(1 - a * a) * v
+        L[i, i] = a
+    return rng.standard_normal((T, k)) @ L.T
+
+
 def test_declined_precision_falls_back_to_the_existing_ols_path():
     """A declined precision test must reproduce ``method="ols"`` exactly.
 
@@ -229,16 +248,7 @@ def test_conditioning_guard_is_permutation_invariant():
     the pivot test for one ordering of a 12-element Z while a permutation of
     the same set correctly declined, disagreeing by rho = -0.17 vs -0.97.
     """
-    rng = np.random.default_rng(0)
-    k, T, a = 14, 40, 0.05
-    L = np.zeros((k, k))
-    L[0, 0] = 1.0
-    for i in range(1, k):
-        v = rng.standard_normal(i)
-        v /= np.linalg.norm(v)
-        L[i, :i] = np.sqrt(1 - a * a) * v
-        L[i, i] = a
-    data = rng.standard_normal((T, k)) @ L.T
+    data = _reciprocal_condition_case()
     ci = ParCorrGPU(data, device=DEVICE)
 
     z_a = list(range(1, 13))
@@ -363,3 +373,120 @@ def test_precision_decision_invariant_near_boundary_property_sweep():
         ), f"seed {seed}: orderings disagree, rcond={rcond:.3e}"
 
     assert n_checked >= 20, "sweep should reliably land several cases in the band"
+
+
+def test_batch_paths_decline_where_the_scalar_guard_declines():
+    """Issue #74: both batched entry points must fall back where #73 declines.
+
+    On the ~4e-18 construction, ``_batch_test_precision`` and
+    ``_batch_test_fast`` inverted unconditionally and returned rho ~ -0.138
+    / p ~ 0.485 while the guarded scalar path (and ``method="ols"``) gives
+    rho ~ -0.02 / p ~ 0.91 — the same test answering differently depending
+    only on which entry point reached it.
+
+    The batched fallback must be the OLS estimator: bitwise-identical in the
+    statistic to ``method="ols"``'s own batch (both run ``_ols_rho``), and
+    within float32 batched-vs-vector lstsq noise of the scalar OLS value.
+    ``cond(Z)`` as stored in float32 is ~1.5e4 here, so those two
+    formulations legitimately differ at the ~1e-3 level with no precision
+    path involved (measured on main: ``method="ols"`` scalar -0.0227 vs
+    ``method="ols"`` batch -0.0181).
+    """
+    data = _reciprocal_condition_case()
+    z = list(range(1, 13))
+    scalar = ParCorrGPU(data, device=DEVICE)
+    ols_scalar = ParCorrGPU(data, device=DEVICE, method="ols")
+    ols_batch = ParCorrGPU(data, device=DEVICE, method="ols")
+
+    assert scalar._compute_parcorr_precision(0, 13, z) is None
+    assert scalar(0, 13, z) == ols_scalar(0, 13, z)
+
+    # Reference first, on a fresh instance: a prior scalar call on this
+    # instance would populate `pvalue_cache` and make `batch_test` return it.
+    p_ols_b, s_ols_b = ols_batch.batch_test([(0, 13, z)])[0]
+    for kwargs in ({}, {"enable_caching": False}):
+        p, s = ParCorrGPU(data, device=DEVICE, **kwargs).batch_test([(0, 13, z)])[0]
+        assert s == s_ols_b
+        assert np.isclose(p, p_ols_b, rtol=0, atol=1e-8)
+
+    p_scalar, s_scalar = ols_scalar(0, 13, z)
+    assert np.isclose(s, s_scalar, rtol=0, atol=2e-2)
+    assert np.isclose(p, p_scalar, rtol=0, atol=5e-2)
+
+
+def test_batch_declined_and_accepted_tests_share_one_chunk():
+    """A mixed chunk routes declined tests to OLS and keeps accepted ones exact.
+
+    Covers the two hazards issue #74 flagged around the fallback: it must not
+    break dedup (cache-equivalent orderings of a declined test share one OLS
+    result) or caching (a rerun is served from ``pvalue_cache``), and the
+    well-conditioned members of the same chunk must still match the scalar
+    precision path as ``test_scalar_matches_batch`` demands.
+    """
+    data = _near_singular_case()
+    tests = [
+        (0, 1, [2, 3]),  # rank-deficient → OLS fallback
+        (1, 0, [3, 2]),  # same test, other order → dedup / canonical row
+        (0, 1, [2]),  # well-conditioned → precision
+        (0, 1, []),  # well-conditioned → precision
+    ]
+    ci = ParCorrGPU(data, device=DEVICE)
+    results = ci.batch_test(list(tests))
+
+    # The declined pair shares one result (dedup), equal to the legacy OLS
+    # batch computation — same `_ols_rho` code, bitwise statistic.
+    assert results[0][1] == results[1][1]
+    p_o, s_o = ParCorrGPU(data, device=DEVICE, method="ols").batch_test([tests[0]])[0]
+    assert results[0][1] == s_o
+    assert np.isclose(results[0][0], p_o, rtol=0, atol=1e-8)
+
+    # Accepted members stay on the precision path, equal to the scalar call.
+    scalar = ParCorrGPU(data, device=DEVICE)
+    for i in (2, 3):
+        X, Y, Z = tests[i]
+        assert scalar._compute_parcorr_precision(X, Y, Z) is not None
+        p_s, s_s = scalar(X, Y, Z)
+        assert np.isclose(results[i][1], s_s, rtol=0, atol=1e-12)
+        assert np.isclose(results[i][0], p_s, rtol=0, atol=1e-12)
+
+    # Cache: a rerun is served, not recomputed.
+    assert ci.batch_test(list(tests)) == results
+
+    # The no-cache path reaches the same decisions. Its declined rows may
+    # move in the last digits: dedup shrinks the OLS batch (B=1 vs B=2) and
+    # float32 batched lstsq is not bit-stable across batch shapes — the
+    # legacy `_batch_test_ols` has the same property. Tolerances are ~100x
+    # the measured drift (1.2e-7) and ~300x below what the unguarded inverse
+    # produced (0.971 vs the OLS 0.929, and 1.0 for the permuted duplicate).
+    fast = ParCorrGPU(data, device=DEVICE, enable_caching=False)
+    r_fast = fast.batch_test(list(tests))
+    for i in (2, 3):
+        assert r_fast[i] == results[i]
+    for j in (0, 1):
+        assert abs(r_fast[j][1] - s_o) <= 1e-4
+        assert np.isclose(r_fast[j][0], p_o, rtol=0.01, atol=0)
+    assert abs(r_fast[0][1] - r_fast[1][1]) <= 1e-4
+
+
+def test_batch_unconditional_constant_column_falls_back():
+    """The k == 2 variance gate must match the scalar path (issue #74 scope).
+
+    A constant column makes the (X, Y) sub-covariance singular. The scalar
+    path has always declined it and answered through OLS (rho = 0, p = 1);
+    the batched paths computed ``cov / sqrt(var * 0)`` and returned
+    ``(nan, nan)`` — an invalid p-value. The guard's diagonal check must
+    decline it to the same OLS answer.
+    """
+    rng = np.random.default_rng(2)
+    base = rng.standard_normal((200, 4))
+    data = np.column_stack([base, np.ones(200)])
+    tests = [(0, 4, []), (1, 4, [])]
+
+    want = ParCorrGPU(data, device=DEVICE, method="ols").batch_test(list(tests))
+    assert ParCorrGPU(data, device=DEVICE)(0, 4, []) == want[0]
+    for kwargs in ({}, {"enable_caching": False}):
+        got = ParCorrGPU(data, device=DEVICE, **kwargs).batch_test(list(tests))
+        for (p, s), (p_w, s_w) in zip(got, want):
+            assert s == s_w
+            assert np.isclose(p, p_w, rtol=0, atol=1e-8)
+            assert 0 <= p <= 1

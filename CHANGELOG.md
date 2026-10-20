@@ -27,6 +27,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `ParCorrGPU._batch_test_precision` and `_batch_test_fast` now run the same
+  reciprocal-condition guard the scalar path got in #73: sub-covariances whose
+  estimated reciprocal condition falls below `1e-10` (or whose variance check
+  fails at `k == 2`) decline the precision inverse and fall back per test to
+  the existing OLS computation, instead of inverting blindly and returning a
+  near-random statistic (issue #74). Dedup, the p-value cache and
+  `save_incremental_cache` are unchanged; well-conditioned results are
+  bit-identical.
 * `examples/regime_discovery.ipynb` now seeds each synthetic dataset independently
   (`np.random.default_rng`), reports detector comparisons as mean ± std across
   multiple seeds instead of a single misleading run, degrades gracefully when the
