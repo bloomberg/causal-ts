@@ -39,34 +39,35 @@ major version release.
 
 ## Notebooks (Jupytext)
 
-Example notebooks can be paired with a text representation using
+Every example notebook `examples/<name>.ipynb` is paired with a plain-text
+mirror `examples/scripts/<name>.py` using
 [Jupytext](https://github.com/jupytext/jupytext), so code changes show up as
-reviewable `.py` diffs instead of opaque notebook JSON. The trial pairs
-`examples/mixed_data.ipynb` and `examples/cdnots_or_cdnots_plus.ipynb`; the
-remaining notebooks are intentionally unpaired for now.
+reviewable `.py` diffs instead of notebook JSON. Pairing is configured once
+in `[tool.jupytext]` in `pyproject.toml`; `tutorial.ipynb` and notebooks
+outside `examples/` are not paired.
 
-- **Editing**: edit either side, then run
-  `jupytext --sync examples/<name>.ipynb` and commit both files. Do not run
-  `isort` or `black` on the paired `.py` mirrors: they mirror the notebook
-  source verbatim, and reordering imports across `# %%` cell markers would
-  corrupt the notebook on the next sync.
-- **Outputs and widget state** live only in the `.ipynb`: Read the Docs
+- **Setup (recommended)**: `pip install -e ".[dev]" pre-commit` then
+  `pre-commit install`. The hook runs `jupytext --sync` on every commit that
+  touches a notebook or mirror; if it updates the other file, stage it and
+  commit again.
+- **Without the hook**: after editing either side, run
+  `jupytext --sync examples/<name>.ipynb` and commit both files.
+- **New notebook**: add `examples/<name>.ipynb` and sync it; the mirror is
+  created in `examples/scripts/`. Deleting or renaming a notebook means doing
+  the same to its mirror.
+- **Outputs and widget state** live only in the `.ipynb`. Read the Docs
   renders the committed notebooks (`nb_execution_mode = "off"` in
-  `docs/conf.py`), and the `.py` mirror never carries outputs, so output churn
-  stays out of review diffs. `jupytext --sync` preserves outputs even when the
-  `.py` side changed.
-- **Lint**: paired mirrors are excluded from black/isort and skip a few
-  flake8 codes (`examples/*.py` in `pyproject.toml`) for the same reason
-  `lint.yml` exempts notebook cells themselves. Name/syntax checks (`F`
-  codes) still apply.
-- **CI**: the `python-lint` job re-runs `jupytext --sync` and fails if a
-  committed pair has drifted. Jupytext is pinned (dev extra and CI) because
-  the `.py` header records the generating jupytext version — regenerating
-  with a different version shows up as drift.
-- **Pairing a new notebook**:
-  `jupytext --set-formats ipynb,py:percent <notebook>.ipynb`, then
-  `jupytext --sync <notebook>.ipynb`, then add it to the sync check in
-  `.github/workflows/lint.yml`.
+  `docs/conf.py`) and the mirror never carries outputs, so output churn stays
+  out of review diffs. Syncing preserves outputs.
+- **Lint**: do not run `black` or `isort` on the mirrors (both are configured
+  to skip them): reordering imports across `# %%` cell markers corrupts the
+  notebook on the next sync. flake8 checks mirrors only for syntax errors and
+  undefined names, matching the notebooks' lint exemption in `lint.yml`.
+- **CI**: the `python-lint` job re-syncs every example notebook and fails if
+  a pair has drifted, a mirror is missing, or a mirror has no notebook.
+  Jupytext is pinned (dev extra, CI, and `.pre-commit-config.yaml`) because
+  the mirror header records the generating version; bump all three together
+  and re-sync.
 
 ## Other Ways to Contribute
 
