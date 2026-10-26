@@ -4,7 +4,7 @@
 # the hook only means finding out later.
 repos:
   - repo: https://github.com/mwouts/jupytext
-    rev: 9fccc3d85485e01264eb3454fae8c5ab4d093cfb  # frozen: v1.19.6
+    rev: 9fccc3d85485e01264eb3454fae8c5ab4d093cfb # frozen: v1.19.6
     hooks:
       # Keep examples/*.ipynb and their examples/scripts/*.py mirrors in
       # sync (pairing is configured in [tool.jupytext] in pyproject.toml).
