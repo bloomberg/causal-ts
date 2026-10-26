@@ -14,93 +14,108 @@
   "skipCi": true,
   "contributors": [
     {
+      "login": "fesanghary",
+      "name": "Mohammad Fesanghary",
+      "avatar_url": "https://avatars.githubusercontent.com/u/12377980",
+      "profile": "https://github.com/fesanghary",
+      "contributions": [
+        "code",
+        "doc",
+        "example",
+        "test",
+        "infra",
+        "maintenance",
+        "review",
+        "bug",
+        "ideas"
+      ]
+    },
+    {
       "login": "Arun-Verma",
       "name": "Arun Verma",
-      "avatar_url": "https://avatars.githubusercontent.com/u/5639113?v=4",
+      "avatar_url": "https://avatars.githubusercontent.com/u/5639113",
       "profile": "https://github.com/Arun-Verma",
       "contributions": [
-        "code"
-      ]
-    },
-    {
-      "login": "chaimhaas",
-      "name": "Chaim Haas",
-      "avatar_url": "https://avatars.githubusercontent.com/u/29457495?v=4",
-      "profile": "https://github.com/chaimhaas",
-      "contributions": [
-        "code"
-      ]
-    },
-    {
-      "login": "ChakriCherukuri",
-      "name": "Chakri Cherukuri",
-      "avatar_url": "https://avatars.githubusercontent.com/u/5638994?v=4",
-      "profile": "https://github.com/ChakriCherukuri",
-      "contributions": [
-        "code"
+        "doc",
+        "example"
       ]
     },
     {
       "login": "fbourgey",
       "name": "Florian Bourgey",
-      "avatar_url": "https://avatars.githubusercontent.com/u/10298716?v=4",
+      "avatar_url": "https://avatars.githubusercontent.com/u/10298716",
       "profile": "https://github.com/fbourgey",
       "contributions": [
-        "code"
-      ]
-    },
-    {
-      "login": "fesanghary",
-      "name": "Mohammad Fesanghary",
-      "avatar_url": "https://avatars.githubusercontent.com/u/12377980?v=4",
-      "profile": "https://github.com/fesanghary",
-      "contributions": [
-        "code"
-      ]
-    },
-    {
-      "login": "hemv-857",
-      "name": "Hemang Varshney",
-      "avatar_url": "https://avatars.githubusercontent.com/u/218273197?v=4",
-      "profile": "https://github.com/hemv-857",
-      "contributions": [
-        "code"
-      ]
-    },
-    {
-      "login": "jmlinx",
-      "name": "Jimin Lin",
-      "avatar_url": "https://avatars.githubusercontent.com/u/30658965?v=4",
-      "profile": "https://github.com/jmlinx",
-      "contributions": [
-        "code"
-      ]
-    },
-    {
-      "login": "kudala-bharani",
-      "name": "Kudala Bharani Kumar Reddy",
-      "avatar_url": "https://avatars.githubusercontent.com/u/121555407?v=4",
-      "profile": "https://github.com/kudala-bharani",
-      "contributions": [
-        "code"
-      ]
-    },
-    {
-      "login": "mikemikimike",
-      "name": "mikemikimike",
-      "avatar_url": "https://avatars.githubusercontent.com/u/186855910?v=4",
-      "profile": "https://github.com/mikemikimike",
-      "contributions": [
-        "code"
+        "doc",
+        "maintenance",
+        "ideas"
       ]
     },
     {
       "login": "mittal-aakriti",
       "name": "Aakriti Mittal",
-      "avatar_url": "https://avatars.githubusercontent.com/u/31776192?v=4",
+      "avatar_url": "https://avatars.githubusercontent.com/u/31776192",
       "profile": "https://github.com/mittal-aakriti",
       "contributions": [
-        "code"
+        "tutorial"
+      ]
+    },
+    {
+      "login": "chaimhaas",
+      "name": "Chaim Haas",
+      "avatar_url": "https://avatars.githubusercontent.com/u/29457495",
+      "profile": "https://github.com/chaimhaas",
+      "contributions": [
+        "doc"
+      ]
+    },
+    {
+      "login": "ChakriCherukuri",
+      "name": "Chakri Cherukuri",
+      "avatar_url": "https://avatars.githubusercontent.com/u/5638994",
+      "profile": "https://github.com/ChakriCherukuri",
+      "contributions": [
+        "example"
+      ]
+    },
+    {
+      "login": "hemv-857",
+      "name": "Hemang Varshney",
+      "avatar_url": "https://avatars.githubusercontent.com/u/218273197",
+      "profile": "https://github.com/hemv-857",
+      "contributions": [
+        "code",
+        "test"
+      ]
+    },
+    {
+      "login": "jmlinx",
+      "name": "Jimin Lin",
+      "avatar_url": "https://avatars.githubusercontent.com/u/30658965",
+      "profile": "https://github.com/jmlinx",
+      "contributions": [
+        "tutorial"
+      ]
+    },
+    {
+      "login": "kudala-bharani",
+      "name": "Kudala Bharani Kumar Reddy",
+      "avatar_url": "https://avatars.githubusercontent.com/u/121555407",
+      "profile": "https://github.com/kudala-bharani",
+      "contributions": [
+        "code",
+        "test"
+      ]
+    },
+    {
+      "login": "mikemikimike",
+      "name": "mikemikimike",
+      "avatar_url": "https://avatars.githubusercontent.com/u/186855910",
+      "profile": "https://github.com/mikemikimike",
+      "contributions": [
+        "code",
+        "test",
+        "doc"
       ]
     }
   ]
