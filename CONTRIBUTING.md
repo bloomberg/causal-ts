@@ -37,6 +37,38 @@ We expect new pull requests to include tests for any affected behavior, and, as
 we follow semantic versioning, we may reserve breaking changes until the next
 major version release.
 
+## Notebooks (Jupytext)
+
+Every example notebook `examples/<name>.ipynb` is paired with a plain-text
+mirror `examples/scripts/<name>.py` using
+[Jupytext](https://github.com/jupytext/jupytext), so code changes show up as
+reviewable `.py` diffs instead of notebook JSON. Pairing is configured once
+in `[tool.jupytext]` in `pyproject.toml`; `tutorial.ipynb` and notebooks
+outside `examples/` are not paired.
+
+- **Setup (recommended)**: `pip install -e ".[dev]" pre-commit` then
+  `pre-commit install`. The hook runs `jupytext --sync` on every commit that
+  touches a notebook or mirror; if it updates the other file, stage it and
+  commit again.
+- **Without the hook**: after editing either side, run
+  `jupytext --sync examples/<name>.ipynb` and commit both files.
+- **New notebook**: add `examples/<name>.ipynb` and sync it; the mirror is
+  created in `examples/scripts/`. Deleting or renaming a notebook means doing
+  the same to its mirror.
+- **Outputs and widget state** live only in the `.ipynb`. Read the Docs
+  renders the committed notebooks (`nb_execution_mode = "off"` in
+  `docs/conf.py`) and the mirror never carries outputs, so output churn stays
+  out of review diffs. Syncing preserves outputs.
+- **Lint**: do not run `black` or `isort` on the mirrors (both are configured
+  to skip them): reordering imports across `# %%` cell markers corrupts the
+  notebook on the next sync. flake8 checks mirrors only for syntax errors and
+  undefined names, matching the notebooks' lint exemption in `lint.yml`.
+- **CI**: the `python-lint` job re-syncs every example notebook and fails if
+  a pair has drifted, a mirror is missing, or a mirror has no notebook.
+  Jupytext is pinned (dev extra, CI, and `.pre-commit-config.yaml`) because
+  the mirror header records the generating version; bump all three together
+  and re-sync.
+
 ## Other Ways to Contribute
 
 We welcome anyone that wants to contribute to `causal-ts` to triage and

@@ -82,10 +82,22 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install linting tools
-        run: pip install black==24.* isort flake8 Flake8-pyproject
+        run: pip install black==24.* isort flake8 Flake8-pyproject jupytext==1.19.6
       - name: black
         run: black --check .
       - name: isort
         run: isort --check .
       - name: flake8
         run: flake8 .
+      - name: jupytext (paired notebooks in sync)
+        # Every examples/*.ipynb is paired with examples/scripts/*.py via
+        # [tool.jupytext] in pyproject.toml. Fail if a pair has drifted, a
+        # mirror is missing, or a mirror has no notebook.
+        run: |
+          jupytext --sync examples/*.ipynb
+          for py in examples/scripts/*.py; do
+            nb="examples/$(basename "$py" .py).ipynb"
+            [ -f "$nb" ] || { echo "::error file=$py::no matching $nb"; exit 1; }
+          done
+          git status --porcelain -- examples/
+          test -z "$(git status --porcelain -- examples/)"

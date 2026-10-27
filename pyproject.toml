@@ -69,6 +69,7 @@ dev = [
   "isort>=5.12",
   "flake8>=6.0",
   "ipykernel>=6.0",
+  "jupytext==1.19.6",
 ]
 
 [tool.setuptools.packages.find]
@@ -85,10 +86,15 @@ causalts = ["py.typed", "skills/*/SKILL.md", "skills/*/agents/*"]
 [tool.black]
 line-length = 88
 target-version = ['py312']
+# Jupytext mirrors of example notebooks (examples/scripts/*.py) mirror the
+# notebook source verbatim; the notebooks themselves are lint-exempt (see
+# lint.yml).
+extend-exclude = "examples/scripts/"
 
 [tool.isort]
 profile = "black"
 line_length = 88
+skip_glob = ["examples/*"]
 
 [tool.flake8]
 max-line-length = 88
@@ -105,7 +111,21 @@ exclude = [
   "venv",
 ]
 # __init__.py modules re-export names to form the public API.
-per-file-ignores = ["__init__.py:F401"]
+# examples/scripts/*.py are Jupytext mirrors of the example notebooks, which
+# are lint-exempt (see lint.yml): skip style codes and notebook idioms (unused
+# imports, re-imports across cells, trailing ';'). Syntax errors (E9) and
+# undefined names (F821-F823) still run, so a corrupted pair fails CI.
+per-file-ignores = [
+  "__init__.py:F401",
+  "examples/scripts/*.py:E1,E2,E3,E4,E5,E7,W,F401,F541,F811,F824,F841",
+]
+
+# Pair every example notebook with a py:percent mirror in examples/scripts/
+# so notebook changes are reviewable as plain-text diffs. Scoped to examples/
+# so tutorial.ipynb and package notebooks stay unpaired. Outputs and widget
+# state live only in the .ipynb. See CONTRIBUTING.md.
+[tool.jupytext]
+formats = "examples///ipynb,examples/scripts///py:percent"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
