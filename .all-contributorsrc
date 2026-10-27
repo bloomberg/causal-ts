@@ -7,7 +7,7 @@
     "README.md"
   ],
   "imageSize": 100,
-  "commit": true,
+  "commit": false,
   "commitConvention": "none",
   "contributorsPerLine": 7,
   "linkToUsage": false,
@@ -85,7 +85,8 @@
       "profile": "https://github.com/hemv-857",
       "contributions": [
         "code",
-        "test"
+        "test",
+        "infra"
       ]
     },
     {
