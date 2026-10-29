@@ -427,7 +427,7 @@ def discover_df(
 
     Every argument is honoured by every algorithm, with one exception: GRACE
     builds its CDNOTS skeleton with its own CI test, so ``ci_test`` applies to
-    the CDNOTS/Cedar paths only and is rejected for GRACE rather than silently
+    the CDNOTS/Cedar paths only and is rejected for GRACE and REAP rather than silently
     ignored (pass ``ci_test_class=<class>`` through ``**kwargs`` instead).
 
     Parameters
@@ -480,8 +480,9 @@ def discover_df(
             c_preset=c_preset,
             **kwargs,
         )
-    if algorithm in ("grace", "grace-ss"):
+    if algorithm in ("grace", "grace-ss", "reap"):
         from .grace.gated_discovery import run_cdnots_gated, run_stability_selection
+        from .grace.runners import run_reap
 
         # GRACE instantiates a CI test class itself for the skeleton; a
         # by-name instance has nowhere to go. Refuse rather than drop it.
@@ -491,7 +492,7 @@ def discover_df(
                 "builds its skeleton with its own CI test. Pass "
                 "ci_test_class=<class> instead, or use algorithm='cdnots'."
             )
-        if algorithm == "grace":
+        if algorithm in ("grace", "reap"):
             if alpha is not None:
                 kwargs["alpha"] = alpha
         else:
@@ -506,7 +507,11 @@ def discover_df(
                     "its own). Pass use_ci_skeleton=True, or use "
                     "algorithm='grace'."
                 )
-        fn = run_cdnots_gated if algorithm == "grace" else run_stability_selection
+        fn = {
+            "grace": run_cdnots_gated,
+            "grace-ss": run_stability_selection,
+            "reap": run_reap,
+        }[algorithm]
         return fn(
             df,
             max_lag=max_lag,

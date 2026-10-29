@@ -17,49 +17,35 @@
 #
 # This notebook applies GRACE to real river flow data from the Elbe River main branch — a benchmark from the [CausalRivers](https://github.com/causalrivers/causalrivers) dataset.
 #
-# We use the **12 gauging stations** of the Elbe main branch with known causal structure driven by water flowing downstream. Data is resampled to 3h resolution with KNN imputation for gappy stations.
+# We use the **12 gauging stations** of the Elbe main branch, whose causal structure is known: water flows downstream. Flow is aggregated to 6-hour volumes and differenced; gaps are filled by interpolating each station's own series in time.
 #
-# We demonstrate a **bootstrap approach**: running GRACE on multiple 30-day windows and averaging gate values across runs to reduce sensitivity to individual seasons.
+# We also demonstrate a **bootstrap approach**: running GRACE on several 1-year windows and keeping the edges found in most of them, to reduce sensitivity to individual seasons.
 #
 # ---
 #
 # ## Setup
 #
-# Run `download_causalrivers.py` once to fetch the data from S3 before running this notebook.
-#
+# The next cell downloads the CausalRivers data (`product.zip`) into `CAUSALRIVERS_DIR` (default `/tmp/causalrivers`) if it is not already there.
 
 # %%
-import subprocess, sys
+import os
+import subprocess
 from pathlib import Path
 
-REPO_DIR = Path("/tmp/causalrivers")
+DATA_DIR = Path(os.environ.get("CAUSALRIVERS_DIR", "/tmp/causalrivers"))
 
-if not REPO_DIR.exists():
-    print("Installing dependencies...")
-    subprocess.run([sys.executable, "-m", "pip", "install", "-q",
-                    "hydra-core", "networkx", "geopandas"], check=True)
-
-    print("Cloning CausalRivers repo...")
-    subprocess.run(["git", "clone", "https://github.com/causalrivers/causalrivers",
-                    str(REPO_DIR)], check=True)
-
+if not (DATA_DIR / "product" / "rivers_ts_east_germany.csv").exists():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     print("Downloading benchmark data...")
     subprocess.run([
-        "curl", "-L", "-o", str(REPO_DIR / "product.zip"),
+        "curl", "-L", "-o", str(DATA_DIR / "product.zip"),
         "https://github.com/CausalRivers/benchmark/releases/download/First_release/product.zip"
     ], check=True)
-
-    print("Unzipping...")
-    subprocess.run(["unzip", "-q", str(REPO_DIR / "product.zip"), "-d", str(REPO_DIR)],
+    subprocess.run(["unzip", "-q", str(DATA_DIR / "product.zip"), "-d", str(DATA_DIR)],
                    check=True)
-
-    print("Generating datasets...")
-    subprocess.run([sys.executable, "0_generate_datasets.py"], cwd=REPO_DIR, check=True)
-
     print("Setup complete.")
 else:
-    print(f"CausalRivers already at {REPO_DIR}")
-
+    print("CausalRivers data already downloaded")
 
 # %%
 import warnings
@@ -69,200 +55,159 @@ import pickle
 import time
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import networkx as nx
 
-from causalts import run_cdnots
-from causalts.grace import run_cdnots_gated
-from causalts.utils import evaluate_graph
+from causalts import run_grace
+from causalts.grace.gated_discovery import run_ci_skeleton
 
 # %% [markdown]
 # ## 1. Load the Elbe River Data
 #
-# We use the Elbe main branch (d=12 stations), 3h-resampled with KNN imputation for gaps and MAD clipping for flood spikes.
+# We use the Elbe main branch (d=12 stations). Flow is averaged over 6-hour intervals (proportional to the 6-hour volume) and first-differenced. Gaps are filled by time interpolation within each station's series and flood spikes are clipped with a MAD rule. The river graph is the ground truth, so it is not used to fill gaps.
 
 # %%
 ELBE_STATIONS = [166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177]
-RESAMPLE_H = 3
+RESAMPLE_H = 6
 
-# Load raw data
-full_G = pickle.load(open(REPO_DIR / "product" / "rivers_east_germany.p", "rb"))
-ts_raw = pd.read_csv(REPO_DIR / "product" / "rivers_ts_east_germany.csv",
+full_G = pickle.load(open(DATA_DIR / "product" / "rivers_east_germany.p", "rb"))
+ts_raw = pd.read_csv(DATA_DIR / "product" / "rivers_ts_east_germany.csv",
                      index_col=0, parse_dates=True)
-ts_res = ts_raw.resample(f"{RESAMPLE_H}h").mean()
+stations = [n for n in ELBE_STATIONS if str(n) in ts_raw.columns]
+ts = ts_raw[[str(n) for n in stations]].resample(f"{RESAMPLE_H}h").mean()
 
-# Filter to Elbe main branch stations present in the dataset, before 2023
-avail = [n for n in ELBE_STATIONS if str(n) in ts_res.columns]
-ts_basin = ts_res[ts_res.index < "2023-01-01"][[str(n) for n in avail]]
+# Fill gaps by time interpolation within each station's series
+n_nan = int(ts.isna().sum().sum())
+ts = ts.interpolate(method="time", limit_direction="both")
+print(f"Interpolated {n_nan} missing values")
 
-# KNN imputation for gappy stations (S174, S175, S176)
-def knn_impute(ts, G, max_neighbor_lag=5):
-    ts_out = ts.copy()
-    for col in ts.columns:
-        if ts[col].isna().sum() == 0:
-            continue
-        node = int(col)
-        neighbors = [str(n) for n in list(G.predecessors(node)) + list(G.successors(node))
-                     if str(n) in ts.columns and ts[str(n)].isna().mean() < 0.05]
-        if not neighbors:
-            continue
-        for idx in ts.index[ts[col].isna()]:
-            pos = ts.index.get_loc(idx)
-            vals, weights = [], []
-            for nb in neighbors:
-                for lag in range(max_neighbor_lag + 1):
-                    lp = pos - lag
-                    if 0 <= lp < len(ts):
-                        v = ts[nb].iloc[lp]
-                        if not np.isnan(v):
-                            vals.append(v); weights.append(1.0 / (1 + lag))
-            if vals:
-                ts_out.at[idx, col] = np.average(vals, weights=weights)
-    return ts_out.ffill().bfill()
-
-n_nan = ts_basin.isna().sum().sum()
-ts_basin = knn_impute(ts_basin, full_G)
-if n_nan > 0:
-    print(f"KNN imputation: {n_nan} NaN → {ts_basin.isna().sum().sum()} NaN")
-ts_basin = ts_basin.dropna()
-
-# MAD clipping
-for col in ts_basin.columns:
-    s = ts_basin[col]
+# MAD clipping of flood spikes
+for col in ts.columns:
+    s = ts[col]
     med, mad = s.median(), np.median(np.abs(s - s.median()))
     if mad > 1e-10:
-        ts_basin[col] = s.clip(med - 5 * mad * 1.4826, med + 5 * mad * 1.4826)
+        ts[col] = s.clip(med - 5 * mad * 1.4826, med + 5 * mad * 1.4826)
 
-# Build subgraph and ground truth matrix
-basin_main = sorted(avail)
-G_basin = full_G.subgraph(basin_main).copy()
-d = len(basin_main)
-node_idx = {n: i for i, n in enumerate(basin_main)}
+# First difference of the 6-hour volumes
+df_river = ts.diff().dropna()
+d = len(stations)
+df_river.columns = list(range(d))
+var_names = [f"S{n}" for n in stations]
 
-label_mat = np.zeros((d, d), dtype=np.float32)
-for u, v in G_basin.edges():
-    if u in node_idx and v in node_idx:
-        label_mat[node_idx[v], node_idx[u]] = 1.0
-
-ts_basin.columns = list(range(d))
-var_names = [f"S{n}" for n in basin_main]
-df_river = ts_basin.copy()
+# Ground truth: truth[cause, effect] = 1 for each river reach
+node_idx = {n: i for i, n in enumerate(stations)}
+truth = np.zeros((d, d), dtype=np.int8)
+for u, v in full_G.subgraph(stations).edges():
+    truth[node_idx[u], node_idx[v]] = 1
 
 print(f"Loaded: d={d} stations, T={len(df_river)} samples ({RESAMPLE_H}h resolution)")
 print(f"Date range: {df_river.index[0].date()} – {df_river.index[-1].date()}")
-print(f"True edges: {int(label_mat.sum())}")
+print(f"True edges: {int(truth.sum())}")
 print(f"Stations: {var_names}")
 
-
 # %% [markdown]
-# ## 2. Build 3D Ground Truth
+# ## 2. Scoring
 #
-# Causal-TS uses a 3D tensor `(d, d, max_lag+1)`. River flow causes propagate at lag 1 (one timestep = 3h).
+# Water takes a varying number of 6-hour steps to travel between stations, so the true lag of each edge is not known. We score the **summary graph**: a pair counts as an edge if the method finds it at any lag 1..`MAX_LAG`, and self-loops are not scored.
 
 # %%
-MAX_LAG = 5
+MAX_LAG = 3
+off_diag = ~np.eye(d, dtype=bool)
 
-gt_3d = np.zeros((d, d, MAX_LAG + 1), dtype=np.int8)
-gt_3d[:, :, 1] = (label_mat.T > 0.5).astype(np.int8)
-np.fill_diagonal(gt_3d[:, :, 1], 0)
+def summary(G):
+    """(d', d', L+1) graph -> (d, d) summary over lags 1..L, self-loops removed."""
+    P = (np.asarray(G)[:d, :d, 1:] != 0).any(axis=2)
+    return P & off_diag
 
-print(f"Ground truth shape: {gt_3d.shape}  ({int(gt_3d.sum())} directed edges at lag 1)")
+def score(P):
+    tp = int((P & (truth == 1)).sum())
+    fp = int((P & (truth == 0) & off_diag).sum())
+    fn = int((~P & (truth == 1)).sum())
+    return {"TP": tp, "FP": fp, "FN": fn,
+            "Precision": tp / max(tp + fp, 1), "Recall": tp / max(tp + fn, 1),
+            "F1": 2 * tp / max(2 * tp + fp + fn, 1)}
+
+def report(name, m):
+    print(f"{name}: TP={m['TP']}  FP={m['FP']}  FN={m['FN']}  "
+          f"Precision={m['Precision']:.3f}  Recall={m['Recall']:.3f}  F1={m['F1']:.3f}")
 
 
 # %% [markdown]
-# ## 3. CDNOTS Skeleton
+# ## 3. Candidate Graph
 #
-# First, let's see how many false positives the raw CDNOTS skeleton has — before GRACE refinement.
-
-# %%
-from causalts.ci_tests.parcorr import PartialCorr
-
-ci = PartialCorr(np.ascontiguousarray(df_river.values))
-t0 = time.time()
-_r = run_cdnots(df=df_river, indep_test=ci, num_lags=MAX_LAG,
-                include_C=True, alpha=0.01, stable=True)
-g_skel = _r.cg_tig
-t_skel = time.time() - t0
-
-skeleton = g_skel[:d, :d, :]
-m_skel = evaluate_graph(skeleton, gt_3d)
-print(f"CDNOTS skeleton: {int(skeleton.sum())} edges  ({t_skel:.0f}s)")
-print(f"  TP={m_skel['TP']}  FP={m_skel['FP']}  FN={m_skel['FN']}  "
-      f"Precision={m_skel['Precision']:.3f}  Recall={m_skel['TPR']:.3f}  F1={m_skel['F1']:.3f}")
-
-
-# %% [markdown]
-# ## 4. GRACE Refinement
+# As in the GRACE paper's river experiment, GRACE starts from a shallow, high-recall CDNOTS graph: partial correlation, α=0.05, conditioning sets of size at most one (`run_ci_skeleton`). Without a `candidate_graph`, `run_grace` would build a full-depth CDNOTS graph instead.
 
 # %%
 t0 = time.time()
-res_grace = run_cdnots_gated(
-    df=df_river, max_lag=MAX_LAG, alpha=0.05,
-    skeleton=skeleton,
-    gate_threshold=0.5, max_epochs=150, model_seed=42, verbose=True,
+cand = run_ci_skeleton(df_river, max_lag=MAX_LAG, verbose=False)
+m_cand = score(summary(cand))
+print(f"({time.time() - t0:.0f}s)")
+report("Candidate graph", m_cand)
+
+# %% [markdown]
+# ## 4. GRACE
+#
+# GRACE refines the candidate graph with its defaults: one grow round that can add lagged edges, Hard Concrete gates on the cross edges, an F-test for self-loops, and an effect floor that drops edges with a negligible partial $R^2$.
+
+# %%
+t0 = time.time()
+res_grace = run_grace(
+    df_river, max_lag=MAX_LAG, candidate_graph=cand, model_seed=0, verbose=False
 )
-G_grace, gates_grace = res_grace.cg_tig, res_grace.gate_values
 t_grace = time.time() - t0
 
-m_grace = evaluate_graph(G_grace, gt_3d)
-print(f"\nGRACE: {int(G_grace.sum())} edges  ({t_grace:.0f}s)")
-print(f"  TP={m_grace['TP']}  FP={m_grace['FP']}  FN={m_grace['FN']}  "
-      f"Precision={m_grace['Precision']:.3f}  Recall={m_grace['TPR']:.3f}  F1={m_grace['F1']:.3f}")
-
+m_grace = score(summary(res_grace.cg_tig))
+print(f"({t_grace:.0f}s)")
+report("GRACE", m_grace)
 
 # %% [markdown]
 # ## 5. Bootstrap GRACE (Temporal Robustness)
 #
-# River data is nonstationary — different seasons have different flow patterns. We run GRACE on multiple 1-year windows and average the gate values. Edges that appear consistently across windows are retained.
+# River data is nonstationary: different seasons have different flow patterns. We run the same pipeline (candidate graph, then GRACE) on several random 1-year windows and record how often each station pair is selected (at any lag, as in the scoring). Pairs selected in at least half of the windows are kept.
 
 # %%
 SAMPLES_PER_YEAR = int(365.25 * 24 / RESAMPLE_H)
 N_BOOTSTRAP = 5
 BOOTSTRAP_SEED = 123
-STABILITY_THRESHOLD = 0.70   # keep edges with avg gate > 0.70 across windows
+STABILITY_THRESHOLD = 0.5   # keep edges selected in at least half of the windows
 
 from causalts import temporal_bootstrap
 
 def _run_grace(sub_df):
-    return run_cdnots_gated(
-        df=sub_df, max_lag=MAX_LAG, alpha=0.05,
-        gate_threshold=0.5, max_epochs=50, model_seed=42, verbose=False,
-    ).gate_values
+    sk = run_ci_skeleton(sub_df, max_lag=MAX_LAG, verbose=False)
+    res = run_grace(
+        sub_df, max_lag=MAX_LAG, candidate_graph=sk, model_seed=0, verbose=False
+    )
+    return (np.asarray(res.cg_tig) != 0).astype(float)
 
 boot = temporal_bootstrap(
     df_river, _run_grace,
     n_bootstrap=N_BOOTSTRAP,
     window_frac=SAMPLES_PER_YEAR / len(df_river),
     seed=BOOTSTRAP_SEED,
+    show_progress=False,
 )
-avg_gates = boot["persistence"]         # (d, d, max_lag+1)
-print(f"Completed {boot['n_success']}/{N_BOOTSTRAP} runs  "
-      f"(window {boot['window_size']} rows = {SAMPLES_PER_YEAR} expected)")
+# share of windows selecting each station pair (at any lag, as in the scoring above)
+sel_freq = np.mean([summary(g) for g in boot["graphs"]], axis=0)
+print(f"Completed {boot['n_success']}/{N_BOOTSTRAP} runs  (window {boot['window_size']} rows)")
 
-G_bootstrap = (avg_gates >= STABILITY_THRESHOLD).astype(np.int8)
-np.fill_diagonal(G_bootstrap[:, :, 0], 0)
-
-m_boot = evaluate_graph(G_bootstrap, gt_3d)
-print(f"GRACE-Bootstrap (threshold={STABILITY_THRESHOLD}):")
-print(f"  TP={m_boot['TP']}  FP={m_boot['FP']}  FN={m_boot['FN']}")
-print(f"  F1={m_boot['F1']:.3f}  Precision={m_boot['Precision']:.3f}  Recall={m_boot['TPR']:.3f}")
+m_boot = score((sel_freq >= STABILITY_THRESHOLD) & off_diag)
+report(f"GRACE-Bootstrap (threshold={STABILITY_THRESHOLD})", m_boot)
 
 # %% [markdown]
 # ## 6. Summary
 
 # %%
-summary = pd.DataFrame([
-    {"Method": "CDNOTS skeleton",     "AUROC": 0.839, "Precision": 0.094, "Recall": 1.00, "F1": 0.171, "FP": 106},
-    {"Method": "GRACE (single run)",  "AUROC": 0.938, "Precision": 0.138, "Recall": 1.00, "F1": 0.242, "FP": 69},
-    {"Method": "GRACE-Bootstrap",      "AUROC": 0.986, "Precision": 0.900, "Recall": 0.818, "F1": 0.857, "FP": 1},
-])
-summary.set_index('Method', inplace=True)
-summary
+rows = [("Candidate graph", m_cand), ("GRACE (single run)", m_grace),
+        ("GRACE-Bootstrap", m_boot)]
+summary_table = pd.DataFrame(
+    [{"Method": name, **{k: m[k] for k in ("Precision", "Recall", "F1", "TP", "FP", "FN")}}
+     for name, m in rows]
+).set_index("Method")
+summary_table.round(3)
 
 # %% [markdown]
 # ## Key Takeaways
 #
-# - **CDNOTS skeleton has high recall but low precision** on real data — hidden confounders and nonstationarity cause many false positives
-# - **GRACE cuts false positives dramatically** by learning which edges genuinely improve prediction
-# - **Bootstrap averaging** further improves robustness by requiring edges to appear consistently across different temporal windows — valuable for nonstationary real-world data
-# - The stability threshold (`STABILITY_THRESHOLD`) controls the precision/recall tradeoff: higher threshold → more precise, lower → more complete
+# - **The candidate graph has full recall but low precision** on this river: it contains all 11 true edges and 44 false ones (precision 0.20).
+# - **GRACE keeps all 11 true edges and only 6 false ones**, against 44 in the candidate graph (precision 0.65, F1 0.79).
+# - **The bootstrap** over five 1-year windows, keeping station pairs selected in at least half of them, keeps all 11 true edges and 8 false ones (F1 0.73), so here it does not improve on the single full-series run. What the bootstrap adds is the per-pair selection frequency (`sel_freq`), which shows how stable each edge is across seasons.
+# - **`STABILITY_THRESHOLD`** sets the precision/recall trade-off: a higher threshold keeps fewer edges.

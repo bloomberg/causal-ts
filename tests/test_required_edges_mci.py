@@ -7,7 +7,6 @@ phase 2 (MCI) and in the lag-verification pass, as in phase 1."""
 import numpy as np
 import pandas as pd
 import pytest
-from causallearn.utils.PCUtils.BackgroundKnowledge import BackgroundKnowledge
 
 from causalts.cdnots.phase3_utils import run_cdnots_plus
 from causalts.cdnots.skeleton_discovery import (
@@ -16,6 +15,7 @@ from causalts.cdnots.skeleton_discovery import (
     mci_skeleton,
 )
 from causalts.ci_tests.parcorr_gpu import ParCorrGPU
+from causalts.grace.contemporaneous import _PinnedLagKnowledge
 
 
 class _Independent:
@@ -28,21 +28,6 @@ class _Independent:
         self.pairs.append(frozenset((X, Y)))
         self.calls.append((frozenset((X, Y)), list(condition_set or [])))
         return 0.9, 0.0
-
-
-class _PinnedLagKnowledge(BackgroundKnowledge):
-    """Set lookups over CDNOTS node names (``X{idx}``)."""
-
-    def __init__(self, forbidden, required):
-        super().__init__()
-        self._forbidden = forbidden
-        self._required = required
-
-    def is_forbidden(self, node1, node2):
-        return (node1.get_name(), node2.get_name()) in self._forbidden
-
-    def is_required(self, node1, node2):
-        return (node1.get_name(), node2.get_name()) in self._required
 
 
 def _required(*pairs):

@@ -1,6 +1,6 @@
 # Algorithms
 
-Causal-TS implements four discovery algorithms for time series. Use the table below to pick the right one, then read each section for details.
+Causal-TS implements four discovery algorithms for time series (GRACE with a regression-based variant, REAP). Use the table below to pick the right one, then read each section for details.
 
 ---
 
@@ -66,7 +66,8 @@ Hybrid neural · High-dim
 | CDNOTS | O(d^p) | {fas}`check;sd-text-success` C node | Full (standard PC skeleton) |
 | CDNOTS+ | O(d^p) | {fas}`check;sd-text-success` C node | Full (PCMCI+ two-step skeleton) |
 | CEDAR | O(d²) | Via lag selection | Pairwise |
-| GRACE | O(d²) + NN | {fas}`check;sd-text-success` via skeleton | CDNOTS/CDNOTS+ skeleton + orientation → gates prune edges |
+| GRACE | O(d²) + NN | {fas}`check;sd-text-success` via skeleton | CDNOTS/CDNOTS+ skeleton + orientation → grow round, gates and effect floor select edges |
+| REAP | O(d²) + regressions | {fas}`check;sd-text-success` via skeleton | Same candidate graph → three grow rounds, then backward elimination by partial F-tests (no training) |
 
 :::{note}
 **O(d^p) complexity:** `d` is the number of variables and `p` is the maximum conditioning set size tested during skeleton discovery (bounded by the maximum degree of the true graph). The PC skeleton grows conditioning sets from size 0 up to size `p`, giving O(d^p) CI tests in total. For sparse graphs `p` is small (typically 2–4) and the algorithm is tractable; for dense graphs `p` can grow with `d`.
@@ -220,20 +221,34 @@ result.plot()
 
 **Gated Refinement After Constraint-based Estimation** {bdg-primary}`neural` {bdg-secondary}`high-dim`
 
-Two-stage hybrid: constraint-based skeleton (CDNOTS or CDNOTS+, high recall) + neural gated refinement with L0 (Hard Concrete) regularization to prune false positives. Any PC-family algorithm that produces a skeleton can serve as the first stage.
+Two-stage hybrid: a high-recall directed candidate graph (CDNOTS by default, or any `candidate_graph` you supply, e.g. a loose PCMCI+ run) + neural gated refinement with L0 (Hard Concrete) regularization (`run_grace`). The gates prune false positives; the grow round (`grow_rounds`, one by default) also adds edges the candidate graph missed, so GRACE is a refinement stage rather than a pure pruner. It helps most on loose, high-recall candidate graphs and can only lose on one that is already precise.
+
+**REAP** (`run_reap`) swaps the neural stage for a regression-based one: each target's candidate parents enter an additive least-squares regression (one natural-spline block per lagged parent, plus the C basis on the CDNOTS candidate graph when `include_C=True`, or on a supplied one with `include_C_in_model=True`), and the least significant parent is dropped while its block's partial F-test p-value exceeds `prune_alpha` (Huber-clipped residuals, so heavy tails cannot decide a test). These are fixed-basis F-tests: their p-values are approximate and become liberal at large T when effects are strongly curved, so treat `edge_pvalue` as a ranking score rather than a calibrated test (use the `raft` CI test for that, or `rift` when conditioning effects interact or are wiggly). Nothing is trained and no cutoff is chosen; with `grow_rounds` (three by default) it alternates grow and shrink. It returns `edge_pvalue` and `edge_strength` (partial R², a continuous edge score) instead of `gate_values`. The shrink handles lagged edges; `contemporaneous=True` adds lag-0 edges afterwards by running CDNOTS+ with every lagged edge pinned to the shrink's selection, so CDNOTS+ only tests lag-0 adjacencies (conditioning on the selected lagged parents) and orients them by its collider and Meek rules, which use the selected lagged arrows, and by its nonstationarity rule when C is included. The lagged edges are unchanged; unoriented lag-0 edges are dropped from `cg_tig`, as in CDNOTS+, and kept in `to_marks()`. On long series (T in the thousands) the shrink's tests keep real but negligible dependencies; `effect_floor="adaptive"` prunes lagged edges whose unique effect is below 0.01 or below a fifth of the target's strongest edge.
 
 :::::{tab-set}
 
 ::::{tab-item} Standard
 ```python
-from causalts.grace import run_cdnots_gated
+from causalts import run_grace
 
-res = run_cdnots_gated(
-    df=df, max_lag=3, alpha=0.05,
-    gate_threshold=0.5, max_epochs=150,
-    device="cpu", verbose=False,
-)
+res = run_grace(df, max_lag=3, verbose=False)  # CDNOTS candidate graph
 G_hat, gate_values = res.cg_tig, res.gate_values
+
+# or refine another method's directed graph, shape (d, d, max_lag+1)
+res = run_grace(df, max_lag=3, candidate_graph=G_pcmci, verbose=False)
+```
+::::
+
+::::{tab-item} REAP (regression-based)
+```python
+from causalts import run_reap
+
+res = run_reap(df, max_lag=3, verbose=False)  # 3 grow rounds by default
+G_hat, strength, pvals = res.cg_tig, res.edge_strength, res.edge_pvalue
+
+# lag-0 edges too (CDNOTS+ with the lagged edges pinned)
+res0 = run_reap(df, max_lag=3, contemporaneous=True, verbose=False)
+marks = res0.to_marks()  # "-->", "<--", "o-o" at lag 0
 ```
 ::::
 
@@ -249,31 +264,48 @@ G_hat, scores = res.cg_tig, res.stability_scores
 ```
 
 :::{warning}
-Stability selection runs GRACE on random subsamples without a pre-filtered skeleton. This is only practical for small, low-dimensional problems — at high d it becomes prohibitively slow and the subsampling instability dominates. For high-d use cases, provide a precomputed skeleton to `run_cdnots_gated` instead of using stability selection.
+Stability selection runs GRACE on random subsamples without a pre-filtered skeleton. This is only practical for small, low-dimensional problems — at high d it becomes prohibitively slow and the subsampling instability dominates. For high-d use cases, pass a candidate graph to `run_grace` instead of using stability selection.
 :::
 ::::
 
 :::::
 
-**Key hyperparameters:**
+**Key hyperparameters** (as named in `run_cdnots_gated`, which `run_grace` and `run_reap` call with `refine="gates"` and `refine="shrink"`; both take `candidate_graph` for `skeleton`, and `run_reap` drops the `shrink_` prefix, with `shrink_alpha` as `prune_alpha` and `shrink_effect_floor` as `effect_floor`):
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
-| `gate_threshold` | `0.5` | Edges with gate value below this are pruned. Lower → sparser graph. |
+| `gate_threshold` | `'auto'` | Cutoff on gate values. `'li'` picks it per run from the candidate gates (Li minimum cross-entropy). `'auto'` uses Li on GRACE's own skeleton, and on a supplied `skeleton` only when the gates form two clusters (else 0.5, so a precise skeleton is not split). A number fixes it (`0.5` was the old default); lower → denser graph. The applied value is in `res.gate_threshold`. |
+| `data_transform` | `'rank'` | Rank-Gaussianize every continuous column before skeleton, training and grow (missing values stay missing). Discrete columns keep their codes, except that REAP's shrink and grow (spline basis) see them rank-transformed too. `None` uses raw data. |
+| `noise_model` | `'student_t'` | Likelihood of the gated model's errors; Student-t keeps heavy-tailed noise from dominating the fit. `'gaussian'` was the previous default. |
+| `grow_rounds` | `1` (`'gates'`), `3` (`'shrink'`) | Grow-shrink rounds. Each one tests the lagged pairs outside the skeleton (additive F-test, BH at `grow_q=0.1`; random-Fourier features under `'gates'`, `shrink_basis` features plus optional interaction nuisance under `'shrink'`), adds the hits and refines again (retrains the gates, or re-runs the shrink). Recovers edges the skeleton missed (not reliably a parent that acts only through an interaction); under `refine='gates'` costs one extra training per round, under `'shrink'` one more shrink with the `shrink_basis` features. |
+| `grow_transform` | `'auto'` | Run the grow tests on rank-Gaussianized data (`'rank'`) or as given (`None`); `'auto'` is `None` under `'gates'` and `'rank'` under `'shrink'` (REAP). |
+| `grow_nuisance_basis` | `'spline'` | Basis of the current parents in the grow tests (and the AR path's self-loop test): a full-range natural spline, which keeps those tests near their level at large T when parents are persistent. `'rff'` uses the RFF block; `None` uses the tested block's basis (RFF under `'gates'`). |
+| `grow_variance` | `True` with `'gates'` and `grow_rounds >= 1`, else `False` | *(`'gates'`, needs `grow_rounds`)* Each grow round also proposes parents that change only a target's noise scale (test on the size of the residual); the gated model's likelihood can keep them. |
+| `ar_path` | `True` with `'gates'` and `max_lag >= 1`, else `False` | *(`'gates'`)* Own lags get an ungated autoregressive head and self-loops leave the gates; cross edges are cut at max(Li, 0.5), and self-loops are kept by a partial F-test given the kept cross parents and the other own lags (the own lag alone and a 4-knot spline of it, Bonferroni over the tests run: each at p < 0.0005 when both run). Use it for strongly autoregressive systems, where gated self-loops absorb signal. |
+| `self_loop_basis` | `'union'` | (`ar_path=True`) Test for the AR path's self-loops: `'union'` is the linear-plus-spline test above; `'rff'` is the 9-column RFF block used before, which reproduces the earlier self-loops (fewer kept at small T). |
+| `refine` | `'gates'` | `'gates'`: neural gated refinement. `'shrink'`: regression-based backward elimination of each target's candidate parents (no training; gate, likelihood and training options do not apply; lagged edges unless `contemporaneous=True`). |
+| `shrink_alpha` | `0.001` | (`refine='shrink'`) Significance level for keeping a parent. |
+| `shrink_basis` | `'spline'` | (`refine='shrink'`) Feature block per lagged parent in the shrink and grow tests: natural cubic spline (for continuous rank-transformed inputs, much lower extreme-row leverage than RFF) or the grow step's original `'rff'`. |
+| `shrink_robust` | `True` | (`refine='shrink'`) Huber-clip residuals before each shrink test. |
+| `shrink_interactions` | `False` | (`refine='shrink'`) Add pairwise products of each target's parents to the shrink and grow regressions. Keeps precision on non-additive mechanisms (parents that interact), where an additive fit admits correlated non-parents as T grows; costs some power on dense graphs. |
+| `shrink_effect_floor` | `None` | (`refine='shrink'`) After the shrink and grow rounds, prune lagged cross edges with a small unique effect (adjusted partial R²): `'adaptive'` drops, per target, edges below `max(0.01, 0.2 × strongest)` (backward elimination; self-loops stay), so the threshold scales with each target's signal (real parents weaker than that are dropped too); a float is a fixed floor; not with `shrink_interactions=True`. For long series (T in the thousands), where significance tests keep real but negligible dependencies. |
+| `contemporaneous` | `False` | (`refine='shrink'`) Add lag-0 edges with CDNOTS+, lagged edges pinned to the shrink's selection (see above). Off: the shrink is lagged-only and its output is unchanged. |
+| `contemporaneous_test` | `'spline'` | (`contemporaneous=True`) CI test of the lag-0 step: `'spline'` is the shrink's own test (liberal when effects are wiggly, like the shrink's p-values); any registered name, e.g. `'raft'` (calibrated, less power at small T), or an instance. |
+| `contemporaneous_alpha` | `0.001` | (`contemporaneous=True`) Significance level of the lag-0 step. |
+| `include_C_in_model` | `False` | Under `refine='shrink'`: condition every shrink and grow regression on the C basis also for a supplied `skeleton`, independently of `include_C` (GRACE's own skeleton is conditioned on C when `include_C=True`). Under `'gates'` it requires `include_C=True`. |
 | `stability_threshold` | `0.6` | (SS only) Minimum selection frequency across subsamples. |
 | `max_epochs` | `150` | Training budget. Increase for complex data. |
 | `patience` | `20` | Early-stopping patience in epochs. |
 | `batch_size` | auto | Auto-set based on T. Set manually if OOM. |
 | `include_C` | `True` | Include the C nonstationarity node in the skeleton. Set `False` for already-detrended data. |
 | `c_preset` | `linear` | C basis for that skeleton — same presets as CDNOTS. |
-| `include_C_in_model` | `False` | Also feed C to the gated model (not just the skeleton). Requires `include_C=True`. |
 
-**Interpreting `gate_values`:** Values near 1.0 indicate high confidence edges; near 0.0 are pruned. Plot `gate_values` as a heatmap to visualize edge confidence.
+**Interpreting `gate_values`:** Values near 1.0 indicate high confidence edges; near 0.0 are pruned. Plot `gate_values` as a heatmap to visualize edge confidence. With `ar_path=True` (the default under `refine="gates"`) self-loops are not gated: their entries are 0 and the F-test decides them.
 
 :::{tip}
 **Best for:** When false positive control is critical. For high-dimensional problems, provide a precomputed skeleton (e.g. CDNOTS with `max_degree=1` and a fast CI test) to `run_cdnots_gated` to pre-filter edges before gated training.
 
-**Lambda selection:** The regularization strength λ is set automatically via an adaptive formula. For data-driven selection, use `compute_lambda_cv()` from `causalts.grace` to run cross-validation before calling `run_cdnots_gated`.
+**Lambda selection:** The regularization strength λ is set automatically by `lambda_rule="xcorr"` (default; described below). `lambda_rule="density"` is the earlier adaptive formula; `lambda_rule="dT"` uses λ = 300/(d·T), which keeps falling with d where the density formula levels off. Its constant was fitted on calibration sweeps (`ar_path=True`, rank data, Student-t likelihood; sparse and dense graphs; d 5–100, T 250–1000), where at d ≥ 50 it kept true nonlinear edges the density formula dropped and the skeleton density did not predict the optimal λ. It warns outside d 10–100, T 250–1000 (at d=5 it lost to the density formula); other settings are untested. When refining a loose supplied skeleton on a sparse graph, the optimal λ was about 1.3× larger. `lambda_rule="xcorr"` bounds λ to [0.3/d, 0.5] and scales it with the data's background lagged cross-correlation, so it does not vanish on long series and prunes more under strong autoregression or persistent latent drivers; it was fitted on d 5–100, T 250–10000 (it warns outside) and matches `"dT"` inside that rule's range. For data-driven selection, use `compute_lambda_cv()` from `causalts.grace` to run cross-validation before calling `run_cdnots_gated`.
 
 **DoWhy integration:** Use `wrap_graph()` from `causalts.effects` to attach effect estimation and counterfactual methods to GRACE's output graph.
 :::

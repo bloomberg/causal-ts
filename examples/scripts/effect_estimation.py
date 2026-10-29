@@ -199,7 +199,7 @@ print('zero-mean — it adds variance to Mek, not a directional bias.')
 # - A large |attribution| marks a node whose noise mechanism contributed materially to the anomaly
 #
 # > **What this run actually shows.** The spike is injected into PKC, but in the
-# > output below `PKA_lag1` (+0.924) outranks `PKC_lag1` (+0.725). Attribution
+# > output below `PKA_lag1` (+0.870) outranks `PKC_lag1` (+0.724). Attribution
 # > apportions the anomaly across every node's reconstructed noise term, and the
 # > largest share does not have to fall on the variable that was perturbed — so
 # > "top-ranked node = root cause" is not a rule you can apply blind. Read the
@@ -555,9 +555,9 @@ plt.tight_layout(); plt.show()
 # ## 9. GRACE
 
 # %%
-from causalts.grace import run_cdnots_gated
+from causalts import run_grace
 
-grace_res = run_cdnots_gated(df, max_lag=3, verbose=False)
+grace_res = run_grace(df, max_lag=3, model_seed=42, verbose=False)
 G_hat = grace_res.cg_tig
 print(grace_res)
 
@@ -588,6 +588,9 @@ val_g = grace_res.validate_transition_graph()
 print(f"GRACE transition validation: {val_g}")
 
 # %% [markdown]
+# > **Read this GRACE graph with caution.** On this small linear problem (d=11, T=500) the default GRACE graph has 20 edges against 28 true ones, and the transition-structure check rejects it at PKA, Jnk, Erk and Akt: the parents it gives those nodes are not sufficient (section 5). The ATE above is unaffected: the adjustment set for `PKC(t-1)` uses only PKC's own history, which GRACE leaves unchanged, so it equals the CDNOTS estimate from section 2. Effects into the rejected nodes (for example PKA or Erk) may be biased on this graph. The CDNOTS graph from section 1 passes the same check, so it is the better input for effect estimation here. GRACE is aimed at higher-dimensional problems (d ≥ 20; see the tutorial).
+
+# %% [markdown]
 # ## Summary
 #
 # | Feature | Method | Ground truth? |
@@ -607,7 +610,7 @@ print(f"GRACE transition validation: {val_g}")
 # | Parent relevance | `cg.parent_relevance(target)` | No |
 # | Distribution change | `cg.distribution_change(df_new, target)` | No |
 #
-# All methods work on `run_cdnots` / `run_cdnots_plus` (via `CdnotsResult`), `run_cedar` (via `CedarResult`), and `run_cdnots_gated` (via `GraceResult`) — all result objects inherit effect-estimation methods automatically.
+# These methods work on graphs from `run_cdnots` / `run_cdnots_plus` (via `CdnotsResult`), `run_cedar` (via `CedarResult`), and `run_grace` / `run_reap` (via `GraceResult`): result objects inherit them automatically, except the interventional and observational queries, which need the wrapped graph (`wrap_graph(res.cg_tig, df)`).
 #
 # See [Probabilistic Queries notebook](probabilistic_queries.ipynb) for full interventional/observational query examples.
 #

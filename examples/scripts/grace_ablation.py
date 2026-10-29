@@ -15,11 +15,11 @@
 # %% [markdown]
 # # GRACE Ablations: Lag Misspecification and Non-Additive Data
 #
-# Two focused ablation experiments:
+# Two focused ablation experiments, both with GRACE at its defaults, starting from the CDNOTS graph:
 #
-# **Part A — Lag Misspecification:** In practice the true max causal lag is unknown. We fix true max_lag=5 and test assumed lags of 2, 3, 5, 7, 10. GRACE degrades more gracefully than CDNOTS in both directions.
+# **Part A — Lag Misspecification:** In practice the true max causal lag is unknown. We fix the true max_lag=5 and run with assumed lags of 2, 3, 5, 7 and 10.
 #
-# **Part B — Lorenz-96 (Non-Additive):** Lorenz-96 features multiplicative interactions that violate GRACE's additive assumption. This tests generalization beyond the model class.
+# **Part B — Lorenz-96 (Non-Additive):** Lorenz-96 has multiplicative interactions, outside GRACE's additive model class.
 #
 # Lorenz-96 update rule: $x_i(t+1) = (x_{i-1} - x_{i-2}) \cdot x_{i+1} - x_i + F$
 
@@ -35,7 +35,7 @@ import matplotlib.pyplot as plt
 from causalts.synthetic_data.synthetic_datasets import SCPGraphGenerator, lorenz96
 from causalts.ci_tests import PartialCorr
 from causalts import run_cdnots
-from causalts.grace import run_cdnots_gated
+from causalts import run_grace
 from causalts.utils import evaluate_graph
 
 # %% [markdown]
@@ -64,12 +64,22 @@ assumed_lags = [2, 3, 5, 7, 10]
 n_vars = df.shape[1]
 records = []
 
+
+def padded(G, L):
+    """Binary [cause, effect, lag] graph over lags 0..L (missing lags are empty)."""
+    out = np.zeros((n_vars, n_vars, L + 1), dtype=int)
+    k = min(np.asarray(G).shape[2], L + 1)
+    out[:, :, :k] = np.asarray(G)[:n_vars, :n_vars, :k] != 0
+    return out
+
+
 for assumed_lag in assumed_lags:
     print(f"\n=== Assumed max_lag = {assumed_lag} (true = {TRUE_MAX_LAG}) ===")
 
-    # When assumed_lag > true lag, clamp to ground truth's actual lag dimension
-    n_lags = min(assumed_lag + 1, ground_truth.shape[2])
-    gt = ground_truth[:, :, :n_lags]
+    # Score every lag either side could use: under-specification counts the edges
+    # beyond assumed_lag as missed, over-specification counts long-lag edges as false.
+    L_eval = max(TRUE_MAX_LAG, assumed_lag)
+    gt = padded(ground_truth, L_eval)
 
     # CDNOTS
     ci = PartialCorr(np.ascontiguousarray(df.values))
@@ -79,56 +89,54 @@ for assumed_lag in assumed_lags:
         include_C=True, alpha=0.05, stable=True,
     )
     t_c = time.time() - t0
-    skeleton = _r.cg_tig[:n_vars, :n_vars, :]   # full lag dim for GRACE
-    g_cdnots = skeleton[:, :, :n_lags]
-    m_c = evaluate_graph(g_cdnots, gt)
+    g_cdnots = _r.cg_tig[:n_vars, :n_vars, :]
+    m_c = evaluate_graph(padded(g_cdnots, L_eval), gt)
 
-    # GRACE — reuse CDNOTS skeleton to skip re-running discovery
+    # GRACE starting from the CDNOTS graph (its grow round can add edges CDNOTS missed)
     t0 = time.time()
-    _gr = run_cdnots_gated(
-        df=df, max_lag=assumed_lag, alpha=0.05,
-        skeleton=skeleton,
-        gate_threshold=0.5, max_epochs=150, model_seed=DATA_SEED, verbose=False,
+    _gr = run_grace(
+        df, max_lag=assumed_lag, candidate_graph=g_cdnots,
+        model_seed=DATA_SEED, verbose=False,
     )
     t_g = time.time() - t0
-    G_grace = _gr.cg_tig[:, :, :n_lags]
-    m_g = evaluate_graph(G_grace, gt)
+    m_g = evaluate_graph(padded(_gr.cg_tig, L_eval), gt)
 
     print(f"  CDNOTS: F1={m_c['F1']:.3f}  Prec={m_c['Precision']:.3f}  SHD={m_c['SHD']}  ({t_c:.0f}s)")
     print(f"  GRACE:  F1={m_g['F1']:.3f}  Prec={m_g['Precision']:.3f}  SHD={m_g['SHD']}  ({t_g:.0f}s)")
 
     records.append(dict(
         assumed_lag=assumed_lag,
-        cdnots_f1=m_c["F1"], cdnots_prec=m_c["Precision"],
-        grace_f1=m_g["F1"],  grace_prec=m_g["Precision"],
+        cdnots_f1=m_c["F1"], cdnots_prec=m_c["Precision"], cdnots_shd=m_c["SHD"],
+        grace_f1=m_g["F1"], grace_prec=m_g["Precision"], grace_shd=m_g["SHD"],
     ))
 
 # %%
 df_res = pd.DataFrame(records)
 lags = df_res["assumed_lag"]
 
-fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+fig, axes = plt.subplots(1, 3, figsize=(16, 4))
 for ax, col_c, col_g, ylabel in zip(
     axes,
-    ["cdnots_f1", "cdnots_prec"],
-    ["grace_f1",  "grace_prec"],
-    ["F1", "Precision"],
+    ["cdnots_f1", "cdnots_prec", "cdnots_shd"],
+    ["grace_f1", "grace_prec", "grace_shd"],
+    ["F1", "Precision", "SHD"],
 ):
     ax.plot(lags, df_res[col_c], "o--", color="#6b7280", label="CDNOTS")
-    ax.plot(lags, df_res[col_g], "s-",  color="#4B44B8", label="GRACE", linewidth=2)
+    ax.plot(lags, df_res[col_g], "s-", color="#4B44B8", label="GRACE", linewidth=2)
     ax.axvline(TRUE_MAX_LAG, color="red", linestyle=":", alpha=0.6, label=f"True lag={TRUE_MAX_LAG}")
     ax.set_xlabel("Assumed max_lag")
     ax.set_ylabel(ylabel)
     ax.set_title(f"{ylabel} vs Assumed Max Lag")
     ax.legend()
-    ax.set_ylim(0, 1)
+    if ylabel != "SHD":
+        ax.set_ylim(0, 1)
 
 plt.tight_layout()
 plt.show()
 print(df_res.to_string(index=False))
 
 # %% [markdown]
-# **Takeaway:** GRACE degrades more gracefully than CDNOTS under both under- and over-specification. When in doubt, slightly overspecify max_lag — GRACE gates out spurious long-lag edges automatically.
+# **Takeaway:** GRACE has higher F1 and lower SHD than CDNOTS at every assumed lag. Over-specifying the lag costs GRACE little (F1 0.963 at the true lag, 0.949 at lag 10; SHD 8 → 11). Under-specifying costs both methods much more, because edges beyond the assumed lag cannot be found (at lag 2, GRACE's F1 is 0.691 and CDNOTS's is 0.559). When in doubt, over-specify `max_lag`.
 
 # %% [markdown]
 # ---
@@ -159,11 +167,10 @@ m_c_l96 = evaluate_graph(g_c_l96, gt_l96)
 
 # GRACE
 t0 = time.time()
-_gr_l96 = run_cdnots_gated(
-    df=df_l96, max_lag=1, alpha=0.05,
-    skeleton=g_c_l96[:50, :50, :],
-    gate_threshold=0.5, max_epochs=150, model_seed=0,
-    verbose=True, ground_truth=gt_l96,
+_gr_l96 = run_grace(
+    df_l96, max_lag=1,
+    candidate_graph=g_c_l96[:50, :50, :],  # starting point; the grow round can add edges
+    model_seed=0, verbose=True, ground_truth=gt_l96,
 )
 t_g_l96 = time.time() - t0
 G_l96 = _gr_l96.cg_tig[:50, :50, :]
@@ -177,7 +184,7 @@ print(f"{'GRACE':<10} {m_g_l96['F1']:>6.3f} {m_g_l96['Precision']:>8.3f} "
       f"{m_g_l96['TPR']:>8.3f} {m_g_l96['SHD']:>6} {t_g_l96:>7.0f}s")
 
 # %% [markdown]
-# **Takeaway:** GRACE achieves strong F1 on Lorenz-96 despite multiplicative interactions. The linear CI skeleton captures correlation structure even for non-additive systems; GRACE gates then refine it. Limitation: at very high forcing (F >> 10) or purely symmetric nonlinear relationships, use a nonlinear CI test (`SplitKCIGPU`) for the skeleton.
+# **Takeaway:** On Lorenz-96, GRACE reaches F1 0.948 against CDNOTS's 0.751 despite the multiplicative interactions. CDNOTS's linear CI test misses 43 of the 200 true edges. GRACE's grow round tests the pairs outside the CDNOTS graph and adds 117 candidates; 68 of them survive retraining. The final graph has all 200 true edges and 22 false ones.
 
 # %% [markdown]
 #

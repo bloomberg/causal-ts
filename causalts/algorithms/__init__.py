@@ -60,6 +60,7 @@ _entry_points_loaded = False
 _LAZY_ALGO_REGISTRY: dict[str, tuple[str, str]] = {
     "grace": ("causalts.grace.gated_discovery", "run_cdnots_gated"),
     "grace-ss": ("causalts.grace.gated_discovery", "run_stability_selection"),
+    "reap": ("causalts.grace.runners", "run_reap"),
 }
 
 

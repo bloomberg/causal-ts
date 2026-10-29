@@ -38,8 +38,8 @@ def temporal_bootstrap(
 
     The callable ``discovery_fn`` receives a *reset-index* DataFrame of
     length ``window_size`` and must return a numpy array of shape
-    ``(d, d, max_lag+1)`` — binary (e.g. from CDNOTS) or continuous gate
-    values (e.g. from GRACE).  The mean is meaningful in both cases.
+    ``(d, d, max_lag+1)`` — binary (e.g. CDNOTS's ``cg_tig``, or GRACE's
+    ``cg_tig != 0``) or continuous scores.  The mean is meaningful in both cases.
 
     Parameters
     ----------
@@ -52,17 +52,19 @@ def temporal_bootstrap(
         Example wrappers::
 
             # CDNOTS
-            from causalts import run_cdnots
+            import numpy as np
+            from causalts import run_cdnots, run_grace
+            from causalts.ci_tests.parcorr import PartialCorr
             ci = PartialCorr(data=np.zeros((2, 2)))
             def my_discovery(sub):
                 res = run_cdnots(sub, ci, num_lags=2, include_C=False, alpha=0.05)
                 return res.cg_tig
 
-            # GRACE (continuous gates)
-            def run_grace_gates(sub):
-                res = run_cdnots_gated(sub, max_lag=2,
-                                      model_seed=0, verbose=False)
-                return res.gate_values
+            # GRACE (final graph: the AR head's F-tested self-loops have no
+            # gate value, and the effect floor's pruned edges keep theirs)
+            def grace_discovery(sub):
+                res = run_grace(sub, max_lag=2, model_seed=0, verbose=False)
+                return (np.asarray(res.cg_tig) != 0).astype(float)
 
     n_bootstrap : int, default 20
         Number of bootstrap windows to draw.

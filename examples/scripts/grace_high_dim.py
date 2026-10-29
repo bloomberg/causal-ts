@@ -15,19 +15,7 @@
 # %% [markdown]
 # # GRACE for High-Dimensional Time Series (d=30)
 #
-# This notebook demonstrates GRACE (Gated Refinement After Constraint-based Estimation) on a 30-variable causal system — a regime where constraint-based methods like CDNOTS start to degrade while GRACE maintains high precision.
-#
-# Benchmark results across increasing dimensionality (sparse SCP, T=1000, averaged over 10 seeds):
-#
-# | d | CDNOTS F1 | GRACE F1 | GRACE Precision |
-# |---|-----------|----------|-----------------|
-# | 20 | 0.844 | 0.868 | 95.0% |
-# | 30 | 0.816 | 0.893 | — |
-# | 50 | 0.742 | 0.915 | 96.7% |
-# | 70 | 0.665 | 0.927 | 97.7% |
-# | 100 | 0.531 | 0.920 | 97.4% |
-#
-# **Key insight:** At d=100, GRACE nearly doubles F1 over CDNOTS (0.92 vs 0.53) with 97.4% precision and SHD reduced by 90% (281 → 27).
+# This notebook runs GRACE (Gated Refinement for Accurate Causal Edge discovery) on a 30-variable causal system, where constraint-based methods such as CDNOTS keep many false edges, and compares it with CDNOTS on the same data.
 
 # %%
 import time
@@ -41,7 +29,7 @@ import matplotlib.pyplot as plt
 from causalts.synthetic_data.synthetic_datasets import SCPGraphGenerator
 from causalts.ci_tests import PartialCorr
 from causalts import run_cdnots, run_cdnots_plus
-from causalts.grace import run_cdnots_gated
+from causalts import run_grace
 from causalts.utils import evaluate_graph
 
 # %% [markdown]
@@ -50,7 +38,7 @@ from causalts.utils import evaluate_graph
 # Sparse mixed linear/nonlinear SCP: d=30 variables, T=1000 time points, max_lag=5.
 # - `density="sparse"` — ~1.3–2.2 edges per variable
 # - `dependency_funcs=("lin", "lin", "nl1", "nl2")` — mixed linear/nonlinear
-# - `seed=0` — first of 10 seeds used in benchmarks
+# - `seed=0`
 
 # %%
 gen = SCPGraphGenerator(
@@ -95,46 +83,53 @@ print(f"  TP={metrics_cdnots['TP']}  FP={metrics_cdnots['FP']}  FN={metrics_cdno
 # %% [markdown]
 # ## 3. GRACE
 #
-# GRACE uses the CDNOTS skeleton as a high-recall candidate set, then trains independent Hard Concrete gates to prune false positives.
+# GRACE with its defaults:
 #
-# Lambda is selected via an adaptive formula: `max(0.007 + 0.16·ρ_S, 1/d + 4/T - 0.4·ρ_S^0.8)` where ρ_S is skeleton density.
+# 1. **Candidate graph.** A CDNOTS run (partial correlation, α=0.05) on the rank-transformed data, unless you pass your own `candidate_graph`.
+# 2. **Gated model.** One Hard Concrete gate per candidate cross edge, trained with an $L_0$ penalty. Its strength λ comes from a bounded rule in d, T and the data's background lagged cross-correlation (`lambda_rule="xcorr"`).
+# 3. **Grow round.** Lagged pairs outside the candidates are tested, for an effect on the target's mean and on its noise scale; hits join the candidates and the gates are retrained.
+# 4. **Final graph.**
+#    - Cross edges are cut from the gates (the `auto` cutoff).
+#    - Self-loops come from an ungated autoregressive head and are kept by a partial F-test.
+#    - A minimum effect per edge (`effect_floor`) removes cross edges that explain a negligible share of their target's variance.
 
 # %%
 t0 = time.time()
-_gr = run_cdnots_gated(
-    df=df,
+_gr = run_grace(
+    df,
     max_lag=5,
     alpha=0.05,
-    # skeleton=graph_cdnots, # we can provide the skeleton from cdnots
-    gate_threshold=0.5,
-    max_epochs=150,
+    # candidate_graph=graph_cdnots,  # or start from another method's graph
     model_seed=42,
-    verbose=True,
-    ground_truth=ground_truth,
+    verbose=False,
 )
 G_grace     = _gr.cg_tig
 gate_values = _gr.gate_values
-info        = {"lambda_l0": _gr.lambda_l0,
-               "skeleton_density": float(_gr.skeleton.astype(bool).mean()) if _gr.skeleton is not None else None}
+info        = {"lambda_l0": _gr.lambda_l0, "cutoff": _gr.gate_threshold,
+               "grown": sum(h["n_added"] for h in _gr.grow_history or []),
+               "effect_pruned": _gr.n_effect_pruned}
 t_grace = time.time() - t0
 
 metrics_grace = evaluate_graph(G_grace, ground_truth)
-print(f"\nGRACE ({t_grace:.0f}s):")
+print(f"GRACE ({t_grace:.0f}s):")
 print(f"  F1={metrics_grace['F1']:.3f}  Precision={metrics_grace['Precision']:.3f}"
       f"  Recall={metrics_grace['TPR']:.3f}  SHD={metrics_grace['SHD']}")
-print(f"  Lambda used: {info['lambda_l0']:.4f}  Skeleton density: {info['skeleton_density']:.3f}")
+print(f"  lambda={info['lambda_l0']:.4f}  gate cutoff={info['cutoff']:.2f}  "
+      f"candidates added by the grow round={info['grown']}  "
+      f"edges removed by the effect floor={info['effect_pruned']}")
 
 # %% [markdown]
 # ## 4. Gate Value Heatmap
 #
-# Each gate value indicates confidence in an edge's existence. Values > 0.5 are included in the final graph.
+# Each gate value is the model's confidence in a candidate cross edge. Edges with a gate above the cutoff enter the graph unless the effect floor removes them; self-loops are not gated (their entries are 0) and are decided by the F-test.
 
 # %%
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
 gate_sum = gate_values.sum(axis=2)  # (d, d)
 im = axes[0].imshow(gate_sum, cmap="RdYlGn", vmin=0, vmax=gate_values.shape[2])
-axes[0].set_title("Gate values (summed over lags)\nGreen = confident causal edges", fontsize=12)
+axes[0].set_title("Gate values (summed over lags)\nGreen = confident causal edges; "
+                  "self-loops are F-tested, not gated (0 here)", fontsize=12)
 axes[0].set_xlabel("Effect variable")
 axes[0].set_ylabel("Cause variable")
 plt.colorbar(im, ax=axes[0], label="Sum of gate values")
@@ -151,21 +146,27 @@ plt.show()
 # %% [markdown]
 # ## 5. Gate Value Distribution
 #
-# Hard Concrete gates produce a bimodal distribution: true causal edges concentrate near 1, false edges near 0, with almost no overlap at the 0.5 decision boundary. This makes the threshold robust without tuning.
+# The histogram shows the final gate value of every cross edge, with the cutoff GRACE chose from the data (the `auto` rule). Pairs that are not candidates have no gate (value 0).
+#
+# In this run, 38 of the 40 true cross edges are candidates and 26 of them clear the cutoff. Three non-causal edges also clear it; after the effect floor, the final graph keeps one false edge. The gates do not separate the two classes perfectly: most of the recall GRACE gives up comes from true cross edges whose gates stay below the cutoff.
 
 # %%
-flat_gates = gate_values.flatten()
-flat_truth = ground_truth.flatten()
+# cross edges only: self-loops are decided by an F-test and have no gate value
+cross = np.ones(gate_values.shape, dtype=bool)
+cross[np.arange(gate_values.shape[0]), np.arange(gate_values.shape[0]), :] = False
+flat_gates = gate_values[cross]
+flat_truth = ground_truth[cross]
 
 true_gates  = flat_gates[flat_truth == 1]
 false_gates = flat_gates[flat_truth == 0]
 
 fig, ax = plt.subplots(figsize=(9, 4))
 ax.hist(false_gates, bins=40, alpha=0.75, color="#ef4444",
-        label=f"Non-causal edges (n={len(false_gates)})")
+        label=f"Non-causal cross edges (n={len(false_gates)})")
 ax.hist(true_gates,  bins=40, alpha=0.75, color="#22c55e",
-        label=f"True causal edges (n={len(true_gates)})")
-ax.axvline(0.5, color="black", linestyle="--", linewidth=2, label="Decision boundary (0.5)")
+        label=f"True causal cross edges (n={len(true_gates)})")
+cut = info["cutoff"]
+ax.axvline(cut, color="black", linestyle="--", linewidth=2, label=f"Gate cutoff ({cut:.2f})")
 ax.set_xlabel("Gate value", fontsize=12)
 ax.set_ylabel("Count", fontsize=12)
 ax.set_yscale("log")
@@ -174,8 +175,10 @@ ax.legend(fontsize=11)
 plt.tight_layout()
 plt.show()
 
-print(f"True edges with gate > 0.5: {(true_gates > 0.5).mean()*100:.1f}%")
-print(f"False edges with gate < 0.5: {(false_gates < 0.5).mean()*100:.1f}%")
+cand = _gr.candidate_graph[cross] != 0  # the refined candidate graph, incl. grow additions
+print(f"True cross edges in the candidate set: {int((flat_truth[cand] == 1).sum())} of {len(true_gates)}")
+print(f"  with gate above the cutoff: {int((true_gates > cut).sum())}")
+print(f"Non-causal cross edges with gate above the cutoff: {int((false_gates > cut).sum())}")
 
 # %% [markdown]
 # ## 6. Summary
@@ -199,9 +202,8 @@ print(f"\nTrue edges: {n_edges}")
 # %% [markdown]
 # ## Key Takeaways
 #
-# - **Use GRACE when d > 20** — gating consistently improves precision with minimal recall loss
-# - **Lambda adapts automatically** to d, T, and skeleton density — no manual tuning
-# - **Gate values are interpretable**: > 0.8 = high-confidence; 0.5–0.8 = borderline; < 0.5 = pruned
-# - **Bimodal separation** confirms the 0.5 threshold is reliable without calibration
-#
-# For d ≥ 30, run on GPU (`device='cuda'` or `device='mps'`) to reduce training time.
+# - **Precision.** On this d=30 system, GRACE keeps 1 false edge against CDNOTS's 26 (precision 0.705 → 0.982) and halves the SHD (34 → 16).
+# - **Recall.** GRACE finds 55 of the 70 true edges against CDNOTS's 62 (recall 0.886 → 0.786); most of its misses are weak cross edges whose gates stay below the cutoff.
+# - **No tuning.** λ (`lambda_rule="xcorr"`) and the gate cutoff are set from the data; nothing was tuned here.
+# - **Gate values are not probabilities.** For a confidence measure, use selection frequency across subsamples or windows: `causalts.grace.run_stability_selection` or `causalts.temporal_bootstrap`.
+# - **Runtime.** GRACE runs much longer than CDNOTS. It uses a GPU automatically when one is available (see the `device` argument).

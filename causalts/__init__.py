@@ -48,6 +48,7 @@ if TYPE_CHECKING:  # pragma: no cover - import for type checkers only
         run_stability_selection,
     )
     from .grace.result import GraceResult  # noqa: F401
+    from .grace.runners import run_grace, run_reap  # noqa: F401
 
 # Served on demand so that ``import causalts`` stays cheap: cedar.legacy pulls
 # in dcor + statsmodels, grace pulls in pytorch-lightning, confounders pulls in
@@ -62,6 +63,8 @@ _LAZY_ATTRS = {
     "run_cdnots_gated": "causalts.grace.gated_discovery",
     "run_stability_selection": "causalts.grace.gated_discovery",
     "GraceResult": "causalts.grace.result",
+    "run_grace": "causalts.grace.runners",
+    "run_reap": "causalts.grace.runners",
 }
 
 # Subpackages that used to be bound as attributes of ``causalts`` as a side

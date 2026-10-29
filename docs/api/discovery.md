@@ -95,6 +95,10 @@ O(d) tests instead of the O(d²) of a full graph.
 ## GRACE
 
 ```{eval-rst}
+.. autofunction:: causalts.grace.runners.run_grace
+
+.. autofunction:: causalts.grace.runners.run_reap
+
 .. autofunction:: causalts.grace.gated_discovery.run_cdnots_gated
 
 .. autofunction:: causalts.grace.gated_discovery.run_stability_selection
@@ -102,6 +106,10 @@ O(d) tests instead of the O(d²) of a full graph.
 .. autofunction:: causalts.grace.gated_discovery.evaluate_graph
 
 .. autofunction:: causalts.grace.gated_discovery.prepare_data
+
+.. autofunction:: causalts.grace.shrink.shrink_parents
+
+.. autofunction:: causalts.grace.grow.grow_candidates
 ```
 
 ---

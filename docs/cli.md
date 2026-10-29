@@ -68,10 +68,10 @@ causal-ts discover DATA.csv [OPTIONS]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-a, --algorithm` | `cdnots` | `cdnots`, `cdnots+`, `cedar`, `grace`, `grace-ss` |
+| `-a, --algorithm` | `cdnots` | `cdnots`, `cdnots+`, `cedar`, `grace`, `grace-ss`, `reap` |
 | `--ci-test` | `parcorr-gpu` | CI test — see `ci-test-info` |
 | `--max-lag INT` | `3` | Maximum time lag |
-| `--alpha FLOAT` | `0.01` for `cdnots+`, else `0.05` | Significance level for `cdnots`, `cdnots+`, `grace`, `grace-ss` (`0.01` recommended); Cedar uses `--alpha-cond1`/`--alpha-cond2` |
+| `--alpha FLOAT` | `0.01` for `cdnots+`, else `0.05` | Significance level for `cdnots`, `cdnots+`, `grace`, `grace-ss`, `reap` (`0.01` recommended); Cedar uses `--alpha-cond1`/`--alpha-cond2` |
 | `--lag-list TEXT` | — | Comma-separated explicit lags, e.g. `1,3,12` |
 | `--var-names TEXT` | from CSV | Comma-separated variable names |
 
@@ -105,11 +105,20 @@ causal-ts discover DATA.csv [OPTIONS]
 | `--include-c / --no-c` | on | Append a nonstationarity time-index variable C — forces `include_lag0=True` so C(t) → X(t) edges are detectable |
 | `--c-preset` | `linear` | C node basis preset: `linear`, `step`, `step+linear`, `linear+sin`, `linear+exp`, `linear+quad` |
 
-### GRACE-specific
+### GRACE- and REAP-specific
+
+`--algorithm reap` is REAP, the regression-based refinement; it is the same as `--algorithm grace --refine shrink`.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--gate-threshold FLOAT` | `0.5` | Minimum gate value to keep an edge |
+| `--gate-threshold [auto\|li\|FLOAT]` | `auto` | Cutoff on the gates of cross edges, before the effect floor (self-loops under the AR head are F-tested, not gated); `auto`/`li` choose it from the gate values |
+| `--grow-rounds INT` | `1` (GRACE), `3` (REAP) | Grow rounds (`grace` and `reap`): re-test lagged pairs the candidate graph missed, refine again on the enlarged set (retrain the gates, or re-run REAP's pruning) |
+| `--effect-floor FLOAT` | library default (≈0.0198) | Minimum edge effect (`grace` gates only): adjusted partial R² an edge must explain on grow admission and in the final graph; `0` turns it off. With `--algorithm reap` it is an error: REAP's floor is `--shrink-effect-floor` |
+| `--ar-path / --no-ar-path` | on (`--max-lag` ≥ 1) | `grace` gates only: ungated autoregressive head; self-loops are decided by an F-test |
+| `--lambda-rule [xcorr\|density\|dT]` | `xcorr` | `grace` gates only: closed-form rule for the L0 strength |
+| `--refine [gates\|shrink]` | `gates` | `grace` only. `shrink` is REAP (same as `--algorithm reap`; `--algorithm reap --refine gates` is an error): regression-based backward elimination instead of the neural gates (no training, so `--gate-threshold`, `--max-epochs`, `--batch-size`, `--patience`, `--effect-floor`, `--ar-path` and `--lambda-rule` are ignored with a warning); writes `edge_strength.npy` and `edge_pvalue.npy` instead of `gate_values.npy` |
+| `--shrink-effect-floor` | off | REAP only (an error otherwise). After the shrink, prune lagged cross edges with a small unique effect: `adaptive` (per target, below max(0.01, 0.2 × its strongest edge's adjusted partial R²); for long series) or a fixed floor in [0, 1). Writes `effect_pruned.npy` and `shrink_effect_floor` / `n_effect_pruned` in `summary.json` |
+| `--contemporaneous` | off | REAP only (an error otherwise). Also finds lag-0 edges with CDNOTS+, lagged edges pinned to the shrink's selection; writes `edge_marks.npy`, which keeps unoriented lag-0 edges as `o-o` (`estimated_graph.npy` drops them). `edge_pvalue.npy` / `edge_strength.npy` stay 1.0 / 0.0 at lag 0 (the shrink does not test lag-0 edges) |
 | `--stability-threshold FLOAT` | `0.6` | Minimum selection frequency (GRACE-SS) |
 | `--max-epochs INT` | `150` | Training epochs |
 | `--batch-size INT` | auto | Mini-batch size |
@@ -117,12 +126,13 @@ causal-ts discover DATA.csv [OPTIONS]
 | `--include-c / --no-c` | on | Include the C node in the CDNOTS/CI skeleton GRACE refines |
 | `--c-preset` | `linear` | C node basis for that skeleton |
 
-GRACE runs in two stages, and `--include-c` / `--c-preset` configure the first:
-the CDNOTS (or CI) skeleton. The second stage — the gated neural model — has a
-separate, opt-in C of its own; reach it by calling
-{func}`causalts.grace.gated_discovery.run_cdnots_gated` with
-`include_C_in_model=True` from Python. That option requires a skeleton built
-with C, since the skeleton masks the model's gates.
+GRACE and REAP run in two stages, and `--include-c` / `--c-preset` configure the
+first: the CDNOTS candidate graph. The second stage has a separate, opt-in C of
+its own, reached from Python with `include_C_in_model=True`:
+{func}`causalts.grace.runners.run_grace` then also feeds C to the gated model
+(this needs a candidate graph built with C, since it masks the model's gates),
+and {func}`causalts.grace.runners.run_reap` conditions its regressions on C for
+a supplied candidate graph too.
 
 ### Missing data
 

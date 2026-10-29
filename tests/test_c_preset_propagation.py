@@ -212,6 +212,8 @@ def test_cli_no_c_reaches_grace(monkeypatch):
         return types.SimpleNamespace(
             cg_tig=np.zeros((3, 3, 3), dtype=np.int8),
             gate_values=np.zeros((3, 3, 3)),
+            gate_threshold=0.5,
+            gate_threshold_rule="li_fallback",
         )
 
     # The CLI imports from the package namespace, not the module.
