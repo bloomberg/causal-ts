@@ -142,6 +142,38 @@ res = run_cdnots(df=df, indep_test=ci_test, num_lags=3,
 **C node basis:** The default `c_preset='linear'` (scalar time index) handles smooth monotone drift. For quadratic trends use `'linear+quad'`, for seasonal effects `'linear+sin'`. Supply `c_array` for any custom nonstationarity pattern. See `multi_c_nonstationarity.ipynb`.
 :::
 
+### Optional CDNOTS+ steps
+
+`run_cdnots_plus` has two extra steps, both off by default. Each helps when its assumptions hold, and can cost accuracy when they do not, so turn them on deliberately.
+
+```python
+res = run_cdnots_plus(
+    df=df, indep_test=ci_test, num_lags=3, include_C=False, alpha=0.01,
+    lag0_orient="lingam",                     # orient undirected lag-0 edges
+    addback_alpha=1e-4, veto_alpha=0.001,     # re-test lagged links
+)
+res.lag0_orientations   # one record per o-o / x-x lag-0 pair it considered
+res.lag_refinements     # links added or removed, with p-values
+```
+
+**`lag0_orient="lingam"`** orients lag-0 edges that conditional independence leaves undirected (`o-o`) or conflicting (`x-x`). These are the edges PCMCI+-style search cannot orient. It orders the innovations of each such component with DirectLiNGAM, and orients an edge only when:
+
+- the direction holds in 90% of bootstrap re-orderings,
+- an endpoint's innovations are non-Gaussian,
+- and the edge creates no collider the CI step ruled out.
+
+**`addback_alpha` / `veto_alpha`** re-test lagged cross links after orientation, using the full MCI conditioning set (lag-0, self and C links are not touched). Absent links with `p < addback_alpha` are added, then present links with `p > veto_alpha` are removed, and the graph is re-oriented until nothing changes (at most 5 passes). This recovers weak links that the first skeleton pass drops before the target's own past is conditioned on. It needs contiguous lags (`num_lags`, or a `lag_list` of `1..L`) and cannot be combined with `max_conds_py` / `max_conds_px`.
+
+| | `lag0_orient="lingam"` | `addback_alpha` / `veto_alpha` |
+|---|---|---|
+| Helps | Linear mechanisms with non-Gaussian noise: F1 +0.02 to +0.04 when most edges are contemporaneous. | Linear simulations at `alpha=0.01`: SHD lower in every setting tried, F1 up to +0.05 (but -0.03 at T=100 with d=50). |
+| Neutral | Linear mechanisms with Gaussian noise: the normality gate usually keeps it from acting (the test rejects about 1% of Gaussian samples). | Nonlinear data with the `raft` CI test. |
+| Hurts | Spline mechanisms with Laplace or Gaussian noise: most of its orientations are wrong. | A CI test without power at the sample size (e.g. `splitkci` at T=300): the veto removes true links it cannot detect. |
+| Real data (CausalRivers) | F1 unchanged, SHD +0.5. | F1 unchanged, SHD +2: on long series it adds about four false links per true one. |
+| Cost | 101 DirectLiNGAM orderings per undirected component. | About 1.5–2.7× a plain run. |
+
+Neither has improved results on the real data tested so far. Use `lag0_orient` when relationships are close to linear with non-Gaussian noise, and the refinement when the CI test is well powered and you can afford more false links in exchange for weak true ones. The `run_cdnots_plus` docstring has the full settings and numbers.
+
 ---
 
 ## {fas}`shuffle;1em;sd-text-primary` CEDAR

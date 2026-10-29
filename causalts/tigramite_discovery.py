@@ -371,6 +371,11 @@ def tigramite_graph_to_binary(
     conflict : {"drop", "bidirected"}, optional
         How to render ``"x-x"``. Defaults to ``"drop"``.
 
+    Both policies apply at lag 0 only. At a lag ``tau >= 1`` time order fixes
+    the direction, so an ``"o-o"``, ``"x-x"``, ``"<--"`` or ``"<-o"`` renders as
+    ``i(t-tau) -> j(t)`` and only ``[i, j, tau]`` is written: ``[j, i, tau]``
+    is a different link.
+
     Returns
     -------
     numpy.ndarray
@@ -406,13 +411,19 @@ def tigramite_graph_to_binary(
                     if p_matrix is not None and alpha_level is not None:
                         if p_matrix[i, j, tau] >= alpha_level:
                             continue
-                    G[j, i, tau] = 1
-                elif s in symmetric:
+                    # At a lag, time order fixes the direction and the mirror
+                    # is a different link: render the forward link instead.
+                    if tau == 0:
+                        G[j, i, tau] = 1
+                    else:
+                        G[i, j, tau] = 1
+                elif s in symmetric or (tau > 0 and s in ("o-o", "x-x")):
                     if p_matrix is not None and alpha_level is not None:
                         if p_matrix[i, j, tau] >= alpha_level:
                             continue
                     G[i, j, tau] = 1
-                    G[j, i, tau] = 1
+                    if tau == 0:  # at a lag the mirror is a different link
+                        G[j, i, tau] = 1
 
     return G
 

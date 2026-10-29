@@ -558,3 +558,36 @@ def test_collider_lag_copies_do_not_recreate_a_forbidden_c_edge():
     )
     assert out.G.get_edge(out.G.nodes[7], out.G.nodes[4]) is None
     assert out.is_fully_directed(3, 0) and out.is_fully_directed(1, 0)
+
+
+@pytest.mark.parametrize("seed", [1, 2, 5])
+def test_collider_vote_conditions_on_c_parents(seed):
+    """X0 -> X1 <- X2 at lag 0, X1's mean shifts with C (C -> X1).
+
+    The majority vote for X0(t-1) -> X0(t) - X1(t) tests X1(t) vs X0(t-1). With C
+    only an optional subset member, the subsets without it test an X1 swamped by
+    its regime shift, find spurious separating sets without X0(t), call a collider
+    and orient X1 -> X0: a conflict (x-x) with the true X0 -> X1. C is a parent,
+    so the vote conditions on it in every test, as MCI does.
+    """
+    T = 1000
+    rng = np.random.default_rng(seed)
+    c = np.r_[np.zeros(T // 2), np.ones(T // 2)]
+    x = np.zeros((T, 3))
+    e = rng.normal(size=(T, 3))
+    for t in range(1, T):
+        x[t, 0] = 0.5 * x[t - 1, 0] + e[t, 0]
+        x[t, 2] = 0.5 * x[t - 1, 2] + e[t, 2]
+        x[t, 1] = 0.5 * x[t - 1, 1] + 0.6 * x[t, 0] + 0.6 * x[t, 2] + 2 * c[t] + e[t, 1]
+    df = pd.DataFrame(x, columns=["X0", "X1", "X2"])
+    res = run_cdnots_plus(
+        df,
+        ParCorrGPU(df.values, device="cpu"),
+        num_lags=1,
+        alpha=0.01,
+        include_C=True,
+        c_array=c,
+        show_progress=False,
+    )
+    marks = np.asarray(res.to_marks())
+    assert marks[0, 1, 0] == "-->" and marks[2, 1, 0] == "-->"

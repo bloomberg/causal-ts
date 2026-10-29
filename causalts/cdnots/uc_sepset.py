@@ -58,6 +58,16 @@ def validate_priority(priority: int) -> None:
     raise ValueError(f"priority must be 0, 1 or 2, got {priority!r}")
 
 
+def validate_majority_gamma(majority_gamma: float) -> None:
+    """Reject a majority-rule ambiguity band outside ``[0, 0.5]``.
+
+    Call this at an entry point, before the skeleton search, as for
+    :func:`validate_priority`.
+    """
+    if not 0 <= majority_gamma <= 0.5:
+        raise ValueError(f"majority_gamma must be in [0, 0.5], got {majority_gamma!r}")
+
+
 def uc_sepset(
     cg: CausalGraph,
     priority: int = 2,
@@ -75,6 +85,8 @@ def uc_sepset(
     majority_mode: str = "mci",
     max_subsets_per_size: int | None = None,
     max_subset_size: int | None = None,
+    majority_gamma: float = 0.5,
+    parentless=(),
 ) -> CausalGraph:
     """Run UC_sepset to orient unshielded colliders.
 
@@ -99,9 +111,10 @@ def uc_sepset(
         triple X-Y-Z whose middle Y is at lag 0 (X or Z may be lagged):
         X and Z are re-tested over a family of conditioning sets (see
         ``majority_mode``). A collider is declared only if < 50% of the
-        separating sets contain Y. At exactly 50%, or with no separating
-        set, the triple is ambiguous: left unoriented and recorded in
-        ``ambiguous_triples``. Requires ``ci_test`` and ``alpha``.
+        separating sets contain Y. At exactly 50% (or inside the
+        ``majority_gamma`` band), or with no separating set, the triple is
+        ambiguous: left unoriented and recorded in ``ambiguous_triples``.
+        Requires ``ci_test`` and ``alpha``.
     ci_test : object, optional
         CI test instance (required when ``contemp_collider_rule='majority'``).
     alpha : float
@@ -116,10 +129,10 @@ def uc_sepset(
         of ``ci_test.data``. Shifted parents beyond it are dropped.
         Defaults to the graph's node count.
     lags : list of int, optional
-        Lag of each slice of the embedding (``[0] + lag_list``). Needed only
-        for a gapped ``lag_list``, where slice position and lag differ; a
-        shifted parent whose lag has no slice is dropped. Defaults to
-        contiguous lags.
+        Lag of each slice of ``ci_test.data``, the window's own lags first
+        (``[0] + lag_list``, then any deeper ones). Needed only for a gapped
+        ``lag_list``, where slice position and lag differ; a shifted parent
+        whose lag has no slice is dropped. Defaults to contiguous lags.
     max_conds_py, max_conds_px : int, optional
         Caps on the lagged parents of the lag-0 endpoint and of the other
         endpoint in the majority-rule conditioning sets, as in
@@ -144,6 +157,20 @@ def uc_sepset(
         pair are tried first, then the rest in node-index order (the skeleton
         orders by dependence strength instead), so the result can depend on
         variable order.
+    majority_gamma : float, default 0.5
+        Ambiguity band of the majority rule (Zhalama, Zhang & Mayer 2017),
+        in ``[0, 0.5]``. With ``f`` the share of separating sets that contain
+        the middle node, the triple is a collider if ``f < 0.5`` and
+        ``f <= majority_gamma``, a non-collider if ``f > 0.5`` and
+        ``f >= 1 - majority_gamma``, and ambiguous otherwise. ``0.5`` is the
+        plain majority rule (PCMCI+'s); ``0`` orients only unanimous votes,
+        as conservative PC does.
+    parentless : iterable of int, optional
+        Lag-0 nodes that can have no parents (the C columns). A triple with
+        one of them in the middle is never a collider, so it is not
+        classified: orienting it would put an arrowhead into the node. In
+        ``majority_mode="mci"`` they (in any slice) are never optional subset
+        members; every vote conditions on those adjacent to either endpoint.
 
     Returns
     -------
@@ -153,7 +180,12 @@ def uc_sepset(
         ``graph[i,j] = graph[j,i] = 1`` indicates i <-> j.
         ``cg_new.ambiguous_triples`` holds the triples the majority rule
         left ambiguous (in both orders), which :func:`meek` must not use
-        as non-colliders.
+        as non-colliders. ``cg_new.collider_triples`` (both orders) holds
+        the triples the vote declared colliders, plus triples skipped
+        because both arms already pointed into the middle (unless a cycle
+        redo re-voted them); colliders the redo dropped stay in it and are
+        also in ``ambiguous_triples``. An unshielded triple in neither set
+        was ruled a non-collider.
 
     Notes
     -----
@@ -175,6 +207,7 @@ def uc_sepset(
     """
 
     validate_priority(priority)
+    validate_majority_gamma(majority_gamma)
     if majority_mode not in ("mci", "pc", "pc_sepset"):
         raise ValueError(
             "majority_mode must be 'mci', 'pc' or 'pc_sepset', "
@@ -200,10 +233,11 @@ def uc_sepset(
     evidence = {}  # Full-vote collider evidence, filled on demand
     UC_dict = {}
     adj = _build_adj_dict(cg_new)
+    parentless = frozenset(parentless)
     UT = [
         (i, j, k)
         for (i, j, k) in _find_unshielded_triples_fast(cg_new, adj)
-        if (i < k) and (j < no_of_inst_var)
+        if (i < k) and (j < no_of_inst_var) and j not in parentless
     ]  # Not considering symmetric triples
 
     # C - X pairs removed by background knowledge (see c_lag_cnst).
@@ -306,10 +340,13 @@ def uc_sepset(
         ``"mci"`` matches PCMCI+'s _pcalg_colliders with
         contemp_collider_rule='majority':
         - Tests all subsets of contemporaneous neighbors of j (the lag-0 endpoint)
-          and, when x is also at lag 0, subsets of x's contemporaneous neighbors.
-        - For each subset S, runs CI test conditioned on S + lagged parents (MCI).
+          and, when x is also at lag 0, subsets of x's contemporaneous neighbors,
+          C columns excepted.
+        - For each subset S, runs CI test conditioned on S + lagged parents (MCI)
+          + both endpoints' adjacent C columns.
         - A collider is declared only if fraction of separating subsets containing
-          Y is < 0.5. Fraction = 0.5 or no separating set → ambiguous (not collider).
+          Y is < 0.5 (and <= ``majority_gamma``). Fraction = 0.5 (or inside the
+          ``majority_gamma`` band) or no separating set → ambiguous (not collider).
         """
         from itertools import combinations as _combs
         from itertools import islice as _islice
@@ -345,17 +382,31 @@ def uc_sepset(
         i = x if z < no_of_inst_var else z  # could be lagged
 
         # Contemporaneous neighbors of j, excluding only the direct test partner i.
-        # y is NOT excluded — PCMCI+ includes y in conditioning subsets.
+        # y is NOT excluded — PCMCI+ includes y in conditioning subsets. C
+        # columns are not subset candidates: every test conditions on both
+        # endpoints' C parents through the base sets below. This goes further
+        # than MCI (phase 2), which adds them for the effect only; C is a root,
+        # so conditioning on it can only block paths. As an optional subset
+        # member, the votes without C would test an endpoint whose regime
+        # shift swamps the dependence, so spurious separating sets would
+        # decide the triple.
+        def _is_c(p):
+            return p % no_of_inst_var in parentless
+
         contemp_neighbors_j = [
             p
             for p in cg_new.neighbors(j)
-            if p < no_of_inst_var and p != (i if i < no_of_inst_var else -1)
+            if p < no_of_inst_var
+            and p != (i if i < no_of_inst_var else -1)
+            and not _is_c(p)
         ]
         # If i is also lag-0, include its contemp neighbors too (excluding j)
         contemp_neighbors_i = []
         if i < no_of_inst_var:
             contemp_neighbors_i = [
-                p for p in cg_new.neighbors(i) if p < no_of_inst_var and p != j
+                p
+                for p in cg_new.neighbors(i)
+                if p < no_of_inst_var and p != j and not _is_c(p)
             ]
 
         # Build all unique subsets (union of both sides)
@@ -391,8 +442,12 @@ def uc_sepset(
                     out.append(idx)
             return out if cap is None else out[:cap]
 
-        base_j = _shifted_parents(j, max_conds_py)
-        base_i = _shifted_parents(i, max_conds_px)
+        def _c_parents(node):
+            # C can only be a cause, so an adjacent C column is a parent.
+            return [p for p in cg_new.neighbors(node) if _is_c(p)]
+
+        base_j = _shifted_parents(j, max_conds_py) + _c_parents(j)
+        base_i = _shifted_parents(i, max_conds_px) + _c_parents(i)
         return _vote(x, y, z, all_subsets, base_j, base_i, full)
 
     def _pc_subsets(x, z):
@@ -435,6 +490,15 @@ def uc_sepset(
                         return out
         return out
 
+    def _band(n_y, n):
+        """Majority-rule class of ``n_y`` of ``n`` separating sets holding y:
+        1 collider, -1 non-collider, 0 ambiguous."""
+        if 2 * n_y < n and n_y <= majority_gamma * n + 1e-9:
+            return 1
+        if 2 * n_y > n and n_y >= (1 - majority_gamma) * n - 1e-9:
+            return -1
+        return 0
+
     def _vote(x, y, z, all_subsets, base_j, base_i, full=False):
         """Majority vote over ``all_subsets``, each extended by the bases.
 
@@ -468,25 +532,28 @@ def uc_sepset(
                 sep_n += not has_y
             if full:
                 continue
-            if sep_y + rest_y < sep_n:
-                return True  # y is in fewer than half, whatever remains
-            if sep_y > sep_n + rest_n:
-                return False  # y is in more than half, whatever remains
+            # The share can still rise to (sep_y + rest_y) / (... + sep_n)
+            # and fall to sep_y / (sep_y + sep_n + rest_n).
+            if sep_n and _band(sep_y + rest_y, sep_y + rest_y + sep_n) == 1:
+                return True  # a collider, whatever remains
+            if sep_y and _band(sep_y, sep_y + sep_n + rest_n) == -1:
+                return False  # a non-collider, whatever remains
 
         if len(separating_subsets) == 0:
             # no separating set found → ambiguous, do NOT orient
             ambiguous.update({(x, y, z), (z, y, x)})
             return False
 
-        fraction = sum(y in S for S in separating_subsets) / len(separating_subsets)
+        n_y = sum(y in S for S in separating_subsets)
+        fraction = n_y / len(separating_subsets)
         if full:
             evidence[(x, y, z)] = (fraction, max_p_y)
-        # fraction < 0.5: y absent from majority → collider
-        # fraction == 0.5: ambiguous → do NOT orient
-        # fraction > 0.5: y present in majority → non-collider
-        if fraction == 0.5:
+        # y absent from the majority → collider; present → non-collider;
+        # a tie (or inside the majority_gamma band) → ambiguous, do NOT orient
+        verdict = _band(n_y, len(separating_subsets))
+        if verdict == 0:
             ambiguous.update({(x, y, z), (z, y, x)})
-        return fraction < 0.5
+        return verdict == 1
 
     def _vote_evidence(t):
         """Full-vote evidence of collider triple ``t`` (None if it had no
@@ -555,7 +622,8 @@ def uc_sepset(
         # not. This also records those the majority rule leaves ambiguous:
         # after the redo their arms may no longer both point into the middle,
         # and meek must not treat them as non-colliders.
-        colliders = colliders + [t for t in skipped if _classify(*t)]
+        # In place, so the caller's record of declared colliders has them too.
+        colliders.extend(t for t in skipped if _classify(*t))
         # Arrows oriented before this step, in the whole window: lag copies
         # are oriented separately, so a cycle can sit in a lagged slice only.
         # A cycle among them is not the colliders' doing: the selection
@@ -654,11 +722,20 @@ def uc_sepset(
             colliders.append((x, y, z))
             _orient_collider(x, y, z)
 
-    if priority in (0, 1, 2) and _cycle_edges(
+    resolved = priority in (0, 1, 2) and _cycle_edges(
         _arrows(cg_new.G.graph), cg_new.G.graph.shape[0]
-    ):
+    )
+    if resolved:
         _resolve_collider_cycles(colliders, skipped)
     cg_new.ambiguous_triples = ambiguous
+    # Triples the vote declared colliders, in both orders; with
+    # ambiguous_triples this tells later steps which unshielded triples it
+    # ruled non-colliders. Skipped triples are voted on only in the cycle
+    # redo; otherwise they are colliders in the graph with no ruling.
+    declared = colliders if resolved else colliders + skipped
+    cg_new.collider_triples = {
+        t for x, y, z in declared for t in ((x, y, z), (z, y, x))
+    }
     if priority in [0, 1, 2]:
         return cg_new
 

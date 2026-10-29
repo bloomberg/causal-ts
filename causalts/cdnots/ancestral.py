@@ -12,8 +12,14 @@ during orientation).
 from __future__ import annotations
 
 from collections import deque
+from copy import deepcopy
+from itertools import combinations
 
 import numpy as np
+
+# Cut-set search for forbidden ancestors the greedy cleanup leaves violated.
+_CUT_SEARCH_MAX_SIZE = 4
+_CUT_SEARCH_BUDGET = 5000  # cuts tried per round (with lag copies, then single)
 
 
 def count_c_cols(include_C, num_c_cols=None):
@@ -292,6 +298,28 @@ def _semi_directed_bfs(
 # ---------------------------------------------------------------------------
 # Required-ancestor orientation pass
 # ---------------------------------------------------------------------------
+
+
+def _directed_path(graph, a, d):
+    """Shortest directed path ``a -> ... -> d`` (node list) or None.
+
+    ``i -> j`` is causal-learn's ``graph[i, j] == -1 and graph[j, i] == 1``.
+    """
+    prev = {a: None}
+    queue = deque([a])
+    while queue:
+        u = queue.popleft()
+        if u == d:
+            path = [d]
+            while prev[path[-1]] is not None:
+                path.append(prev[path[-1]])
+            return path[::-1]
+        for v in np.flatnonzero((graph[u] == -1) & (graph[:, u] == 1)):
+            v = int(v)
+            if v not in prev:
+                prev[v] = u
+                queue.append(v)
+    return None
 
 
 def apply_ancestral_constraints(
@@ -588,33 +616,159 @@ def apply_ancestral_constraints(
                 continue  # already an oriented collider
             cg.ambiguous_triples.update({(a, int(m), b), (b, int(m), a)})
 
-    def _remove_edge_with_lags(xi: int, xj: int) -> bool:
-        """Remove xi→xj and all lag-shifted copies; return True if anything removed."""
-        did_remove = False
-        x_step = xi // n_per_lag
-        y_step = xj // n_per_lag
-        max_step = max(x_step, y_step)
+    def _required(a: int, b: int) -> bool:
+        return background_knowledge is not None and background_knowledge.is_required(
+            cg.G.nodes[a], cg.G.nodes[b]
+        )
+
+    pending = []  # edges removed by the current cut, logged once it is kept
+    cut_log = []  # removals not yet printed (the cut-set search may replace them)
+
+    def _cuttable_copies(xi: int, xj: int, graph=None):
+        """xi→xj and its lag-shifted copies that are fully directed, not required."""
+        graph = cg.G.graph if graph is None else graph
+        max_step = max(xi // n_per_lag, xj // n_per_lag)
+        out = []
         for shift in range(num_lags - max_step + 1):
             nx = xi + shift * n_per_lag
             ny = xj + shift * n_per_lag
             if nx >= n or ny >= n:
                 break
-            if not cg.is_fully_directed(nx, ny):
-                continue
+            if graph[nx, ny] == -1 and graph[ny, nx] == 1 and not _required(nx, ny):
+                out.append((nx, ny))
+        return out
+
+    def _remove_edge_with_lags(xi: int, xj: int) -> bool:
+        """Remove xi→xj and all lag-shifted copies; return True if anything removed.
+
+        A required copy is kept.
+        """
+        did_remove = False
+        for nx, ny in _cuttable_copies(xi, xj):
             e = cg.G.get_edge(cg.G.nodes[nx], cg.G.nodes[ny])
             if e is not None:
                 cg.G.remove_edge(e)
                 _mark_new_triples_ambiguous(nx, ny)
                 did_remove = True
-                if verbose:
-                    print(
-                        f"[AncestralKnowledge] Removed (direct) "
-                        f"{_var_label(nx)} → {_var_label(ny)} "
-                        f"(forbidden_ancestor "
-                        f"{var_names[xi % n_per_lag] if xi % n_per_lag < len(var_names) else '?'}"
-                        f"→{var_names[xj % n_per_lag] if xj % n_per_lag < len(var_names) else '?'})"
-                    )
+                pending.append((nx, ny))
         return did_remove
+
+    def _satisfied_required_ancestors(graph=None):
+        graph = cg.G.graph if graph is None else graph
+        out = set()
+        for anc_name, desc_name in knowledge._required_ancestors:
+            if anc_name not in var_names or desc_name not in var_names:
+                continue
+            d = var_names.index(desc_name)
+            a0 = var_names.index(anc_name)
+            if any(
+                reaches(graph, a0 + lag * n_per_lag, d)
+                for lag in range(num_lags + 1)
+                if a0 + lag * n_per_lag < n
+            ):
+                out.add((anc_name, desc_name))
+        return out
+
+    def _cut(remove, reason: str) -> bool:
+        """Run ``remove()``; keep the cut only if it removed something and
+        every satisfied required ancestor is still satisfied."""
+        pending.clear()
+        if not knowledge._required_ancestors:
+            kept = remove()
+        else:
+            needed = _satisfied_required_ancestors()
+            # remove() only deletes fully directed edges (listed in pending)
+            # and adds ambiguous triples, so both are easy to undo.
+            saved_amb = set(getattr(cg, "ambiguous_triples", set()))
+            kept = remove() and needed <= _satisfied_required_ancestors()
+            if not kept:
+                for u, v in pending:
+                    cg.G.add_directed_edge(cg.G.nodes[u], cg.G.nodes[v])
+                cg.ambiguous_triples = saved_amb
+        if kept:
+            cut_log.extend((u, v, reason) for u, v in pending)
+        return kept
+
+    def _print_cut_log():
+        if verbose:
+            for u, v, reason in cut_log:
+                print(
+                    f"[AncestralKnowledge] Removed {_var_label(u)} → "
+                    f"{_var_label(v)} ({reason})"
+                )
+
+    def _remove_one(u: int, v: int) -> bool:
+        e = cg.G.get_edge(cg.G.nodes[u], cg.G.nodes[v])
+        if e is None:
+            return False
+        cg.G.remove_edge(e)
+        _mark_new_triples_ambiguous(u, v)
+        pending.append((u, v))
+        return True
+
+    def _violated(graph):
+        return [
+            (a, d) for a, d in forb_pairs if a < n and d < n and reaches(graph, a, d)
+        ]
+
+    def _search_cut_set(graph):
+        """Fewest non-required directed edges (up to _CUT_SEARCH_MAX_SIZE) whose
+        removal leaves no forbidden path and keeps every satisfied required
+        ancestor, or None.
+
+        Edges are cut with their lag copies, as in the passes above (the limit then
+        counts an edge and its copies as one), if some such set works; otherwise
+        one at a time.
+        """
+        pairs = _violated(graph)
+        # For each satisfied required ancestor, the (lag copy, descendant) pairs
+        # any one of which keeps it satisfied.
+        needed = []
+        for anc_name, desc_name in _satisfied_required_ancestors(graph):
+            a0, d = var_names.index(anc_name), var_names.index(desc_name)
+            needed.append(
+                [
+                    (a0 + lag * n_per_lag, d)
+                    for lag in range(num_lags + 1)
+                    if a0 + lag * n_per_lag < n
+                ]
+            )
+        edges = [
+            (int(u), int(v))
+            for u, v in zip(*np.nonzero((graph == -1) & (graph.T == 1)))
+            if not _required(int(u), int(v))
+            and any(reaches(graph, a, u) and reaches(graph, v, d) for a, d in pairs)
+        ]
+
+        seen = set()  # cuts tried, shared by both rounds
+
+        def smallest(groups):
+            tried = 0  # per round, so the single-edge round always gets its turn
+            for k in range(1, min(len(groups), _CUT_SEARCH_MAX_SIZE) + 1):
+                for combo in combinations(groups, k):
+                    cut = list(dict.fromkeys(e for group in combo for e in group))
+                    if frozenset(cut) in seen:
+                        continue  # overlapping groups give the same cut
+                    tried += 1
+                    if tried > _CUT_SEARCH_BUDGET:
+                        return None
+                    seen.add(frozenset(cut))
+                    g = graph.copy()
+                    for u, v in cut:
+                        g[u, v] = g[v, u] = 0
+                    # Cuts create no path, so only pairs violated in graph matter.
+                    if not any(reaches(g, a, d) for a, d in pairs) and all(
+                        any(reaches(g, a, d) for a, d in alts) for alts in needed
+                    ):
+                        return cut
+            return None
+
+        groups = [_cuttable_copies(u, v, graph) for u, v in edges]
+        singles = [[e] for e in edges]
+        found = smallest(groups)
+        if found is None and groups != singles:
+            found = smallest(singles)
+        return found
 
     removed_any = False
 
@@ -629,8 +783,14 @@ def apply_ancestral_constraints(
             a_idx = var_names.index(anc_name) + lag * n_per_lag
             if a_idx >= n:
                 continue
-            if _remove_edge_with_lags(a_idx, d_idx):
+            reason = f"direct, forbidden_ancestor {anc_name}→{desc_name}"
+            if _cut(lambda: _remove_edge_with_lags(a_idx, d_idx), reason):
                 removed_any = True
+                continue
+            # A copy is needed by a required ancestor: cut the others one by one.
+            for nx, ny in _cuttable_copies(a_idx, d_idx):
+                if _cut(lambda: _remove_one(nx, ny), reason):
+                    removed_any = True
 
     if removed_any:
         cg = meek(
@@ -640,15 +800,26 @@ def apply_ancestral_constraints(
             forbidden_ancestor_pairs=forb_pairs if forb_pairs else None,
         )
 
+    # Greedy cuts that respect required edges and ancestors can leave a
+    # violation another cut set avoids; keep the state to search from.
+    _print_cut_log()
+    cut_log.clear()
+    cg_p1 = (
+        deepcopy(cg)
+        if (knowledge._required_ancestors or background_knowledge is not None)
+        and _violated(cg.G.graph)
+        else None
+    )
+
     # Pass 2: check for surviving genuine multi-hop paths; remove last-hop Y→D
     removed_any_p2 = False
+    blocked = []  # (a_idx, d_idx) with a last hop that could not be cut
     for anc_name, desc_name in knowledge._forbidden_ancestors:
         if anc_name not in var_names or desc_name not in var_names:
             continue
         d_idx = var_names.index(desc_name)
         if d_idx >= n:
             continue
-        node_d = cg.G.nodes[d_idx]
 
         for lag in range(num_lags + 1):
             a_idx = var_names.index(anc_name) + lag * n_per_lag
@@ -662,19 +833,37 @@ def apply_ancestral_constraints(
                     continue
                 if not cg.is_fully_directed(y_idx, d_idx):
                     continue
-                node_y = cg.G.nodes[y_idx]
                 if y_idx == a_idx or reaches(cg.G.graph, a_idx, y_idx):
-                    e = cg.G.get_edge(node_y, node_d)
-                    if e is not None:
-                        cg.G.remove_edge(e)
-                        _mark_new_triples_ambiguous(y_idx, d_idx)
-                        removed_any_p2 = True
-                        if verbose:
-                            print(
-                                f"[AncestralKnowledge] Removed (last-hop) "
-                                f"{_var_label(y_idx)} → {_var_label(d_idx)} "
-                                f"(forbidden_ancestor {anc_name}→{desc_name})"
-                            )
+                    if _required(y_idx, d_idx) or not _cut(
+                        lambda: _remove_one(y_idx, d_idx),
+                        f"last-hop, forbidden_ancestor {anc_name}→{desc_name}",
+                    ):
+                        blocked.append((a_idx, d_idx))
+                        continue
+                    removed_any_p2 = True
+
+    # A last hop that is required, or needed by a satisfied required ancestor,
+    # stays: cut each remaining path at its last edge that can go (with its
+    # lag copies, as in pass 1), a shortest path at a time.
+    for a_idx, d_idx in blocked:
+        while True:
+            path = _directed_path(cg.G.graph, a_idx, d_idx)
+            if path is None:
+                break
+            hops = [(u, v) for u, v in zip(path, path[1:]) if not _required(u, v)]
+            reason = (
+                f"blocked last hop, forbidden_ancestor "
+                f"{_var_label(a_idx)}→{_var_label(d_idx)}"
+            )
+            for u, v in reversed(hops):
+                # With its lag copies if possible, else the edge alone.
+                if _cut(lambda: _remove_edge_with_lags(u, v), reason) or (
+                    num_lags > 0 and _cut(lambda: _remove_one(u, v), reason)
+                ):
+                    removed_any_p2 = True
+                    break
+            else:
+                break  # no admissible cut: reported as a violation below
 
     if removed_any_p2:
         cg = meek(
@@ -683,6 +872,32 @@ def apply_ancestral_constraints(
             num_lags=num_lags,
             forbidden_ancestor_pairs=forb_pairs if forb_pairs else None,
         )
+
+    if cg_p1 is not None and _violated(cg.G.graph):
+        cut_set = _search_cut_set(cg_p1.G.graph)
+        if cut_set is not None:
+            cg_greedy, cg = cg, cg_p1
+            # Keep what either graph satisfies (Meek after the greedy cuts can
+            # satisfy more than the snapshot).
+            needed = _satisfied_required_ancestors() | _satisfied_required_ancestors(
+                cg_greedy.G.graph
+            )
+            for u, v in cut_set:
+                _remove_one(u, v)
+            cg = meek(
+                cg,
+                background_knowledge=background_knowledge,
+                num_lags=num_lags,
+                forbidden_ancestor_pairs=forb_pairs if forb_pairs else None,
+            )
+            if _violated(cg.G.graph) or not needed <= _satisfied_required_ancestors():
+                cg = cg_greedy
+            else:
+                cut_log = [
+                    (u, v, "cut-set search, forbidden_ancestor") for u, v in cut_set
+                ]
+
+    _print_cut_log()
 
     # Post-hoc violation check: report any remaining paths
     for a_idx, d_idx in forb_pairs:

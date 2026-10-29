@@ -11,8 +11,11 @@
 """
 
 import numpy as np
+import pytest
+from causallearn.graph.GraphNode import GraphNode
 from causallearn.utils.PCUtils.BackgroundKnowledge import BackgroundKnowledge
 
+import causalts.cdnots.ancestral as ancestral
 import causalts.cdnots.phase3_utils as P
 from causalts.cdnots.ancestral import AncestralKnowledge, apply_ancestral_constraints
 from causalts.cdnots.meek import meek, reaches, rebuild_dpath
@@ -112,6 +115,161 @@ def test_last_hop_removal_marks_new_triples_ambiguous():
     out, _ = apply_ancestral_constraints(cg, knowledge, ["A", "Y", "D", "M"], 0)
     assert out.G.get_edge(out.G.nodes[1], out.G.nodes[2]) is None
     assert (2, 3, 1) in out.ambiguous_triples
+
+
+def _require(*pairs):
+    bk = BackgroundKnowledge()
+    for a, b in pairs:
+        bk.add_required_by_node(GraphNode(f"X{a}"), GraphNode(f"X{b}"))
+    return bk
+
+
+def test_forbidden_ancestor_keeps_a_required_last_hop():
+    # A -> Y -> D with Y -> D required (via the knowledge object): cut A -> Y.
+    cg = _graph(3, directed=[(0, 1), (1, 2)])
+    knowledge = AncestralKnowledge().add_forbidden_ancestor("A", "D")
+    knowledge.add_required_edge("Y", "D")
+    names = ["A", "Y", "D"]
+    bk = knowledge.to_background_knowledge(names, 0, False)
+    out, violations = apply_ancestral_constraints(
+        cg, knowledge, names, 0, background_knowledge=bk
+    )
+    assert _directed(out, 1, 2)
+    assert out.G.get_edge(out.G.nodes[0], out.G.nodes[1]) is None
+    assert not violations["forbidden"]
+
+
+def test_forbidden_ancestor_cut_respects_required_ancestors():
+    # A -> B -> C -> D, C -> D required, B must stay an ancestor of C: the only
+    # admissible cut is A -> B.
+    cg = _graph(4, directed=[(0, 1), (1, 2), (2, 3)])
+    knowledge = AncestralKnowledge().add_forbidden_ancestor("A", "D")
+    knowledge.add_required_ancestor("B", "C")
+    out, violations = apply_ancestral_constraints(
+        cg, knowledge, ["A", "B", "C", "D"], 0, background_knowledge=_require((2, 3))
+    )
+    assert out.G.get_edge(out.G.nodes[0], out.G.nodes[1]) is None
+    assert _directed(out, 1, 2) and _directed(out, 2, 3)
+    assert not violations["forbidden"] and not violations["required"]
+
+
+def test_forbidden_ancestor_cut_removes_the_lag_copies():
+    # One lag: A(t) -> Y(t) -> D(t) with Y -> D required, plus the copy
+    # A(t-1) -> Y(t-1). Cutting A -> Y also cuts its copy.
+    cg = _graph(6, directed=[(0, 1), (1, 2), (3, 4)])
+    knowledge = AncestralKnowledge().add_forbidden_ancestor("A", "D")
+    out, _ = apply_ancestral_constraints(
+        cg, knowledge, ["A", "Y", "D"], 1, background_knowledge=_require((1, 2))
+    )
+    assert out.G.get_edge(out.G.nodes[0], out.G.nodes[1]) is None
+    assert out.G.get_edge(out.G.nodes[3], out.G.nodes[4]) is None
+
+
+def test_last_hop_cut_respects_required_ancestors():
+    # A -> Y -> D and B -> Y -> D, B must stay an ancestor of D: cutting the
+    # last hop Y -> D would break it, so A -> Y goes instead.
+    cg = _graph(4, directed=[(0, 2), (1, 2), (2, 3)])
+    knowledge = AncestralKnowledge().add_forbidden_ancestor("A", "D")
+    knowledge.add_required_ancestor("B", "D")
+    out, violations = apply_ancestral_constraints(
+        cg, knowledge, ["A", "B", "Y", "D"], 0
+    )
+    assert out.G.get_edge(out.G.nodes[0], out.G.nodes[2]) is None
+    assert _directed(out, 1, 2) and _directed(out, 2, 3)
+    assert not violations["forbidden"] and not violations["required"]
+
+
+def test_direct_cut_with_copies_respects_required_ancestors():
+    # One lag; A, B, C, D = 0-3 (t), 4-7 (t-1). A(t) -> D(t) and its copy
+    # A(t-1) -> D(t-1) on the required path B(t-1) -> A(t-1) -> D(t-1) -> C(t).
+    # Cutting A -> D with its copies would break B => C, so pass 1 undoes that
+    # cut and retries the copies one by one: only the lag-0 edge goes.
+    cg = _graph(8, directed=[(0, 3), (4, 7), (5, 4), (7, 2)])
+    knowledge = AncestralKnowledge().add_forbidden_ancestor("A", "D")
+    knowledge.add_required_ancestor("B", "C")
+    out, violations = apply_ancestral_constraints(
+        cg, knowledge, ["A", "B", "C", "D"], 1
+    )
+    assert out.G.get_edge(out.G.nodes[0], out.G.nodes[3]) is None
+    assert _directed(out, 4, 7) and reaches(out.G.graph, 5, 2)
+    assert not violations["forbidden"] and not violations["required"]
+
+
+def test_last_hop_needed_by_required_ancestor_goes_to_fallback():
+    # A -> Y -> D, forbid A => D, require Y => D: pass 2 undoes the cut of the
+    # last hop Y -> D, so the fallback cuts A -> Y instead.
+    cg = _graph(3, directed=[(0, 1), (1, 2)])
+    knowledge = AncestralKnowledge().add_forbidden_ancestor("A", "D")
+    knowledge.add_required_ancestor("Y", "D")
+    out, violations = apply_ancestral_constraints(cg, knowledge, ["A", "Y", "D"], 0)
+    assert out.G.get_edge(out.G.nodes[0], out.G.nodes[1]) is None
+    assert _directed(out, 1, 2)
+    assert not violations["forbidden"] and not violations["required"]
+
+
+def test_direct_cut_retries_unneeded_copies_one_by_one():
+    # Two lags; A, B, C, D = 0-3 (t), 4-7 (t-1), 8-11 (t-2). Only the copy
+    # A(t-1) -> D(t-1) is on the required path B(t-1) -> A(t-1) -> D(t-1) -> C(t);
+    # the other copies of A -> D are still cut.
+    cg = _graph(12, directed=[(0, 3), (4, 7), (8, 11), (5, 4), (7, 2)])
+    knowledge = AncestralKnowledge().add_forbidden_ancestor("A", "D")
+    knowledge.add_required_ancestor("B", "C")
+    out, violations = apply_ancestral_constraints(
+        cg, knowledge, ["A", "B", "C", "D"], 2
+    )
+    assert out.G.get_edge(out.G.nodes[0], out.G.nodes[3]) is None
+    assert out.G.get_edge(out.G.nodes[8], out.G.nodes[11]) is None
+    assert _directed(out, 4, 7) and reaches(out.G.graph, 5, 2)
+    assert not violations["forbidden"] and not violations["required"]
+
+
+def test_fallback_cuts_the_edge_alone_when_its_copy_is_needed():
+    # One lag; A, Y, D, B, C = 0-4 (t), 5-9 (t-1). A -> Y -> D with Y -> D
+    # required; the copy A(t-1) -> Y(t-1) is on the only path
+    # B(t-1) -> A(t-1) -> Y(t-1) -> C(t) that keeps B => C. Cut A(t) -> Y(t) only.
+    cg = _graph(10, directed=[(0, 1), (1, 2), (5, 6), (8, 5), (6, 4)])
+    knowledge = AncestralKnowledge().add_forbidden_ancestor("A", "D")
+    knowledge.add_required_ancestor("B", "C")
+    out, violations = apply_ancestral_constraints(
+        cg,
+        knowledge,
+        ["A", "Y", "D", "B", "C"],
+        1,
+        background_knowledge=_require((1, 2)),
+    )
+    assert out.G.get_edge(out.G.nodes[0], out.G.nodes[1]) is None
+    assert _directed(out, 5, 6) and _directed(out, 1, 2)
+    assert not violations["forbidden"] and not violations["required"]
+
+
+def test_verbose_logs_only_kept_removals(capsys):
+    # Same graph as above: the cut with copies is undone, the edge alone stays
+    # cut, and only that removal is logged, under the forbidden pair.
+    cg = _graph(10, directed=[(0, 1), (1, 2), (5, 6), (8, 5), (6, 4)])
+    knowledge = AncestralKnowledge().add_forbidden_ancestor("A", "D")
+    knowledge.add_required_ancestor("B", "C")
+    apply_ancestral_constraints(
+        cg,
+        knowledge,
+        ["A", "Y", "D", "B", "C"],
+        1,
+        background_knowledge=_require((1, 2)),
+        verbose=True,
+    )
+    removed = [ln for ln in capsys.readouterr().out.splitlines() if "Removed" in ln]
+    assert len(removed) == 1
+    assert "A → Y (blocked last hop, forbidden_ancestor A→D)" in removed[0]
+
+
+def test_forbidden_ancestor_keeps_a_required_direct_edge():
+    # A -> D itself required: kept, and reported as a violation.
+    cg = _graph(2, directed=[(0, 1)])
+    knowledge = AncestralKnowledge().add_forbidden_ancestor("A", "D")
+    out, violations = apply_ancestral_constraints(
+        cg, knowledge, ["A", "D"], 0, background_knowledge=_require((0, 1))
+    )
+    assert _directed(out, 0, 1)
+    assert violations["forbidden"]
 
 
 # --- phase three -----------------------------------------------------------------
@@ -258,3 +416,119 @@ def test_phase_three_copies_into_the_last_candidate(monkeypatch):
     out = _phase_three_by_index(monkeypatch, cg, 8, num_lags=1)
     assert _directed(out, 1, 0) and _directed(out, 5, 4)
     assert _directed(out, 6, 5)
+
+
+def test_forbidden_ancestor_cut_set_search_resolves_competing_constraints():
+    # A -> B, A -> C, B -> C, B -> D, C -> E, D -> E; require A => E,
+    # forbid B => E. Greedy cuts C -> E first and then cannot cut B -> D -> E
+    # without breaking A => E; cutting B -> C and B -> D satisfies both.
+    cg = _graph(5, directed=[(0, 1), (0, 2), (1, 2), (1, 3), (2, 4), (3, 4)])
+    knowledge = AncestralKnowledge().add_forbidden_ancestor("B", "E")
+    knowledge.add_required_ancestor("A", "E")
+    out, violations = apply_ancestral_constraints(
+        cg, knowledge, ["A", "B", "C", "D", "E"], 0
+    )
+    assert not reaches(out.G.graph, 1, 4) and reaches(out.G.graph, 0, 4)
+    assert not violations["forbidden"] and not violations["required"]
+
+
+def test_cut_set_search_logs_only_its_own_cuts(capsys):
+    cg = _graph(5, directed=[(0, 1), (0, 2), (1, 2), (1, 3), (2, 4), (3, 4)])
+    knowledge = AncestralKnowledge().add_forbidden_ancestor("B", "E")
+    knowledge.add_required_ancestor("A", "E")
+    apply_ancestral_constraints(
+        cg, knowledge, ["A", "B", "C", "D", "E"], 0, verbose=True
+    )
+    removed = [ln for ln in capsys.readouterr().out.splitlines() if "Removed" in ln]
+    assert len(removed) == 2 and all("cut-set search" in ln for ln in removed)
+
+
+def test_cut_set_search_result_undone_by_meek_keeps_greedy(monkeypatch, capsys):
+    # Meek (patched) re-adds B -> C after the search cuts B -> C and B -> D, so
+    # the search result is dropped: the greedy graph and its log are returned.
+    import causalts.cdnots.meek as M
+
+    real_meek = M.meek
+
+    def meek_readding(cg, **kw):
+        out = real_meek(cg, **kw)
+        nodes = out.G.nodes
+        if out.G.get_edge(nodes[1], nodes[2]) is None and (
+            out.G.get_edge(nodes[1], nodes[3]) is None
+        ):
+            out.G.add_directed_edge(nodes[1], nodes[2])
+        return out
+
+    monkeypatch.setattr(M, "meek", meek_readding)
+    cg = _graph(5, directed=[(0, 1), (0, 2), (1, 2), (1, 3), (2, 4), (3, 4)])
+    knowledge = AncestralKnowledge().add_forbidden_ancestor("B", "E")
+    knowledge.add_required_ancestor("A", "E")
+    out, violations = apply_ancestral_constraints(
+        cg, knowledge, ["A", "B", "C", "D", "E"], 0, verbose=True
+    )
+    assert violations["forbidden"]
+    assert out.G.get_edge(out.G.nodes[2], out.G.nodes[4]) is None
+    assert _directed(out, 1, 2) and _directed(out, 1, 3)
+    removed = [ln for ln in capsys.readouterr().out.splitlines() if "Removed" in ln]
+    assert removed and not any("cut-set search" in ln for ln in removed)
+    assert any("C → E" in ln for ln in removed)
+
+
+@pytest.mark.parametrize("budget", [None, 5])
+def test_cut_set_search_falls_back_to_single_edges(monkeypatch, budget):
+    # One lag; A..G = 0-6 (t), 7-13 (t-1). The graph above in both slices, plus
+    # F(t-1) -> B(t-1) and C(t-1) -> G(t) with F => G required: every valid cut
+    # needs B -> C, but its copy B(t-1) -> C(t-1) carries F => G, so B -> C goes
+    # alone (single-edge round). With a budget of 5 the grouped round runs out
+    # first; the single-edge round still gets its own tries.
+    if budget is not None:
+        monkeypatch.setattr(ancestral, "_CUT_SEARCH_BUDGET", budget)
+    lag0 = [(0, 1), (0, 2), (1, 2), (1, 3), (2, 4), (3, 4)]
+    directed = lag0 + [(u + 7, v + 7) for u, v in lag0] + [(12, 8), (9, 6)]
+    cg = _graph(14, directed=directed)
+    knowledge = AncestralKnowledge().add_forbidden_ancestor("B", "E")
+    knowledge.add_required_ancestor("A", "E")
+    knowledge.add_required_ancestor("F", "G")
+    out, violations = apply_ancestral_constraints(
+        cg, knowledge, ["A", "B", "C", "D", "E", "F", "G"], 1
+    )
+    assert out.G.get_edge(out.G.nodes[1], out.G.nodes[2]) is None
+    assert _directed(out, 8, 9)
+    assert not reaches(out.G.graph, 1, 4) and reaches(out.G.graph, 0, 4)
+    assert reaches(out.G.graph, 12, 6)
+    assert not violations["forbidden"] and not violations["required"]
+
+
+def test_cut_set_search_retries_the_cut_that_hit_the_budget(monkeypatch):
+    # The graph above with num_lags=1 and one lag copy, D(t-1) -> E(t-1), so the
+    # rounds differ. The grouped round stops at its fifth cut, {B -> C, B -> D};
+    # the single-edge round must still try it (the first minimal set) rather
+    # than treat it as tried and settle for {B -> C, D -> E}.
+    monkeypatch.setattr(ancestral, "_CUT_SEARCH_BUDGET", 4)
+    directed = [(0, 1), (0, 2), (1, 2), (1, 3), (2, 4), (3, 4), (8, 9)]
+    knowledge = AncestralKnowledge().add_forbidden_ancestor("B", "E")
+    knowledge.add_required_ancestor("A", "E")
+    out, violations = apply_ancestral_constraints(
+        _graph(10, directed=directed), knowledge, ["A", "B", "C", "D", "E"], 1
+    )
+    nodes = out.G.nodes
+    assert out.G.get_edge(nodes[1], nodes[2]) is None
+    assert out.G.get_edge(nodes[1], nodes[3]) is None
+    assert _directed(out, 3, 4)
+    assert not violations["forbidden"] and not violations["required"]
+
+
+def test_cut_set_search_cuts_lag_copies():
+    # The graph above in both slices of a one-lag window (t: 0-4, t-1: 5-9): the
+    # search cuts B -> C and B -> D with their copies, keeping the slices alike.
+    lag0 = [(0, 1), (0, 2), (1, 2), (1, 3), (2, 4), (3, 4)]
+    cg = _graph(10, directed=lag0 + [(u + 5, v + 5) for u, v in lag0])
+    knowledge = AncestralKnowledge().add_forbidden_ancestor("B", "E")
+    knowledge.add_required_ancestor("A", "E")
+    out, violations = apply_ancestral_constraints(
+        cg, knowledge, ["A", "B", "C", "D", "E"], 1
+    )
+    for u, v in [(1, 2), (1, 3), (6, 7), (6, 8)]:
+        assert out.G.get_edge(out.G.nodes[u], out.G.nodes[v]) is None
+    assert _directed(out, 7, 9) and _directed(out, 8, 9)
+    assert not violations["forbidden"] and not violations["required"]
