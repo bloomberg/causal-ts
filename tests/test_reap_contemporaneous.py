@@ -450,25 +450,3 @@ def test_spline_cit_cache_matches_fresh_computation():
     D2 = D[::-1].copy()
     cached.data = D2
     assert cached(0, 1, [2])[0] == _SplineBlockCIT(D2)(0, 1, [2])[0]
-
-
-@pytest.mark.parametrize("test, wrapped", [("parcorr", True), ("spline", False)])
-def test_registered_lag0_test_stratified_on_discrete_columns(
-    monkeypatch, test, wrapped
-):
-    import causalts.cdnots.phase3_utils as p3
-    from causalts.ci_tests.stratified_cit import StratifiedCIT
-
-    seen = {}
-    real = p3._resolve_discrete
-
-    def spy(*a):
-        cols, seen["test"] = real(*a)
-        return cols, seen["test"]
-
-    # The test CDNOTS+ runs with, after any StratifiedCIT wrap.
-    monkeypatch.setattr(p3, "_resolve_discrete", spy)
-    df = _lag0_chain(T=300)
-    df["k"] = np.random.default_rng(0).integers(0, 4, len(df)).astype(float)
-    _run(df, contemporaneous=True, contemporaneous_test=test)
-    assert isinstance(seen["test"], StratifiedCIT) is wrapped

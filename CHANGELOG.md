@@ -54,11 +54,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `grow_rounds=0, ar_path=False` to keep the result inside it.
 * `run_cdnots_gated`: `lambda_rule` follows `lambda_cv`, so `impute`, `impute_kwargs` and
   `discrete_cols` moved one position; pass them by keyword.
-* `run_cdnots_plus` wraps a CI test that cannot handle discrete columns in `StratifiedCIT`,
-  as `run_cdnots` does (it detected discrete columns but passed e.g. `ParCorrGPU` through
-  unchanged). Results change only when discrete columns are detected or given;
-  `discrete_cols=[]` restores the old behaviour. A CI test class can declare
-  `handles_discrete = True` to skip the wrap.
 * `sigkci` / `SigKCIGPU` renamed to `linsig` / `LinSigCIGPU` (old names deprecated). Results
   change: kernel-scaled ridge (`ridge`, replaces `lamda`), no spurious lag-2 self-loops.
 * `RCOTGPU` defaults: `num_f2=min(25, floor(sqrt(T)))`, `n_avg=1`, `seed=42`
@@ -80,12 +75,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
-* `StratifiedCIT` passes `set_lag_structure` on to the test it wraps, so a wrapped lag-aware
-  test learns the lag layout; its cache resets when the layout changes. A row missing a
-  discrete conditioning value no longer makes an empty stratum that turned stratification off
-  for that test, and the inner test's data is restored if a stratum test raises.
-* `CausalLearnChisq` / `CausalLearnGsq` are categorical tests, and CDNOTS no longer wraps them
-  in `StratifiedCIT`.
 * `CIT_Base.set_data` wrote buffered cache rows into the new data's cache file.
 * `RCOTGPU` p-values depended on the order of the conditioning set.
 * `ParCorrGPU.batch_test` (precision method) now runs the same
