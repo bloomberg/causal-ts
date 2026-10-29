@@ -1392,7 +1392,8 @@ def run_cdnots_plus(
         the direction holds in at least 90% of bootstrap re-orderings, one
         endpoint's innovations reject normality (``p < 0.01``), and it makes
         no unshielded collider the CI step ruled out; Meek then propagates
-        the new arrowheads. Linear Gaussian data are left as they are. Needs
+        the new arrowheads. On linear Gaussian data it usually abstains (the
+        normality test still rejects about 1% of samples). Needs
         non-Gaussian noise to help, and assumes linear mechanisms: on spline
         mechanisms with Laplace or Gaussian noise most of its orientations
         were wrong (small F1 cost, SHD up to +0.75), though with uniform noise

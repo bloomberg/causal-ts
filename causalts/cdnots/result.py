@@ -44,7 +44,7 @@ class CdnotsResult(CausalResult):
     lag_verify_stats : dict | None
         Stats from the multi-lag redundancy pass, or None if not run.
     lag0_orientations : list[dict] | None
-        CDNOTS+ ``lag0_orient`` decisions, one per undirected lag-0 pair
+        CDNOTS+ ``lag0_orient`` decisions, one per ``o-o`` or ``x-x`` lag-0 pair
         between non-discrete, non-C variables (pairs touching those get no
         record):
         ``cause`` / ``effect`` (lag-0 indices) and ``cause_name`` /

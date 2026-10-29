@@ -21,9 +21,10 @@ al., 2011) with the pairwise likelihood-ratio measure of Hyvarinen & Smith
   non-collider.
 
 Under a linear Gaussian model the innovations are Gaussian, so the normality
-gate keeps the step from acting on noise; on held-out simulations it changed F1
-by at most 0.0003 on average (0.0008 in any single cell) on Gaussian data,
-while orienting most identifiable edges otherwise.
+gate usually keeps the step from acting (the test still rejects about 1% of
+Gaussian samples); on held-out simulations it changed F1 by at most 0.0003 on
+average (0.0008 in any single cell) on Gaussian data, while orienting most
+identifiable edges otherwise.
 """
 
 from __future__ import annotations

@@ -151,7 +151,7 @@ res = run_cdnots_plus(
     lag0_orient="lingam",                     # orient undirected lag-0 edges
     addback_alpha=1e-4, veto_alpha=0.001,     # re-test lagged links
 )
-res.lag0_orientations   # one record per undirected lag-0 pair
+res.lag0_orientations   # one record per o-o / x-x lag-0 pair it considered
 res.lag_refinements     # links added or removed, with p-values
 ```
 
@@ -166,7 +166,7 @@ res.lag_refinements     # links added or removed, with p-values
 | | `lag0_orient="lingam"` | `addback_alpha` / `veto_alpha` |
 |---|---|---|
 | Helps | Linear mechanisms with non-Gaussian noise: F1 +0.02 to +0.04 when most edges are contemporaneous. | Linear simulations at `alpha=0.01`: SHD lower in every setting tried, F1 up to +0.05 (but -0.03 at T=100 with d=50). |
-| Neutral | Linear mechanisms with Gaussian noise: the normality gate keeps it from acting. | Nonlinear data with the `raft` CI test. |
+| Neutral | Linear mechanisms with Gaussian noise: the normality gate usually keeps it from acting (the test rejects about 1% of Gaussian samples). | Nonlinear data with the `raft` CI test. |
 | Hurts | Spline mechanisms with Laplace or Gaussian noise: most of its orientations are wrong. | A CI test without power at the sample size (e.g. `splitkci` at T=300): the veto removes true links it cannot detect. |
 | Real data (CausalRivers) | F1 unchanged, SHD +0.5. | F1 unchanged, SHD +2: on long series it adds about four false links per true one. |
 | Cost | 101 DirectLiNGAM orderings per undirected component. | About 1.5–2.7× a plain run. |
