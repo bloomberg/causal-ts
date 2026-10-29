@@ -64,6 +64,8 @@ class CausalLearnFisherZ(CIT_Base):
 class CausalLearnChisq(CIT_Base):
     """Chi-squared CI test from causal-learn (categorical data)."""
 
+    handles_discrete = True  # CDNOTS does not wrap it in StratifiedCIT
+
     def __init__(self, data=None, **kwargs):
         kwargs.pop("device", None)
         super().__init__(data=data, method="chisq", **kwargs)
@@ -101,6 +103,8 @@ class CausalLearnChisq(CIT_Base):
 
 class CausalLearnGsq(CIT_Base):
     """G-squared (likelihood ratio) CI test from causal-learn (categorical data)."""
+
+    handles_discrete = True  # CDNOTS does not wrap it in StratifiedCIT
 
     def __init__(self, data=None, **kwargs):
         kwargs.pop("device", None)

@@ -12,7 +12,7 @@ Full API documentation auto-generated from source docstrings (NumPy format).
 :link-type: doc
 :shadow: md
 
-`inspect_df` · `recommend_config` · `discover_df` · `select_features` · `run_cdnots` · `run_cdnots_plus` · `run_cedar` · `Cedar` · `run_cdnots_gated` · `temporal_bootstrap` · `evaluate_graph`
+`inspect_df` · `recommend_config` · `discover_df` · `select_features` · `run_cdnots` · `run_cdnots_plus` · `run_cedar` · `Cedar` · `run_grace` · `run_reap` · `temporal_bootstrap` · `evaluate_graph`
 :::
 
 :::{grid-item-card} {fas}`vials;1.2em;sd-text-primary` &nbsp; CI Tests

@@ -161,8 +161,10 @@ causal-ts -o <dir> discover <data> --json --algorithm <rec.algorithm> \
 Report edges with `persistence >= ~0.6` as stable and the rest as fragile.
 `--validate` is **not supported for GRACE** (bootstrapping neural training is
 impractical) — validate a GRACE result with `--algorithm cdnots`/`cedar` instead,
-or in Python drive `causalts.bootstrap.temporal_bootstrap` with a
-`run_cdnots_gated(sub, max_lag=<...>).gate_values` discovery function.
+or in Python drive `causalts.bootstrap.temporal_bootstrap` with a discovery
+function returning `run_grace(sub, max_lag=<...>)`'s final graph
+(`cg_tig != 0`), not its `gate_values`: self-loops are decided by an F-test and have
+no gate value, and edges the effect floor removed keep theirs.
 
 **Caveat: persistence measures robustness to *sampling*, not correctness.** A
 *systematic* artifact — e.g. a lag-k edge that is just an echo of a true

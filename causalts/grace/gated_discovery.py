@@ -9,8 +9,10 @@ and uses Stability Selection (Meinshausen & Bühlmann 2010) across L0 penalty st
 to determine the causal graph without requiring a manual threshold.
 """
 
+import inspect
 import logging
 import math
+import numbers
 import os
 import warnings
 from typing import TYPE_CHECKING, List, Optional, Tuple, Union
@@ -96,15 +98,90 @@ def _detect_accelerator() -> str:
 # ---------------------------------------------------------------------------
 
 
-def compute_lambda(d: int, T: int, skeleton_density: float) -> float:
+#: Constant of the ``"dT"`` lambda rule, ``LAMBDA_DT_CONSTANT / (d * T)``.
+LAMBDA_DT_CONSTANT = 300.0
+#: d and T range where the ``"dT"`` rule matched or beat ``"density"`` in calibration
+#: (it was fitted on d 5-100, but lost to ``"density"`` at d=5); it warns outside it.
+LAMBDA_DT_RANGE = {"d": (10, 100), "T": (250, 1000)}
+#: Coefficients of the ``"xcorr"`` lambda rule (see :func:`compute_lambda`).
+LAMBDA_XCORR = dict(c=53.0, a=1.12, b=0.58, e=0.16, ref=0.05, floor=0.3, cap=0.5)
+#: d and T range of the ``"xcorr"`` calibration; it warns outside it.
+LAMBDA_XCORR_RANGE = {"d": (5, 100), "T": (250, 10000)}
+#: Default minimum effect of an edge (``effect_floor``): adjusted partial R^2 of
+#: 1 - exp(-0.02), i.e. 0.01 nats of predictive gain per observation.
+EFFECT_FLOOR = 1.0 - math.exp(-0.02)
+#: ``shrink_effect_floor="adaptive"``: per target, drop lagged cross edges whose unique
+#: effect (adjusted partial R^2) is below ``max(floor, relative * strongest)``.
+SHRINK_EFFECT_FLOOR_ADAPTIVE = dict(floor=0.01, relative=0.2)
+
+
+def background_xcorr(X, max_lag: int) -> float:
+    """Mean ``|corr(x_j(t), x_i(t-k))|`` over ``i != j`` and ``k = 1..max_lag``.
+
+    The background lagged dependence of the data, used by the ``"xcorr"`` lambda
+    rule. Rows with a missing value in any lag are dropped.
+    """
+    X = np.asarray(X, dtype=float)
+    T, d = X.shape
+    L = max(int(max_lag), 1)
+    if d < 2 or T <= L + 2:
+        return 0.0
+    Z = np.stack([X[L - k : T - k] for k in range(1, L + 1)], axis=2)  # (T-L, d, L)
+    Y = X[L:]
+    ok = ~(np.isnan(Y).any(axis=1) | np.isnan(Z).any(axis=(1, 2)))
+    Y, Z = Y[ok], Z[ok]
+    if len(Y) < 3:
+        return 0.0
+    with np.errstate(invalid="ignore", divide="ignore"):
+        Ys = (Y - Y.mean(0)) / Y.std(0)
+        Zs = (Z - Z.mean(0)) / Z.std(0)
+        C = np.abs(np.einsum("tj,tik->ijk", Ys, Zs) / len(Y))  # [cause, effect, lag]
+    off = C[~np.eye(d, dtype=bool)]
+    return float(np.nanmean(off)) if np.isfinite(off).any() else 0.0
+
+
+def compute_lambda(
+    d: int,
+    T: int,
+    skeleton_density: float,
+    rule: str = "density",
+    xcorr: Optional[float] = None,
+) -> float:
     """Auto-select L0 penalty lambda from problem dimensions and skeleton density.
 
-    Formula (Eq. 11 from arXiv:2606.23880)::
+    ``rule="density"`` (Eq. 11 from arXiv:2606.23880)::
 
         max(0.007 + 0.16*rho_S,  1/d + 4/T - 0.4*rho_S^0.8)
 
     The main term adapts to problem scale; the floor ensures sufficient
     regularization for dense skeletons (Lorenz-96, Erdos-Renyi topologies).
+    At large d the floor binds, so lambda stops falling with d.
+
+    ``rule="dT"``: ``300 / (d * T)``, with no density term. Motivation: the
+    likelihood is averaged over the d modelled variables, so one edge's
+    evidence enters the loss scaled by 1/d while its gate cost is not, and a
+    false edge's in-sample gain shrinks like 1/T. The constant was fitted on a
+    separate calibration grid (GRACE with ``ar_path``, rank data, Student-t
+    likelihood; linear, spline and MLP mechanisms; sparse and dense graphs;
+    d 5-100, T 250-1000), where the optimal lambda fell with d and T and showed
+    no significant dependence on the mechanism or the skeleton density. F1 falls
+    steeply once lambda exceeds its optimum on dense graphs, so the constant
+    sits just below the fitted one. Refining a loose supplied skeleton (lagged
+    precision ~0.65) on sparse graphs, the optimum was ~1.3x larger; the number
+    of candidates per target did not predict this. It warns outside
+    ``LAMBDA_DT_RANGE``: below it lambda grows like 1/(d*T), much faster than
+    under ``"density"``, and can close every gate.
+
+    ``rule="xcorr"``: ``53 * (e / 0.05)^0.16 / (d^1.12 * T^0.58)``, clipped to
+    ``[0.3 / d, 0.5]``, with ``e = max(xcorr - 0.8 / sqrt(T), 0.005)`` the mean
+    lagged cross-correlation of the data (:func:`background_xcorr`) above its
+    level under independence. Background dependence (strong autoregression,
+    persistent latent drivers) calls for more pruning, and the floor keeps lambda
+    from vanishing on long series, where ``"dT"`` tends to 0. Fitted on GRACE
+    calibration runs over d 5-100 and T 250-10000 (the 1/d trend of the
+    optimal lambda held up to d=200 in separate runs), with and without latent
+    drivers and interactions; on the d 10-100, T 250-1000 grid it is within
+    0.005 F1 of ``"dT"``. It warns outside ``LAMBDA_XCORR_RANGE``.
 
     Parameters
     ----------
@@ -113,17 +190,145 @@ def compute_lambda(d: int, T: int, skeleton_density: float) -> float:
     T : int
         Number of time steps.
     skeleton_density : float
-        Fraction of non-zero edges in the skeleton.
+        Fraction of non-zero edges in the skeleton (``"density"`` only).
+    rule : {"density", "dT", "xcorr"}, default "density"
+    xcorr : float, optional
+        Background lagged cross-correlation, required by ``"xcorr"``.
 
     Returns
     -------
     float
         Selected lambda value.
     """
+    if rule == "dT":
+        (d_lo, d_hi), (t_lo, t_hi) = LAMBDA_DT_RANGE["d"], LAMBDA_DT_RANGE["T"]
+        if not (d_lo <= d <= d_hi and t_lo <= T <= t_hi):
+            warnings.warn(
+                f"lambda_rule='dT' was calibrated for d in [{d_lo}, {d_hi}] and T in "
+                f"[{t_lo}, {t_hi}]; got d={d}, T={T}. Outside that range "
+                f"{LAMBDA_DT_CONSTANT:g}/(d*T) is "
+                "an extrapolation (below it, lambda can close every gate).",
+                UserWarning,
+                stacklevel=2,
+            )
+        return LAMBDA_DT_CONSTANT / (d * T)
+    if rule == "xcorr":
+        if xcorr is None:
+            raise ValueError("rule='xcorr' needs xcorr (see background_xcorr)")
+        if not np.isfinite(xcorr):
+            raise ValueError(f"xcorr must be finite, got {xcorr!r}")
+        (d_lo, d_hi), (t_lo, t_hi) = LAMBDA_XCORR_RANGE["d"], LAMBDA_XCORR_RANGE["T"]
+        if not (d_lo <= d <= d_hi and t_lo <= T <= t_hi):
+            warnings.warn(
+                f"lambda_rule='xcorr' was calibrated for d in [{d_lo}, {d_hi}] and T "
+                f"in [{t_lo}, {t_hi}]; got d={d}, T={T}. Outside that range lambda is "
+                "an extrapolation, bounded to [0.3/d, 0.5].",
+                UserWarning,
+                stacklevel=2,
+            )
+        p = LAMBDA_XCORR
+        e = max(xcorr - 0.8 / np.sqrt(T), 0.005)
+        lam = p["c"] * (e / p["ref"]) ** p["e"] / (d ** p["a"] * T ** p["b"])
+        return float(min(max(lam, p["floor"] / d), p["cap"]))
+    if rule != "density":
+        raise ValueError(f"rule must be 'density', 'dT' or 'xcorr', got {rule!r}")
     rho = skeleton_density
     floor = 0.007 + 0.16 * rho
     main = 1.0 / d + 4.0 / T - 0.4 * rho**0.8
     return max(floor, main)
+
+
+def li_threshold(
+    values: np.ndarray, floor: float = 0.05, min_per_side: int = 3
+) -> Optional[float]:
+    """Li minimum cross-entropy threshold on gate values.
+
+    Iterates ``t = (m_hi - m_lo) / (ln m_hi - ln m_lo)`` from the mean, where
+    ``m_lo`` / ``m_hi`` are the means below / above ``t`` (Li & Tam 1998).
+    Values at or below ``floor`` are dropped first, so the spike of gates
+    clamped to zero does not drag the cutoff down.
+
+    Parameters
+    ----------
+    values : numpy.ndarray
+        Gate values of the candidate edges (any shape; flattened).
+    floor : float
+        Values ``<= floor`` are excluded before thresholding.
+    min_per_side : int
+        Minimum number of values required on each side of the cutoff.
+
+    Returns
+    -------
+    float or None
+        The cutoff (an edge is kept if its gate is strictly above it), or
+        None if fewer than ``min_per_side`` values fall on either side.
+    """
+    v = np.asarray(values, dtype=float).ravel()
+    v = v[v > floor]
+    if len(v) < 2 * min_per_side:
+        return None
+    # Li needs positive values: shift so the minimum sits just above zero.
+    shift = v.min() - 1e-3
+    w = v - shift
+    t = w.mean()
+    for _ in range(200):
+        lo, hi = w[w <= t], w[w > t]
+        if len(lo) == 0 or len(hi) == 0:
+            break
+        m_lo, m_hi = lo.mean(), hi.mean()
+        t_new = (m_hi - m_lo) / (np.log(m_hi) - np.log(m_lo))
+        if abs(t_new - t) < 1e-6:
+            break
+        t = t_new
+    cut = float(t + shift)
+    n_hi = int((v > cut).sum())
+    if n_hi < min_per_side or len(v) - n_hi < min_per_side:
+        return None
+    return cut
+
+
+def gates_bimodal(
+    values: np.ndarray,
+    floor: float = 0.05,
+    min_bic_gain: float = 10.0,
+    stretch_gamma: float = -0.1,
+    stretch_zeta: float = 1.1,
+) -> bool:
+    """Whether the candidate gate values form two distinct clusters.
+
+    Fits one- and two-component Gaussian mixtures to the gates above ``floor``
+    on the logit scale of the Hard Concrete stretch, and returns True when the
+    two-component BIC is lower by more than ``min_bic_gain`` (10 = "very
+    strong" evidence, Kass & Raftery 1995). Li's cutoff assumes two clusters;
+    on a precise skeleton the true edges form one cluster and Li would split it.
+
+    Parameters
+    ----------
+    values : numpy.ndarray
+        Gate values of the candidate edges (any shape; flattened).
+    floor : float
+        Values ``<= floor`` are excluded.
+    min_bic_gain : float
+        Required BIC improvement of two components over one.
+    stretch_gamma, stretch_zeta : float
+        Hard Concrete stretch limits used for the logit transform.
+
+    Returns
+    -------
+    bool
+        False when fewer than 6 values remain.
+    """
+    from sklearn.mixture import GaussianMixture
+
+    v = np.asarray(values, dtype=float).ravel()
+    v = v[v > floor]
+    if len(v) < 6:
+        return False
+    s = np.clip((v - stretch_gamma) / (stretch_zeta - stretch_gamma), 1e-4, 1 - 1e-4)
+    u = np.log(s / (1 - s)).reshape(-1, 1)
+    bic1 = GaussianMixture(1, random_state=0).fit(u).bic(u)
+    bic2 = GaussianMixture(2, n_init=3, random_state=0).fit(u).bic(u)
+    return bool(bic1 - bic2 > min_bic_gain)
 
 
 def compute_lambda_cv(
@@ -179,6 +384,8 @@ def compute_lambda_cv(
         )
 
     for lam in sorted(lambda_grid):
+        if model_seed is not None:  # before the model, so its random init is seeded
+            torch.manual_seed(model_seed)
         model = GatedCausalDiscovery(
             num_vars=num_vars,
             max_lag=max_lag,
@@ -199,6 +406,9 @@ def compute_lambda_cv(
                     model.bias.copy_(prev_model.bias)
                 model.decoders.load_state_dict(prev_model.decoders.state_dict())
                 model.log_alpha.copy_(prev_model.log_alpha)
+                if model.ar_path:  # the decoders were fitted next to a trained AR head
+                    for name in ("ar_W1", "ar_b1", "ar_W2", "ar_lin", "ar_b2"):
+                        getattr(model, name).copy_(getattr(prev_model, name))
             run_epochs = warm_start_epochs
         else:
             run_epochs = max_epochs
@@ -449,10 +659,54 @@ class GatedCausalDiscovery(LightningModule):
         encoder_hidden: int = 32,
         embed_dim: int = 8,
         basis_expansion: bool = True,
+        noise_model: str = "gaussian",
+        ar_path: bool = False,
+        ar_hidden: Optional[int] = None,
+        ar_exog_cols: int = 0,
         **kwargs,
     ):
         super().__init__()
+        # Unknown keyword arguments used to be accepted and ignored, so a misspelled
+        # option (e.g. ``lambda_override`` for ``lambda_l0``) silently ran the default.
+        if kwargs:
+            raise TypeError(
+                "GatedCausalDiscovery got unexpected keyword argument(s): "
+                + ", ".join(sorted(kwargs))
+            )
+        # ar_path: an ungated per-target head on the target's own lags carries the
+        # autoregression, and self-loops leave the gated part (see run_cdnots_gated).
+        if ar_path and max_lag < 1:
+            raise ValueError("ar_path needs max_lag >= 1 (self-loops are lagged)")
+        if ar_hidden is not None and not ar_path:
+            raise ValueError("ar_hidden only applies with ar_path=True")
+        # ar_exog_cols: trailing columns (C in the model) that get no AR head; a
+        # deterministic C (e.g. a linear trend) is fitted exactly by one, and its
+        # vanishing noise scale would then dominate the loss.
+        if (
+            isinstance(ar_exog_cols, (bool, np.bool_))
+            or not isinstance(ar_exog_cols, (int, np.integer))
+            or not 0 <= ar_exog_cols < num_vars
+        ):
+            raise ValueError(
+                f"ar_exog_cols must be an integer in [0, num_vars), got {ar_exog_cols!r}"
+            )
+        if ar_exog_cols and not ar_path:
+            raise ValueError("ar_exog_cols only applies with ar_path=True")
+        # Saved as passed (None when unset), so a checkpoint reloads.
         self.save_hyperparameters(ignore=["max_lags_per_pair"])
+        ar_hidden = 16 if ar_hidden is None else ar_hidden
+        _check_ar_hidden(ar_hidden)
+        self.ar_path = bool(ar_path)
+        if noise_model not in ("gaussian", "student_t"):
+            raise ValueError(
+                f"noise_model must be 'gaussian' or 'student_t', got {noise_model!r}"
+            )
+        self.noise_model = noise_model
+        if noise_model == "student_t":
+            # Per-variable degrees of freedom nu = 2 + softplus(raw), init nu ~ 10.
+            self.nu_raw = nn.Parameter(
+                torch.full((num_vars,), math.log(math.expm1(8.0)))
+            )
         self.num_vars = num_vars
         self.max_lag = max_lag
         self.hidden_size = hidden_size
@@ -518,6 +772,20 @@ class GatedCausalDiscovery(LightningModule):
             ]
         )
 
+        if ar_path:
+            L = max_lag
+            self.ar_W1 = nn.Parameter(
+                torch.randn(num_vars, 3 * L, int(ar_hidden)) * (2.0 / (3 * L)) ** 0.5
+            )
+            self.ar_b1 = nn.Parameter(torch.zeros(num_vars, int(ar_hidden)))
+            self.ar_W2 = nn.Parameter(torch.zeros(num_vars, int(ar_hidden)))
+            self.ar_lin = nn.Parameter(torch.zeros(num_vars, L))
+            self.ar_b2 = nn.Parameter(torch.zeros(num_vars))
+            targets = torch.ones(num_vars)
+            targets[num_vars - int(ar_exog_cols) :] = 0.0
+            # Derived from ar_exog_cols (saved in hparams), so not in the state dict.
+            self.register_buffer("ar_targets", targets, persistent=False)
+
         # Build masks
         self._build_masks()
 
@@ -537,6 +805,9 @@ class GatedCausalDiscovery(LightningModule):
         # Optionally mask all instantaneous edges
         if not self.include_instantaneous:
             mask[:, -1, :] = False
+        if getattr(self, "ar_path", False):
+            for i in range(m):
+                mask[i, :, i] = False
         self.register_buffer("gate_mask", mask)
 
     # -- Hard Concrete sampling -------------------------------------------------
@@ -645,6 +916,12 @@ class GatedCausalDiscovery(LightningModule):
         out = torch.stack(out_list, dim=1)  # [B, num_vars, 2]
         mu = out[..., 0]  # [B, num_vars]
         sig = F.softplus(out[..., 1]) + EPS  # [B, num_vars]
+        if self.ar_path:
+            own = x[:, :, :-1]  # [B, d, L] own lags (lag 0 excluded)
+            feats = torch.cat([own, own**2, own.abs()], dim=-1)  # [B, d, 3L]
+            h = F.silu(torch.einsum("bdk,dkh->bdh", feats, self.ar_W1) + self.ar_b1)
+            ar = (h * self.ar_W2).sum(-1) + (own * self.ar_lin).sum(-1) + self.ar_b2
+            mu = mu + ar * self.ar_targets
 
         return mu, sig
 
@@ -676,7 +953,22 @@ class GatedCausalDiscovery(LightningModule):
         target = obs[..., -1]  # [B, num_vars] — current time step
         sq_err = (target - mu) ** 2
         log_sigma = torch.log(sigma)
-        nll_terms = sq_err / (2 * sigma**2) + log_sigma + 0.5 * np.log(2 * np.pi)
+        if self.noise_model == "student_t":
+            # Student-t with scale sigma: a few extreme residuals cannot dominate
+            # the fit the way they do under the Gaussian likelihood.
+            nu = 2.0 + F.softplus(self.nu_raw)
+            log_norm = (
+                torch.lgamma((nu + 1) / 2)
+                - torch.lgamma(nu / 2)
+                - 0.5 * torch.log(nu * np.pi)
+            )
+            nll_terms = (
+                log_sigma
+                - log_norm
+                + (nu + 1) / 2 * torch.log1p(sq_err / (nu * sigma**2))
+            )
+        else:
+            nll_terms = sq_err / (2 * sigma**2) + log_sigma + 0.5 * np.log(2 * np.pi)
         nll = nll_terms.mean()
 
         rmse = sq_err.mean(dim=-1).sqrt().mean().item()
@@ -731,7 +1023,14 @@ class GatedCausalDiscovery(LightningModule):
 
     def configure_optimizers(self):  # noqa: D102
         """Return Adam optimizer with configured lr and weight decay."""
-        return torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.wd)
+        # Weight decay is a prior on network weights, not on the Student-t
+        # degrees of freedom: decaying nu_raw would pull nu toward heavy tails.
+        nu = [p for n, p in self.named_parameters() if n == "nu_raw"]
+        rest = [p for n, p in self.named_parameters() if n != "nu_raw"]
+        groups = [{"params": rest}]
+        if nu:
+            groups.append({"params": nu, "weight_decay": 0.0})
+        return torch.optim.Adam(groups, lr=self.lr, weight_decay=self.wd)
 
     # -- Graph extraction -------------------------------------------------------
 
@@ -753,7 +1052,7 @@ class GatedCausalDiscovery(LightningModule):
         return gates.cpu().numpy()
 
     def get_estimated_graph(
-        self, threshold: Optional[float] = 0.5, absval: bool = True
+        self, threshold: Union[float, str, None] = 0.5, absval: bool = True
     ) -> Tuple[Optional[np.ndarray], np.ndarray]:
         """Return (G_bin, W) in [cause, effect, lag] with lag 0..max_lag.
 
@@ -761,8 +1060,9 @@ class GatedCausalDiscovery(LightningModule):
 
         Parameters
         ----------
-        threshold : float or None
-            If None, G_bin is None.
+        threshold : float, ``'li'`` or None
+            If None, G_bin is None. ``'li'`` keeps gates strictly above
+            :func:`li_threshold` of the gate values (0.5 if it falls back).
         absval : bool
             Threshold on absolute value of W if True.
 
@@ -781,7 +1081,11 @@ class GatedCausalDiscovery(LightningModule):
             return None, W
 
         comp = np.abs(W) if absval else W
-        G_bin = (comp >= threshold).astype(np.int8)
+        if threshold == "li":
+            cut = li_threshold(comp)
+            G_bin = (comp > (0.5 if cut is None else cut)).astype(np.int8)
+        else:
+            G_bin = (comp >= threshold).astype(np.int8)
         return G_bin, W
 
     # -- Skeleton initialization ------------------------------------------------
@@ -1450,6 +1754,7 @@ def run_stability_selection(
     impute: Optional[str] = None,
     impute_kwargs: Optional[dict] = None,
     discrete_cols=None,
+    ci_test=None,
     **model_kwargs,
 ) -> "GraceResult":
     """One-line interface for gated causal discovery with stability selection.
@@ -1515,6 +1820,10 @@ def run_stability_selection(
         Extra keyword arguments forwarded to the imputer.
     discrete_cols : list or None
         Column names or indices of discrete variables.
+    ci_test : object, optional
+        Accepted so ``causalts.algorithms.run_algorithm`` can pass its CI-test
+        instance; not used (a warning says so). GRACE builds its CI test on its
+        transformed data; choose the test with ``ci_test_class``.
     **model_kwargs : dict
         Passed to GatedCausalDiscovery.
 
@@ -1525,6 +1834,28 @@ def run_stability_selection(
         ``stability_scores`` (edge frequencies in [0, 1]), and
         inherited plotting / DoWhy bridge methods.
     """
+    _warn_unused_ci_test(ci_test, "run_stability_selection")
+    _check_model_kwargs(
+        model_kwargs,
+        "run_stability_selection",
+        reserved=(
+            "num_vars",
+            "max_lag",
+            "lambda_l0",
+            "normalize_l0",
+            "steps_per_epoch",
+        ),
+    )
+    if (
+        model_kwargs.get("ar_path")
+        or model_kwargs.get("ar_hidden") is not None
+        or model_kwargs.get("ar_exog_cols")
+    ):
+        # The AR head would be trained but no self-loop test run, so self-loops
+        # (masked out of the gates) could never be selected.
+        raise ValueError(
+            "ar_path / ar_hidden / ar_exog_cols are supported by run_cdnots_gated only"
+        )
     num_vars = df.shape[1]
 
     # ---- Pre-impute df so both skeleton and neural model use clean data ----
@@ -1680,6 +2011,45 @@ def run_stability_selection(
 # ---------------------------------------------------------------------------
 
 
+def _check_ar_hidden(ar_hidden) -> None:
+    if (
+        isinstance(ar_hidden, (bool, np.bool_))
+        or not isinstance(ar_hidden, (int, np.integer))
+        or ar_hidden < 1
+    ):
+        raise ValueError(f"ar_hidden must be a positive integer, got {ar_hidden!r}")
+
+
+def _warn_unused_ci_test(ci_test, caller: str) -> None:
+    # causalts.algorithms.run_algorithm passes every algorithm a CI-test instance.
+    # GRACE builds its own on the transformed data (``ci_test_class``), so an
+    # instance is not used; say so rather than ignore it silently.
+    if ci_test is not None:
+        warnings.warn(
+            f"{caller}() does not use the ci_test instance; GRACE builds its CI "
+            "test on its transformed data. Pass ci_test_class to choose the test.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
+def _check_model_kwargs(model_kwargs: dict, caller: str, reserved=()) -> None:
+    """Fail fast on keyword arguments ``GatedCausalDiscovery`` does not take, or that
+    ``caller`` sets itself, before any expensive skeleton or training run."""
+    allowed = set(inspect.signature(GatedCausalDiscovery.__init__).parameters) - {
+        "self",
+        "kwargs",
+    }
+    unknown = sorted(set(model_kwargs) - allowed)
+    if unknown:
+        raise TypeError(
+            f"{caller}() got unexpected keyword argument(s): {', '.join(unknown)}"
+        )
+    clash = sorted(set(model_kwargs) & set(reserved))
+    if clash:
+        raise TypeError(f"{caller}() sets {', '.join(clash)} itself; do not pass it")
+
+
 def _cdnots_graph_to_binary(cg_tig, n_vars: int, max_lag: int) -> np.ndarray:
     """Convert tigramite/cdnots graph array to binary [cause, effect, lag]."""
     # Trim to original vars (cdnots may append a C variable)
@@ -1716,7 +2086,7 @@ def run_cdnots_gated(
     ci_test_class=None,
     skeleton: Optional[np.ndarray] = None,
     skeleton_runtime: float = 0.0,
-    gate_threshold: float = 0.5,
+    gate_threshold: Union[float, str] = "auto",
     normalize: bool = True,
     max_epochs: int = 150,
     batch_size: Optional[int] = None,
@@ -1729,17 +2099,45 @@ def run_cdnots_gated(
     include_C_in_model: bool = False,
     c_preset: str = "linear",
     lambda_cv: bool = False,
+    lambda_rule: str = "xcorr",
     impute: Optional[str] = None,
     impute_kwargs: Optional[dict] = None,
     discrete_cols=None,
+    grow_rounds: Optional[int] = None,
+    grow_q: float = 0.1,
+    grow_transform: Optional[str] = "auto",
+    data_transform: Optional[str] = "rank",
+    noise_model: str = "student_t",
+    refine: str = "gates",
+    shrink_alpha: float = 0.001,
+    shrink_basis: str = "spline",
+    shrink_robust: bool = True,
+    shrink_interactions: bool = False,
+    *,
+    grow_variance: Optional[bool] = None,
+    grow_nuisance_basis: Optional[str] = "spline",
+    effect_floor: float = EFFECT_FLOOR,
+    shrink_effect_floor: Union[None, str, float] = None,
+    ar_path: Optional[bool] = None,
+    self_loop_basis: str = "union",
+    contemporaneous: bool = False,
+    contemporaneous_test="spline",
+    contemporaneous_alpha: float = 0.001,
+    ci_test=None,
     **model_kwargs,
 ) -> "GraceResult":
-    """CDNOTS skeleton + single gated refinement (no stability selection).
+    """CDNOTS skeleton + refinement (no stability selection).
 
-    1. Run CDNOTS to get a high-recall binary skeleton.
-    2. Train single gated model with skeleton mask to get continuous
-       gate values.
-    3. Threshold gate values to produce the final graph.
+    1. Run CDNOTS to get a high-recall binary skeleton (or use ``skeleton``).
+    2. Refine it: train a gated model on the candidates to get continuous gate
+       values (``refine="gates"``), or prune each target's candidate parents by
+       regression (``refine="shrink"``). Grow rounds test the lagged pairs
+       outside the candidates, add the hits and refine again (by default one
+       round under ``"gates"``, three under ``"shrink"``).
+    3. Cut the gates into a graph (gates only; the shrink's survivors are the
+       graph). Under the default ``ar_path`` self-loops are decided by an F-test,
+       not by gates, and the effect floor then removes cross edges with a
+       negligible effect, so ``gate_values`` alone do not determine ``cg_tig``.
 
     Parameters
     ----------
@@ -1753,12 +2151,31 @@ def run_cdnots_gated(
         CI test class (default: PartialCorr).
     skeleton : numpy.ndarray or None
         Optional pre-computed binary skeleton array with shape
-        (d, d, max_lag+1). If provided, skips CDNOTS and uses this
-        skeleton directly.
+        (d, d, max_lag+1); with ``include_C_in_model=True`` and
+        ``refine="gates"``, (d + n_C, d + n_C, max_lag+1), the C columns last.
+        If provided, skips CDNOTS and uses this skeleton directly. Under the
+        default ``grow_rounds`` (1 with ``refine="gates"``) the grow round can add
+        lagged edges outside it, which repairs edges the supplied graph missed,
+        and under the default ``ar_path`` the self-loop F-test can add self-loops
+        it lacks; pass ``grow_rounds=0, ar_path=False`` to keep only edges inside
+        the skeleton.
     skeleton_runtime : float
         Wall-clock time of the pre-computed skeleton (for info dict).
-    gate_threshold : float
-        Threshold on gate values for final graph.
+    gate_threshold : float, ``'auto'`` or ``'li'``, default ``'auto'``
+        Cutoff on gate values for the final graph. A float keeps edges with
+        gate ``>=`` the value (``0.5`` reproduces the old default). ``'li'``
+        picks the cutoff from the data with :func:`li_threshold` on the
+        candidate gates and keeps edges strictly above it (0.5 if too few
+        gates sit on either side). ``'auto'`` uses ``'li'`` when GRACE builds
+        its own skeleton, and for a supplied ``skeleton`` only when
+        :func:`gates_bimodal` finds two clusters; otherwise 0.5, so a precise
+        skeleton is not split in half. With ``ar_path`` (the default under
+        ``refine="gates"``) a Li cutoff is never below 0.5 (see ``ar_path``). The
+        applied cutoff is stored in ``result.gate_threshold`` and the rule in
+        ``result.gate_threshold_rule``: ``'fixed'``, ``'li'``, ``'li_fallback'``
+        or ``'auto_unimodal'``; with ``ar_path`` ``'ar_fixed'``,
+        ``'ar_li_floor'`` (Li, floored at 0.5), ``'ar_li_fallback'`` or
+        ``'ar_auto_unimodal'``.
     normalize : bool
         Z-score normalize data.
     max_epochs : int
@@ -1784,8 +2201,11 @@ def run_cdnots_gated(
         If True, append the C nonstationarity basis to the data before
         training the gated model (mirrors CDNOTS nonstationarity
         handling). C-related edges are stripped from the output graph.
-        Requires ``include_C=True``, since the model's C columns are
-        masked by the skeleton's.
+        With ``refine="gates"`` it requires ``include_C=True``, since the
+        model's C columns are masked by the skeleton's. It conditions the grow
+        tests (and the ``ar_path`` self-loop test) on the C basis, also for a
+        supplied skeleton; with ``refine="shrink"`` every shrink regression too,
+        independently of ``include_C``.
     c_preset : str, default ``'linear'``
         C basis preset for the nonstationarity node, applied to the CDNOTS
         skeleton and, when ``include_C_in_model`` is True, to the columns
@@ -1798,6 +2218,17 @@ def run_cdnots_gated(
         If True, select lambda via cross-validation instead of the
         closed-form formula (Eq. 11, arXiv:2606.23880). Slower but
         data-driven.
+    lambda_rule : {"density", "dT", "xcorr"}, default "xcorr"
+        Closed-form rule for lambda when neither ``lambda_cv`` nor a
+        ``lambda_l0`` override is given (see :func:`compute_lambda`); no effect
+        under ``refine="shrink"``.
+        ``"density"`` is the formula above. ``"dT"`` is ``300 / (d * T)``,
+        with d the number of modelled variables and T the series length: it
+        keeps the per-edge evidence needed to open a gate from growing with d,
+        which under ``"density"`` drops true nonlinear edges at large d and T.
+        ``"xcorr"`` also scales with the data's background lagged
+        cross-correlation and is bounded to ``[0.3 / d, 0.5]``, so it does not
+        vanish on long series (see :func:`compute_lambda`).
     impute : str or None
         Missing-value strategy applied before discovery.
         ``None`` — no imputation. ``'var_em'`` — iterative VAR-EM.
@@ -1805,6 +2236,201 @@ def run_cdnots_gated(
         Extra keyword arguments forwarded to the imputer.
     discrete_cols : list or None
         Column names or indices of discrete variables.
+    grow_rounds : int or None, default None
+        Maximum grow-shrink rounds after the first fit (0 = off); None means 1
+        under ``refine="gates"`` and 3 under ``refine="shrink"`` (the REAP
+        configuration). Each round
+        tests every lagged pair outside the candidate set with
+        :func:`~causalts.grace.grow.grow_candidates`, adds the hits to the
+        candidates, and refines again on the enlarged set (retrains the gates,
+        or re-runs the shrink with ``refine="shrink"``). Stops early once a
+        round adds nothing. Repairs edges the skeleton missed, which pruning
+        alone cannot recover; a missing parent that acts only through an
+        interaction with other parents is not reliably recovered. Under
+        ``"gates"`` each round costs one more training run.
+    grow_q : float, default 0.1
+        Benjamini-Hochberg level for the grow tests.
+    grow_transform : {"auto", None, "rank"}, default "auto"
+        Passed to :func:`~causalts.grace.grow.grow_candidates`; ``"rank"``
+        runs the grow tests on rank-Gaussianized data. ``"auto"`` means None
+        under ``refine="gates"`` and ``"rank"`` under ``refine="shrink"``.
+    data_transform : {"rank", None}, default "rank"
+        ``"rank"`` maps every continuous column to normal scores of its ranks
+        (missing values stay missing) before the skeleton, training and grow
+        steps, which tames heavy-tailed noise; discrete columns keep their codes,
+        except that under ``refine="shrink"`` with the spline basis the shrink and
+        grow see them rank-transformed too. ``None`` uses the raw data.
+    noise_model : {"student_t", "gaussian"}, default "student_t"
+        Likelihood of the gated model's prediction errors. ``"student_t"``
+        learns a per-variable degrees-of-freedom, so a few extreme residuals
+        cannot dominate the fit; ``"gaussian"`` is the previous default.
+    refine : {"gates", "shrink"}, default "gates"
+        How the candidate skeleton is refined. ``"gates"`` trains the neural
+        gated model (Hard Concrete gates with an L0 penalty) and cuts the gates.
+        ``"shrink"`` trains nothing: each target's candidate parents are pruned
+        by regression-based backward elimination
+        (:func:`~causalts.grace.shrink.shrink_parents`), and ``grow_rounds``
+        alternate grow and shrink. Every shrink and grow regression conditions on
+        the C basis on GRACE's own skeleton (``include_C``), and on a supplied
+        skeleton when ``include_C_in_model=True``. Typically an order of magnitude faster than
+        ``"gates"``. Under ``"shrink"`` the gate and training options
+        (``gate_threshold``, ``noise_model``, ``lambda_cv``, ``lambda_rule``, ``max_epochs``,
+        ``batch_size``, ``patience``, ``device``, ``normalize``, ``model_seed``,
+        ``**model_kwargs``) have no effect; lagged edges only (lag >= 1) unless
+        ``contemporaneous=True``.
+    shrink_alpha : float, default 0.001
+        ``refine="shrink"``: significance level for keeping a parent. The shrink's
+        p-values are approximate (fixed-basis F-tests) and become liberal at large
+        T when effects are strongly curved; see
+        :func:`~causalts.grace.shrink.shrink_parents`.
+    shrink_basis : {"spline", "rff"}, default "spline"
+        ``refine="shrink"``: feature block per lagged parent, used by both the
+        shrink and the grow tests. ``"spline"`` (natural cubic spline, knots from
+        the sample minimum to maximum), on rank-transformed data, gives extreme
+        rows much lower leverage than ``"rff"``. Variables with at most 8 distinct
+        values get level indicators, after levels seen in fewer than 5 rows are
+        merged into a neighbour; a variable whose levels all merge into one (e.g.
+        a binary one whose rare level has fewer than 5 rows) gets none (with a
+        warning), so it cannot be selected.
+    shrink_robust : bool, default True
+        ``refine="shrink"``: Huber-clip residuals before each shrink test, which
+        limits the influence of heavy-tailed noise.
+    shrink_interactions : bool, default False
+        ``refine="shrink"``: add pairwise products of each target's parents to the
+        shrink and grow regressions (see
+        :func:`~causalts.grace.shrink.shrink_parents`). Keeps precision when
+        parents interact (non-additive mechanisms), where the additive fit lets
+        correlated non-parents in as T grows; costs some power when targets
+        have many parents.
+    grow_variance : bool or None, default None
+        None means True under ``refine="gates"`` with ``grow_rounds >= 1``, else
+        False. Each grow round also proposes lagged edges that change a
+        target's noise scale rather than its mean
+        (:func:`~causalts.grace.grow.grow_variance_candidates`); the gated model's
+        likelihood can keep them, a mean-based test cannot see them. Needs
+        ``refine="gates"`` and ``grow_rounds >= 1``. Its test always runs on
+        rank-Gaussianized data, whatever ``grow_transform``.
+    grow_nuisance_basis : {"spline", "rff", None}, default "spline"
+        Basis of the conditioning (parent) terms in the grow tests and, with
+        ``ar_path``, the self-loop test; the tested candidate keeps its own block.
+        ``"spline"``: a natural cubic spline with boundary knots at the sample
+        minimum and maximum. ``None``: the tested block's basis (the RFF block
+        under ``refine="gates"``) and a linear C, as before this option (the
+        conditioning on kept lag-0 parents and, with ``include_C_in_model``, on
+        C for a supplied skeleton still applies). With a fixed
+        RFF block the part of a persistent parent's effect it cannot fit becomes
+        significant at large T, and a candidate that proxies the same drivers
+        absorbs it: on null configurations (T=1000, driver autocorrelation 0.9)
+        the RFF version rejected up to 32% of true nulls at level 0.001, the
+        spline version about 2% or less in the tested settings. Any fixed basis
+        can still over-reject at large T when a parent's effect is more wiggly
+        than it can fit. A discrete parent enters the spline nuisance through one
+        indicator per level, without merging rare levels.
+        Under the gates the tests also take each C column through a 4-knot spline
+        (with ``data_transform="rank"`` a linear trend is curved on the
+        transformed scale), so they remove smooth trends C describes, at some
+        cost in self-loop power at small T; a trend C does not describe, or a
+        nearly noise-free one, can still make lagged proxies look causal, so
+        detrend first or use ``data_transform=None`` there. Under
+        ``refine="shrink"`` with the spline basis, ``"spline"`` and ``None`` give
+        the same results on continuous data and differ only for a discrete
+        parent with a level seen in fewer than 5 rows.
+    effect_floor : float, default ``EFFECT_FLOOR`` (= 1 - exp(-0.02), about 0.0198)
+        Minimum effect of an edge, as an adjusted partial R^2: the share of its
+        target's unexplained variance (after the target's own lags and other parents)
+        the edge explains, corrected for chance fit. Free of units and of T. It is
+        applied twice: the grow tests add a BH-rejected candidate only if its effect
+        reaches the floor, and after the gates (and the lag-0 step) every lagged cross
+        edge whose unique effect on the mean or the scale of its target is below it is
+        pruned (:func:`~causalts.grace.grow.prune_effect_floor`; self-loops and lag-0
+        edges stay). The default is 0.01 nats of predictive gain per observation.
+        Significance tests and the L0 gates keep any real dependence once T is large,
+        so on long real series (only approximately sparse) the graph otherwise fills
+        with real but negligible edges. ``0`` turns both off (the behaviour before
+        this option). Applies with ``refine="gates"``.
+        ``gate_values`` and ``gate_threshold`` of the result describe the gates
+        before this pruning; ``effect_pruned`` marks the edges it removed, so a
+        gate-based score that should agree with ``cg_tig`` must zero those.
+    shrink_effect_floor : None, 'adaptive' or float, default None
+        ``refine="shrink"`` only. After the shrink and grow rounds (before the lag-0
+        step), prune lagged cross edges whose unique effect on their target is
+        small (:func:`~causalts.grace.grow.prune_effect_floor` with the shrink's
+        blocks and C conditioning; self-loops stay). ``'adaptive'``: per target,
+        backward elimination of edges below ``max(0.01, 0.2 * strongest)``,
+        ``strongest`` the largest effect among the target's cross edges
+        (``SHRINK_EFFECT_FLOOR_ADAPTIVE``), so the threshold scales with each
+        target's signal; a float is a fixed floor. It also drops real parents
+        weaker than a fifth of the target's strongest (or below 0.01), so leave it
+        off when such weak parents matter more than precision. Not available with
+        ``shrink_interactions=True`` (it scores additive blocks). ``None`` keeps the
+        shrink's graph (the behaviour before this option). On long series (T in the
+        thousands) the shrink and grow tests keep real but negligible
+        dependencies; on held-out CausalRivers river graphs (T=7304) ``'adaptive'``
+        cut SHD per graph from 11.4 to 6.4 and raised F1 from 0.40 to 0.44, and on
+        simulated graphs with T up to 1000 it changed lagged F1 by +0.004 on
+        average (no setting lost more than 0.007). ``edge_pvalue`` and
+        ``edge_strength`` still describe the shrink's tests; ``effect_pruned``
+        marks the edges this step removed.
+    ar_path : bool or None, default None
+        None means True under ``refine="gates"`` with ``max_lag >= 1``, else
+        False. ``refine="gates"`` only. The gated model gets an ungated
+        per-target head on the target's own lags (linear plus a small MLP), and
+        self-loops leave the gated part. Cross edges are cut at the larger of
+        the Li cutoff of the cross gates and 0.5 under ``gate_threshold`` 'li'
+        and, for GRACE's own skeleton, 'auto'; a supplied skeleton under 'auto'
+        gets that cut only when its cross gates form two clusters, else 0.5
+        (as without ``ar_path``). A float cuts at that value. Each self-loop lag
+        is then kept if a partial F-test of adding it (the lag alone and a
+        4-knot spline of it, Bonferroni over the tests run;
+        ``self_loop_test(test_basis="union")``) to an additive regression of the target on its kept cross parents (lag-0
+        ones under ``include_instantaneous`` if not kept in both directions), its
+        other own lags and the C basis (when the grow tests use it or the model
+        includes C) gives p < 0.001 (per test, not family-wise: nominally
+        0.001 * d * max_lag false self-loops when none are real, more where the
+        null is misspecified, e.g. a trend C does not fully remove;
+        :func:`~causalts.grace.grow.self_loop_test`). Strongly autoregressive
+        targets otherwise make the gates of real cross edges collapse, and the
+        gated self-loop absorbs signal. The test always runs on rank-Gaussianized
+        data, whatever ``data_transform`` (on raw heavy-tailed data the F-test
+        over-rejects), and warns when a test is undefined (too few rows for the
+        kept parents and lags); that self-loop is then not kept. It is on the
+        conditional mean, so an own lag that acts only on the noise scale
+        (ARCH-type) is not found under ``ar_path``; grow rounds leave self-loops
+        to the test. Self-loop entries of ``gate_values`` are 0 under
+        ``ar_path``: they are not gated, and the formula lambda's density counts
+        the cross candidates only.
+    self_loop_basis : {"union", "rff"}, default "union"
+        Tested block of the ``ar_path`` self-loop test
+        (``self_loop_test(test_basis=...)``). ``"rff"`` reproduces ``ar_path``
+        output from before the union test. Ignored without ``ar_path``.
+    contemporaneous : bool, default False
+        ``refine="shrink"`` only. After the shrink and grow rounds, find
+        contemporaneous (lag-0) edges with CDNOTS+
+        (:func:`~causalts.cdnots.phase3_utils.run_cdnots_plus`) on the shrink's
+        data, with every lagged edge pinned to the shrink's selection (kept edges
+        required, all others forbidden) and C included exactly when the shrink
+        conditioned on it: CDNOTS+ tests lag-0 adjacencies conditioning on the
+        selected lagged parents, and orients them by its collider and Meek rules
+        (which use the selected lagged arrows) and, with C, its nonstationarity
+        rule. Oriented lag-0 edges go into ``cg_tig[:, :, 0]``;
+        unoriented ones are dropped there, as in CDNOTS+, and kept in
+        ``to_marks()`` (``"o-o"``) and in ``contemporaneous_result``. The lagged
+        edges are unchanged. With the default False, the shrink stays lagged-only and
+        its output is unchanged.
+    contemporaneous_test : str or CIT_Base, default "spline"
+        CI test for the lag-0 step. ``"spline"`` is the natural-spline block
+        partial F with Huber-clipped residuals (the shrink's own test under
+        ``shrink_basis="spline"``), both directions Cauchy-combined, on every
+        column rank-transformed (with ``data_transform="rank"``); its p-values
+        share the shrink's approximations: liberal when effects are wiggly. Otherwise a registered
+        name (:func:`~causalts.ci_tests.create_ci_test`), e.g. ``"raft"`` for a
+        calibrated test at some cost in power at small T, or an instance.
+    contemporaneous_alpha : float, default 0.001
+        Significance level of the lag-0 step.
+    ci_test : object, optional
+        Accepted so ``causalts.algorithms.run_algorithm`` can pass its CI-test
+        instance; not used (a warning says so). GRACE builds its CI test on its
+        transformed data; choose the test with ``ci_test_class``.
     **model_kwargs : dict
         Forwarded to GatedCausalDiscovery.
 
@@ -1812,21 +2438,148 @@ def run_cdnots_gated(
     -------
     GraceResult
         Result object with attributes ``cg_tig`` (binary graph),
-        ``gate_values`` (continuous gate values), ``skeleton``,
-        ``lambda_l0``, ``gate_threshold``, ``runtime``, and inherited
-        plotting / DoWhy bridge methods.
+        ``gate_values`` (continuous gate values; ``None`` under
+        ``refine="shrink"``, which sets ``edge_pvalue`` and ``edge_strength``
+        instead), ``skeleton``, ``lambda_l0``, ``gate_threshold``, ``refine``,
+        ``runtime``, and inherited plotting / DoWhy bridge methods.
     """
     import time as _time
     import warnings
 
     from ..cdnots.phase3_utils import _C_PRESET_LABELS, make_c_array, run_cdnots
 
+    # Defaults that depend on the refinement: the gated configuration of the GRACE
+    # paper (AR head, one grow round with scale candidates) under "gates"; the REAP
+    # configuration (three grow rounds on rank-transformed data) under "shrink".
+    gates = refine == "gates"
+    if grow_rounds is None:
+        grow_rounds = 1 if gates else 3
+    if grow_transform == "auto":
+        grow_transform = None if gates else "rank"
+    if grow_variance is None:
+        grow_variance = gates and grow_rounds >= 1
+    if ar_path is None:
+        ar_path = gates and max_lag >= 1
+
     t0 = _time.time()
     num_vars = df.shape[1]
+    _warn_unused_ci_test(ci_test, "run_cdnots_gated")
+    _check_model_kwargs(
+        model_kwargs,
+        "run_cdnots_gated",
+        reserved=(
+            "num_vars",
+            "max_lag",
+            "noise_model",
+            "normalize_l0",
+            "steps_per_epoch",
+            "ar_exog_cols",
+        ),
+    )
+    if isinstance(gate_threshold, str) and gate_threshold not in ("auto", "li"):
+        raise ValueError(
+            f"gate_threshold must be a float, 'auto' or 'li', got {gate_threshold!r}"
+        )
+    own_skeleton = skeleton is None
+    if lambda_rule not in ("density", "dT", "xcorr"):
+        raise ValueError(
+            f"lambda_rule must be 'density', 'dT' or 'xcorr', got {lambda_rule!r}"
+        )
+    if refine not in ("gates", "shrink"):
+        raise ValueError(f"refine must be 'gates' or 'shrink', got {refine!r}")
+    if refine == "shrink":
+        if model_kwargs.get("include_instantaneous"):
+            raise ValueError("refine='shrink' handles lagged edges only (lag >= 1)")
+        if max_lag < 1:
+            raise ValueError("refine='shrink' needs max_lag >= 1 (lagged edges only)")
+        if shrink_basis not in ("spline", "rff"):
+            raise ValueError(
+                f"shrink_basis must be 'spline' or 'rff', got {shrink_basis!r}"
+            )
+        if not 0 < shrink_alpha < 1:
+            raise ValueError(f"shrink_alpha must be in (0, 1), got {shrink_alpha!r}")
+        if impute not in ("var_em", "causal_iterative") and df.isna().any().any():
+            raise ValueError(
+                "refine='shrink' needs data without missing values; impute first "
+                "(e.g. impute='var_em')"
+            )
+    if contemporaneous:
+        if refine != "shrink":
+            raise ValueError("contemporaneous=True needs refine='shrink'")
+        if not 0 < contemporaneous_alpha < 1:
+            raise ValueError(
+                "contemporaneous_alpha must be in (0, 1), got "
+                f"{contemporaneous_alpha!r}"
+            )
+        from .contemporaneous import check_ci_test
+
+        check_ci_test(contemporaneous_test)
+    if not 0 <= effect_floor < 1:
+        raise ValueError(f"effect_floor must be in [0, 1), got {effect_floor!r}")
+    if shrink_effect_floor is not None:
+        if refine != "shrink":
+            raise ValueError("shrink_effect_floor applies with refine='shrink' only")
+        if shrink_interactions:
+            # the floor scores each parent's additive block alone, so a parent that
+            # acts only through an interaction would be pruned
+            raise ValueError(
+                "shrink_effect_floor does not support shrink_interactions=True"
+            )
+        if isinstance(shrink_effect_floor, str):
+            if shrink_effect_floor != "adaptive":
+                raise ValueError(
+                    "shrink_effect_floor must be None, 'adaptive' or a float in "
+                    f"[0, 1), got {shrink_effect_floor!r}"
+                )
+        elif isinstance(shrink_effect_floor, bool) or not (
+            isinstance(shrink_effect_floor, numbers.Real)
+            and 0 <= shrink_effect_floor < 1
+        ):
+            raise ValueError(
+                "shrink_effect_floor must be None, 'adaptive' or a float in [0, 1), "
+                f"got {shrink_effect_floor!r}"
+            )
+    if grow_rounds > 0:  # checked here so a typo fails before the skeleton run
+        if not 0 < grow_q < 1:
+            raise ValueError(f"grow_q must be in (0, 1), got {grow_q!r}")
+        if grow_transform not in (None, "rank"):
+            raise ValueError(
+                f"grow_transform must be None or 'rank', got {grow_transform!r}"
+            )
+    if grow_nuisance_basis not in (None, "rff", "spline"):
+        raise ValueError(
+            "grow_nuisance_basis must be None, 'rff' or 'spline', got "
+            f"{grow_nuisance_basis!r}"
+        )
+    if self_loop_basis not in ("union", "rff"):
+        raise ValueError(
+            f"self_loop_basis must be 'union' or 'rff', got {self_loop_basis!r}"
+        )
+    if grow_variance and (refine != "gates" or grow_rounds < 1):
+        raise ValueError(
+            "grow_variance needs refine='gates' and grow_rounds >= 1, got "
+            f"refine={refine!r}, grow_rounds={grow_rounds!r}"
+        )
+    if model_kwargs.get("ar_hidden") is not None:
+        if not ar_path:
+            raise ValueError("ar_hidden only applies with ar_path=True")
+        _check_ar_hidden(model_kwargs["ar_hidden"])
+    if ar_path:
+        if refine != "gates":
+            raise ValueError("ar_path is a gated-model option; it needs refine='gates'")
+        if max_lag < 1:
+            raise ValueError("ar_path needs max_lag >= 1 (self-loops are lagged)")
+        model_kwargs["ar_path"] = True
+    if data_transform not in (None, "rank"):
+        raise ValueError(
+            f"data_transform must be None or 'rank', got {data_transform!r}"
+        )
     # Validate the preset up front (and learn its width) so a typo fails before
     # the expensive skeleton run rather than after it.
-    n_c_cols = make_c_array(len(df), c_preset).shape[1] if include_C else 0
-    if include_C_in_model and not include_C:
+    if include_C or include_C_in_model:
+        c_width = make_c_array(len(df), c_preset).shape[1]
+    n_c_cols = c_width if include_C else 0
+    if include_C_in_model and not include_C and refine == "gates":
         raise ValueError(
             "include_C_in_model=True requires include_C=True: the model's C "
             "columns are masked by the skeleton's, so a skeleton without C "
@@ -1851,7 +2604,104 @@ def run_cdnots_gated(
                     f"  Imputed {df.isna().sum().sum()} remaining NaN values via VAR-EM"
                 )
 
+    df_input = df  # the result keeps the caller's data, not the transformed copy
+    # "xcorr" lambda rule: background dependence of the caller's (imputed) data,
+    # measured before any rank transform. The rule was calibrated on Pearson
+    # correlations of the untransformed series, also for runs whose model saw ranks.
+    xcorr = (
+        background_xcorr(df.to_numpy(dtype=float), max_lag)
+        if lambda_rule == "xcorr"
+        and refine == "gates"
+        and not lambda_cv
+        and model_kwargs.get("lambda_l0") is None
+        else None
+    )
+    spline_refine = refine == "shrink" and shrink_basis == "spline"
+    X_refine = None  # shrink and grow data; None means use df as is
+    lag0_spline = contemporaneous and isinstance(contemporaneous_test, str)
+    lag0_spline = lag0_spline and contemporaneous_test == "spline"
+    X_lag0 = None  # lag-0 step data when it differs from X_refine / df
+    if lag0_spline and data_transform is None and not spline_refine:
+        warnings.warn(
+            "contemporaneous_test='spline' with data_transform=None builds spline "
+            "features on raw values, whose boundary knots sit at the sample minimum "
+            "and maximum, so an outlier can get leverage near 1 and decide a test. "
+            "Use data_transform='rank' unless the data have no outliers.",
+            UserWarning,
+            stacklevel=2,
+        )
+    if spline_refine and data_transform is None:
+        warnings.warn(
+            "refine='shrink' with data_transform=None feeds raw values to the shrink "
+            "and grow spline features, whose boundary knots sit at the sample "
+            "minimum and maximum, so an outlier (or a rare extreme level of an "
+            "integer column) can get leverage near 1 and decide its tests. Use "
+            "data_transform='rank' unless the data have no outliers.",
+            UserWarning,
+            stacklevel=2,
+        )
+    if data_transform == "rank":
+        from scipy.stats import norm, rankdata
+
+        from ..cdnots.phase3_utils import _detect_discrete_cols
+
+        # Resolve discrete columns on the raw data: ranking would turn their
+        # integer codes into Gaussian scores and hide them from CDNOTS's own
+        # detection. They stay unranked and are passed on explicitly.
+        if discrete_cols is None:
+            discrete_cols = _detect_discrete_cols(df, len(df))
+            if discrete_cols and skeleton is None:
+                # run_cdnots only warns when it detects them itself; keep the hint.
+                warnings.warn(
+                    f"Detected discrete columns: {discrete_cols}. CDNOTS will wrap "
+                    "its CI test in StratifiedCIT for them (unless the test handles "
+                    "discrete data natively). Pass discrete_cols=[] to disable.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        else:
+            # A selector is a column label first; an integer that is not a label
+            # is a position.
+            discrete_cols = [
+                (
+                    df.columns[c]
+                    if c not in df.columns and isinstance(c, (int, np.integer))
+                    else c
+                )
+                for c in discrete_cols
+            ]
+        X = df.to_numpy(dtype=float)
+        X_all = X.copy()  # every column rank-transformed
+        for j in range(X.shape[1]):
+            ok = ~np.isnan(X[:, j])
+            X_all[ok, j] = norm.ppf((rankdata(X[ok, j]) - 0.5) / ok.sum())
+        disc = [j for j, col in enumerate(df.columns) if col in discrete_cols]
+        Xr = X_all.copy()
+        Xr[:, disc] = X[:, disc]
+        if spline_refine:
+            # The shrink's and grow's spline features need bounded tails (a rare
+            # extreme value of a raw integer column would get leverage near 1), so
+            # both see every column rank-transformed; only CDNOTS keeps the codes.
+            X_refine = X_all
+        elif lag0_spline:
+            X_lag0 = X_all  # the lag-0 spline test needs the same bounded tails
+        df = pd.DataFrame(Xr, index=df.index, columns=df.columns)
+
     # ---- Step 1: CDNOTS Skeleton ----
+    if skeleton is not None and refine == "gates":
+        want = num_vars + (n_c_cols if include_C_in_model else 0)
+        if np.shape(skeleton) != (want, want, max_lag + 1):
+            raise ValueError(
+                f"skeleton must have shape {(want, want, max_lag + 1)} for "
+                "refine='gates'"
+                + (
+                    f" (the {num_vars} variables followed by the {n_c_cols} C "
+                    "columns, since include_C_in_model=True)"
+                    if include_C_in_model
+                    else ""
+                )
+                + f", got {np.shape(skeleton)}"
+            )
     if skeleton is not None:
         t_skeleton = skeleton_runtime
         if verbose:
@@ -1863,10 +2713,10 @@ def run_cdnots_gated(
         if ci_test_class is None:
             ci_test_class = _get_parcorr_class()
 
-        ci_test = ci_test_class(np.ascontiguousarray(df.values))
+        skeleton_test = ci_test_class(np.ascontiguousarray(df.values))
         cdnots_res = run_cdnots(
             df=df,
-            indep_test=ci_test,
+            indep_test=skeleton_test,
             num_lags=max_lag,
             include_C=include_C,
             c_preset=c_preset,
@@ -1888,130 +2738,459 @@ def run_cdnots_gated(
         )
         df_model = pd.concat([df.reset_index(drop=True), C_cols], axis=1)
         model_num_vars = num_vars + n_c_cols
+        if ar_path:  # C is an input, not a target with its own autoregression
+            model_kwargs["ar_exog_cols"] = n_c_cols
     else:
         df_model = df
         model_num_vars = num_vars
 
-    n_skeleton_edges = int(skeleton.sum())
     n_possible = model_num_vars * model_num_vars * (max_lag + 1) - model_num_vars
-    skeleton_density = n_skeleton_edges / n_possible if n_possible > 0 else 0.0
+
+    if (
+        refine == "gates"
+    ):  # neural training state; the regression-based shrink needs none
+        # Prepare data (before lambda selection — CV needs the dataset)
+        dataset = prepare_data(df_model, max_lag, normalize=normalize)
+        N = len(dataset)
+        if batch_size is None:
+            batch_size = max(32, min(N // 8, 256))
+        steps_per_epoch = math.ceil(N / batch_size)
+
+        # No lag concentration penalty by default — the skeleton already
+        # determines lag structure.  Set lambda_lag_group > 0 to enforce
+        # at most max_lags_per_pair active lags per pair.
+        model_kwargs.setdefault("lambda_lag_group", 0.0)
+        # Allow callers to override the computed lambda via model_kwargs
+        lambda_override = model_kwargs.pop("lambda_l0", None)
+
+        if device is None or device == "auto":
+            accelerator = _detect_accelerator()
+        else:
+            accelerator = device
+
+    def _fit_and_cut(skeleton):
+        """Train the gated model on ``skeleton``; return gates, lambda and graph."""
+        if ar_path:  # density over the gates the model trains: cross, lag-0 masked
+            m = skeleton.shape[0]  # unless include_instantaneous
+            lags = slice(0 if model_kwargs.get("include_instantaneous") else 1, None)
+            trained = (np.asarray(skeleton) != 0)[:, :, lags] & ~np.eye(m, dtype=bool)[
+                :, :, None
+            ]
+            n_cand = m * (m - 1) * trained.shape[2]
+            density = int(trained.sum()) / n_cand if n_cand > 0 else 0.0
+        else:
+            density = int(skeleton.sum()) / n_possible if n_possible > 0 else 0.0
+        # Select lambda: cross-validation or closed-form formula (Eq. 11, arXiv:2606.23880)
+        if lambda_override is not None:
+            lambda_l0, lambda_src = lambda_override, "override"
+        elif lambda_cv:
+            lambda_src = "CV"
+            lambda_l0 = compute_lambda_cv(
+                dataset,
+                model_num_vars,
+                max_lag,
+                skeleton,
+                model_kwargs=dict(model_kwargs, noise_model=noise_model),
+                batch_size=batch_size,
+                model_seed=model_seed,
+                device=device,
+                verbose=verbose,
+            )
+        else:
+            lambda_src = "formula"
+            lambda_l0 = compute_lambda(
+                model_num_vars, len(df_model), density, rule=lambda_rule, xcorr=xcorr
+            )
+        if verbose:
+            print(f"  lambda_L0={lambda_l0:.4f} ({lambda_src})")
+
+        if model_seed is not None:
+            from pytorch_lightning import seed_everything  # noqa: E402
+
+            seed_everything(model_seed, workers=True)
+
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        model = GatedCausalDiscovery(
+            num_vars=model_num_vars,
+            noise_model=noise_model,
+            max_lag=max_lag,
+            lambda_l0=float(lambda_l0),
+            normalize_l0=True,
+            steps_per_epoch=steps_per_epoch,
+            **model_kwargs,
+        )
+        model.init_from_skeleton(skeleton)
+        model.set_skeleton_mask(skeleton)
+
+        _silence_lightning()
+        trainer = Trainer(
+            max_epochs=max_epochs,
+            accelerator=accelerator,
+            deterministic="warn" if model_seed is not None else False,
+            callbacks=[
+                EarlyStopping(
+                    monitor="train_loss",
+                    patience=patience,
+                    mode="min",
+                )
+            ],
+            enable_progress_bar=False,
+            enable_model_summary=False,
+            logger=False,
+            enable_checkpointing=False,
+        )
+        trainer.fit(model, train_dataloaders=loader)
+
+        _, gate_values = model.get_estimated_graph(threshold=None)
+        # Strip C columns if include_C_in_model — keep only the original d variables
+        if include_C_in_model:
+            gate_values = gate_values[:num_vars, :num_vars, :]
+
+        if ar_path:
+            # Self-loops are not gated. Cross edges are cut at max(Li of the cross
+            # gates, 0.5) under 'auto'/'li' (0.5 is the gate's decision boundary;
+            # with the AR head, gates of edges without signal fall below it),
+            # self-loops by a partial F-test given them.
+            from .grow import self_loop_test
+
+            n_gated = gate_values.shape[0]
+            off_diag = ~np.eye(n_gated, dtype=bool)[:, :, None]
+            cand = off_diag & (np.asarray(skeleton)[:n_gated, :n_gated] != 0)
+            cross_g = np.where(cand, gate_values, 0.0)
+            # As below: a supplied skeleton under 'auto' gets Li only when the
+            # cross gates form two clusters, else the plain 0.5 cut.
+            unimodal = (
+                gate_threshold == "auto"
+                and not own_skeleton
+                and not gates_bimodal(
+                    cross_g,
+                    stretch_gamma=model_kwargs.get("stretch_gamma", -0.1),
+                    stretch_zeta=model_kwargs.get("stretch_zeta", 1.1),
+                )
+            )
+            if unimodal:  # at or above, as for 'auto_unimodal'
+                cut, rule = 0.5, "ar_auto_unimodal"
+                G_hat = ((cross_g >= cut) & cand).astype(np.int8)
+            elif gate_threshold in ("auto", "li"):  # strictly above, as for Li
+                c_li = li_threshold(cross_g)
+                cut = max(0.5 if c_li is None else c_li, 0.5)
+                rule = "ar_li_fallback" if c_li is None else "ar_li_floor"
+                G_hat = ((cross_g > cut) & cand).astype(np.int8)
+            else:  # at or above, as for the 'fixed' rule
+                cut, rule = float(gate_threshold), "ar_fixed"
+                G_hat = ((cross_g >= cut) & cand).astype(np.int8)
+            if not model_kwargs.get("include_instantaneous"):
+                G_hat[:, :, 0] = 0
+            self_loops = self_loop_test(
+                # Always on rank-Gaussianized data: the F-test is not robust to
+                # heavy tails, and re-ranking data_transform="rank" output is a no-op.
+                df.to_numpy(dtype=float),
+                G_hat[:num_vars, :num_vars].astype(bool),
+                max_lag,
+                transform="rank",
+                exog=c_tests,
+                nuisance_basis=grow_nuisance_basis,
+                test_basis=self_loop_basis,
+            )
+            G_hat = (G_hat.astype(bool) | self_loops).astype(np.int8)
+            np.fill_diagonal(G_hat[:, :, 0], 0)
+            return gate_values, lambda_l0, G_hat, cut, rule
+
+        # Gates outside the skeleton are masked to 0, so Li sees only candidates.
+        # 'auto': GRACE's own CDNOTS skeleton is loose by construction, so Li;
+        # a supplied skeleton may already be precise (one cluster of open
+        # gates), so Li only when the gates form two clusters, else 0.5.
+        use_li = gate_threshold == "li" or (
+            gate_threshold == "auto"
+            and (
+                own_skeleton
+                or gates_bimodal(
+                    gate_values,
+                    stretch_gamma=model_kwargs.get("stretch_gamma", -0.1),
+                    stretch_zeta=model_kwargs.get("stretch_zeta", 1.1),
+                )
+            )
+        )
+        if use_li:
+            cut = li_threshold(gate_values)
+            rule = "li" if cut is not None else "li_fallback"
+            if cut is None:
+                cut = 0.5
+            G_hat = (gate_values > cut).astype(np.int8)
+        elif gate_threshold == "auto":
+            cut, rule = 0.5, "auto_unimodal"
+            G_hat = (gate_values >= cut).astype(np.int8)
+        else:
+            cut = float(gate_threshold)
+            rule = "fixed"
+            G_hat = (gate_values >= cut).astype(np.int8)
+        # Zero self-loops at lag 0
+        np.fill_diagonal(G_hat[:, :, 0], 0)
+        return gate_values, lambda_l0, G_hat, cut, rule
+
+    # The C basis CDNOTS used conditions the grow tests, the AR path's self-loop
+    # test and the regression-based shrink on GRACE's own skeleton. A supplied skeleton
+    # never used C, unless include_C_in_model puts C in the model (in the gated
+    # model, or in every shrink regression); then those tests condition on it too.
+    use_c = (include_C and own_skeleton) or include_C_in_model
+    c_exog = make_c_array(len(df), c_preset) if use_c else None
+    # Under the gates the grow and self-loop tests take C through the spline
+    # nuisance basis too: with data_transform="rank" a linear trend is curved on
+    # the transformed scale, which a linear C column cannot remove, and a lagged
+    # proxy of the trend then looks causal. The shrink keeps C linear, as in its
+    # own regressions.
+    # Four knots: a smooth function of time also absorbs the slow part of an
+    # autoregression, so more flexibility costs self-loop power at small T (pure
+    # AR(1), phi 0.5, T=100: 0.49 with linear C, 0.36 with 4 knots, 0.10 with 8)
+    # for little extra trend protection (false self-loops on a ranked quadratic
+    # trend, noise sd 0.1: 95% linear C, 4.4% with 4 knots, 1.9% with 8).
+    c_tests = c_exog
+    if c_exog is not None and refine == "gates" and grow_nuisance_basis == "spline":
+        from .grow import _is_discrete, _level_indicators, spline_basis
+
+        c_tests = np.column_stack(
+            [
+                _level_indicators(c) if _is_discrete(c) else spline_basis(c, n_knots=4)
+                for c in np.asarray(c_exog, float).T
+            ]
+        )
+    edge_pvalue = edge_strength = None
+
+    def _refine(skeleton):
+        """Refine ``skeleton``: gates (train + cut) or regression-based shrink."""
+        nonlocal edge_pvalue, edge_strength
+        if refine == "gates":
+            return _fit_and_cut(skeleton)
+        from .shrink import shrink_parents
+
+        G, edge_pvalue, edge_strength = shrink_parents(
+            X_refine if X_refine is not None else df.to_numpy(dtype=float),
+            skeleton[:num_vars, :num_vars, :],
+            max_lag,
+            alpha=shrink_alpha,
+            robust=shrink_robust,
+            basis=shrink_basis,
+            exog=c_exog,
+            interactions=shrink_interactions,
+        )
+        return None, None, G.astype(np.int8), None, None
 
     if verbose:
         print(
-            f"  Skeleton: {n_skeleton_edges} edges, "
-            f"density={skeleton_density:.3f} ({t_skeleton:.1f}s)"
+            f"  Skeleton: {int(skeleton.sum())} edges, "
+            f"density={int(skeleton.sum()) / max(n_possible, 1):.3f} "
+            f"({t_skeleton:.1f}s)"
         )
+        if refine == "gates":
+            print("\nStep 2: Single gated training with skeleton mask...")
+        else:
+            print("\nStep 2: Regression-based shrink of the skeleton...")
 
-    # ---- Step 2: Single Gated Training ----
-    if verbose:
-        print("\nStep 2: Single gated training with skeleton mask...")
-
-    # Prepare data (before lambda selection — CV needs the dataset)
-    dataset = prepare_data(df_model, max_lag, normalize=normalize)
-    N = len(dataset)
-
-    # Select lambda: cross-validation or closed-form formula (Eq. 11, arXiv:2606.23880)
-    if lambda_cv:
-        lambda_l0 = compute_lambda_cv(
-            dataset,
-            model_num_vars,
-            max_lag,
-            skeleton,
-            model_kwargs=dict(model_kwargs),
-            batch_size=batch_size,
-            model_seed=model_seed,
-            device=device,
-            verbose=verbose,
-        )
-    else:
-        lambda_l0 = compute_lambda(model_num_vars, len(df_model), skeleton_density)
-
-    if batch_size is None:
-        batch_size = max(32, min(N // 8, 256))
-
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    steps_per_epoch = math.ceil(N / batch_size)
-
-    if model_seed is not None:
-        from pytorch_lightning import seed_everything  # noqa: E402
-
-        seed_everything(model_seed, workers=True)
-
-    # No lag concentration penalty by default — the skeleton already
-    # determines lag structure.  Set lambda_lag_group > 0 to enforce
-    # at most max_lags_per_pair active lags per pair.
-    model_kwargs.setdefault("lambda_lag_group", 0.0)
-    # Allow callers to override the computed lambda via model_kwargs
-    lambda_src = "CV" if lambda_cv else "formula"
-    if "lambda_l0" in model_kwargs:
-        lambda_l0 = model_kwargs.pop("lambda_l0")
-        lambda_src = "override"
-
-    if verbose:
-        print(f"  lambda_L0={lambda_l0:.4f} ({lambda_src})")
-
-    model = GatedCausalDiscovery(
-        num_vars=model_num_vars,
-        max_lag=max_lag,
-        lambda_l0=float(lambda_l0),
-        normalize_l0=True,
-        steps_per_epoch=steps_per_epoch,
-        **model_kwargs,
-    )
-    model.init_from_skeleton(skeleton)
-    model.set_skeleton_mask(skeleton)
-
-    # Train
-    if device is None or device == "auto":
-        accelerator = _detect_accelerator()
-    else:
-        accelerator = device
-
-    _silence_lightning()
-    trainer = Trainer(
-        max_epochs=max_epochs,
-        accelerator=accelerator,
-        deterministic="warn" if model_seed is not None else False,
-        callbacks=[
-            EarlyStopping(
-                monitor="train_loss",
-                patience=patience,
-                mode="min",
-            )
-        ],
-        enable_progress_bar=False,
-        enable_model_summary=False,
-        logger=False,
-        enable_checkpointing=False,
-    )
-    trainer.fit(model, train_dataloaders=loader)
-
-    # Extract gate values
-    _, gate_values = model.get_estimated_graph(threshold=None)
+    # ---- Steps 2-3: gated training then cutoff, or regression-based shrink ----
+    gate_values, lambda_l0, G_hat, cut, threshold_rule = _refine(skeleton)
     t_training = _time.time() - t0 - t_skeleton
-
-    # Strip C column if include_C_in_model — return only the original d variables
-    if include_C_in_model:
-        gate_values = gate_values[:num_vars, :num_vars, :]
-
     if verbose:
-        n_open = int((gate_values > gate_threshold).sum())
-        print(f"  Training done: {n_open} gates > {gate_threshold} ({t_training:.1f}s)")
+        if refine == "gates":
+            print(
+                f"  Training done: {int(G_hat.sum())} edges kept at cutoff {cut:.3f} "
+                f"[{threshold_rule}] ({t_training:.1f}s)"
+            )
+        else:
+            print(f"  Shrink done: {int(G_hat.sum())} edges kept ({t_training:.1f}s)")
 
-    # ---- Step 3: Threshold ----
-    G_hat = (gate_values >= gate_threshold).astype(np.int8)
-    # Zero self-loops at lag 0
-    np.fill_diagonal(G_hat[:, :, 0], 0)
+    # ---- Step 4 (optional): grow-shrink recall repair ----
+    grow_history = []
+    if grow_rounds > 0:
+        from .grow import grow_candidates, grow_variance_candidates
+
+        X_grow = X_refine if X_refine is not None else df.to_numpy(dtype=float)
+        if np.isnan(X_grow).any():
+            raise ValueError("grow_rounds > 0 needs data without missing values")
+        # Condition the grow tests on the same C basis as the refinement (``c_exog``,
+        # see ``use_c`` above), so series that share only a trend are not re-added.
+        for rnd in range(1, grow_rounds + 1):
+            sk_d = skeleton[:num_vars, :num_vars, :].astype(bool)
+            if ar_path:  # self-loops are decided by the F-test, never grown
+                sk_d = sk_d | np.eye(num_vars, dtype=bool)[:, :, None]
+            add, n_tests = grow_candidates(
+                X_grow,
+                G_hat.astype(bool),
+                sk_d,
+                max_lag,
+                grow_q,
+                grow_transform,
+                exog=c_tests,
+                basis=shrink_basis if refine == "shrink" else "rff",
+                interactions=refine == "shrink" and shrink_interactions,
+                nuisance_basis=grow_nuisance_basis,
+                effect_floor=effect_floor if refine == "gates" else 0.0,
+            )
+            n_tests_var = n_added_var = None
+            if grow_variance:
+                add_v, n_tests_var = grow_variance_candidates(
+                    X_grow,
+                    G_hat.astype(bool) | add,  # fresh mean parents enter the fit
+                    sk_d | add,
+                    max_lag,
+                    grow_q,
+                    "rank",
+                    exog=c_tests,
+                    nuisance_basis=grow_nuisance_basis,
+                    effect_floor=effect_floor if refine == "gates" else 0.0,
+                )
+                n_added_var = int((add_v & ~add).sum())
+                add = add | add_v
+            n_added = int(add.sum())
+            grow_history.append({"round": rnd, "n_tests": n_tests, "n_added": n_added})
+            if n_tests_var is not None:  # a separate BH family, also at grow_q
+                grow_history[-1]["n_tests_variance"] = n_tests_var
+                grow_history[-1]["n_added_variance"] = n_added_var
+            if verbose and n_tests_var is None:
+                print(f"  Grow round {rnd}: {n_added} of {n_tests} tested edges added")
+            elif verbose:
+                print(
+                    f"  Grow round {rnd}: {n_added - n_added_var} of {n_tests} mean "
+                    f"tests and {n_added_var} of {n_tests_var} variance tests added"
+                )
+            if n_added == 0:
+                break
+            skeleton = skeleton.copy()
+            block = skeleton[:num_vars, :num_vars, :]
+            skeleton[:num_vars, :num_vars, :] = ((block != 0) | add).astype(
+                skeleton.dtype
+            )
+            gate_values, lambda_l0, G_hat, cut, threshold_rule = _refine(skeleton)
+            grow_history[-1]["n_kept"] = int((G_hat.astype(bool) & add).sum())
+            if verbose and refine == "gates":
+                print(
+                    f"    retrained: {int(G_hat.sum())} edges at cutoff {cut:.3f} "
+                    f"[{threshold_rule}], {grow_history[-1]['n_kept']} grown kept"
+                )
+            elif verbose:
+                print(
+                    f"    shrunk: {int(G_hat.sum())} edges, "
+                    f"{grow_history[-1]['n_kept']} grown kept"
+                )
+        t_training = _time.time() - t0 - t_skeleton
+
+    n_effect_pruned = 0
+    effect_pruned = None
+    if shrink_effect_floor is not None:
+        from .grow import prune_effect_floor
+
+        if shrink_effect_floor == "adaptive":
+            floor = SHRINK_EFFECT_FLOOR_ADAPTIVE["floor"]
+            relative = SHRINK_EFFECT_FLOOR_ADAPTIVE["relative"]
+        else:
+            floor, relative = float(shrink_effect_floor), 0.0
+        # Before the lag-0 step, so CDNOTS+ pins the pruned lagged graph. Same blocks
+        # and C conditioning as the shrink (which already rejected missing values).
+        X_prune = X_refine if X_refine is not None else df.to_numpy(dtype=float)
+        G_pruned = prune_effect_floor(
+            X_prune,
+            G_hat[:num_vars, :num_vars],
+            max_lag,
+            floor,
+            exog=c_exog,
+            basis=shrink_basis,
+            nuisance_basis=grow_nuisance_basis,
+            relative=relative,
+        )
+        effect_pruned = (np.asarray(G_hat[:num_vars, :num_vars]) != 0) & (G_pruned == 0)
+        n_effect_pruned = int(effect_pruned.sum())
+        G_hat = np.array(G_hat, copy=True)
+        G_hat[:num_vars, :num_vars] = G_pruned
+        if verbose:
+            print(
+                f"  Effect floor ({shrink_effect_floor}): {n_effect_pruned} edges pruned"
+            )
+
+    contemporaneous_result = None
+    if contemporaneous:
+        from .contemporaneous import contemporaneous_edges
+
+        if verbose:
+            print("Step 3: CDNOTS+ contemporaneous edges (lagged edges pinned)...")
+        t_lag0 = _time.time()
+        # The shrink's data and C conditioning: every column rank-transformed
+        # under the spline basis (see X_refine; X_lag0 for the spline test under
+        # shrink_basis="rff"), C exactly when the shrink used it.
+        X0 = X_refine if X_refine is not None else X_lag0
+        lag0_df = (
+            df if X0 is None else pd.DataFrame(X0, index=df.index, columns=df.columns)
+        )
+        contemporaneous_result = contemporaneous_edges(
+            lag0_df,
+            G_hat,
+            max_lag,
+            ci_test=contemporaneous_test,
+            alpha=contemporaneous_alpha,
+            include_C=use_c,
+            c_preset=c_preset,
+            discrete_cols=discrete_cols,
+            show_progress=verbose,
+        )
+        G_hat = np.array(G_hat, copy=True)
+        G_hat[:, :, 0] = np.asarray(contemporaneous_result.cg_tig)[
+            :num_vars, :num_vars, 0
+        ]
+        if verbose:
+            print(
+                f"  Lag-0: {int(G_hat[:, :, 0].sum())} oriented edges "
+                f"({_time.time() - t_lag0:.1f}s)"
+            )
+
+    if refine == "gates" and effect_floor > 0:
+        from .grow import prune_effect_floor
+
+        X_prune = df.to_numpy(dtype=float)
+        if np.isnan(X_prune).any():
+            warnings.warn(
+                "effect_floor: the data have missing values, so the final edges are "
+                "not pruned (impute first, e.g. impute='var_em').",
+                UserWarning,
+                stacklevel=2,
+            )
+        else:
+            G_pruned = prune_effect_floor(
+                X_prune,
+                G_hat[:num_vars, :num_vars],
+                max_lag,
+                effect_floor,
+                exog=c_tests,
+                nuisance_basis=grow_nuisance_basis,
+            )
+            effect_pruned = (np.asarray(G_hat[:num_vars, :num_vars]) != 0) & (
+                G_pruned == 0
+            )
+            n_effect_pruned = int(effect_pruned.sum())
+            G_hat = np.array(G_hat, copy=True)
+            G_hat[:num_vars, :num_vars] = G_pruned
+            if verbose:
+                print(
+                    f"  Effect floor {effect_floor:.4f}: {n_effect_pruned} edges pruned"
+                )
+
+    n_skeleton_edges = int(skeleton.sum())
+    skeleton_density = n_skeleton_edges / n_possible if n_possible > 0 else 0.0
 
     total_runtime = _time.time() - t0
     n_edges = int(G_hat.sum())
 
     if verbose:
-        print(
-            f"\nResult: {n_edges} edges at threshold={gate_threshold} "
-            f"({total_runtime:.1f}s total)"
-        )
-        print(f"  Skeleton: {t_skeleton:.1f}s, Training: {t_training:.1f}s")
+        if refine == "gates":
+            print(
+                f"\nResult: {n_edges} edges at threshold={cut:.3f} "
+                f"({total_runtime:.1f}s total)"
+            )
+            print(f"  Skeleton: {t_skeleton:.1f}s, Training: {t_training:.1f}s")
+        else:
+            print(
+                f"\nResult: {n_edges} edges after shrink"
+                + (" and the lag-0 step" if contemporaneous else "")
+                + f" ({total_runtime:.1f}s total)"
+            )
+            print(f"  Skeleton: {t_skeleton:.1f}s, Shrink: {t_training:.1f}s")
 
     if ground_truth is not None:
         metrics = evaluate_graph(G_hat, ground_truth)
@@ -2027,12 +3206,22 @@ def run_cdnots_gated(
             )
             print(f"  SHD={metrics['SHD']}  SHD_pair={metrics['SHD_pair']}")
 
+    gated_or_floored = refine == "gates" or shrink_effect_floor is not None
     info = {
-        "skeleton": skeleton,
+        # Under shrink the C rows/columns (include_C_in_model) were only
+        # conditioning; report the skeleton over the d variables, like cg_tig.
+        "skeleton": (
+            skeleton[:num_vars, :num_vars, :] if refine == "shrink" else skeleton
+        ),
+        "grow_history": grow_history,
+        # gates: the floor applied (0 = off); shrink: shrink_effect_floor (None = off)
+        "effect_floor": effect_floor if refine == "gates" else shrink_effect_floor,
+        "n_effect_pruned": n_effect_pruned,
         "skeleton_density": skeleton_density,
         "n_skeleton_edges": n_skeleton_edges,
         "lambda_l0": lambda_l0,
-        "gate_threshold": gate_threshold,
+        "gate_threshold": cut,
+        "gate_threshold_rule": threshold_rule,
         "runtime": total_runtime,
         "runtime_skeleton": t_skeleton,
         "runtime_training": t_training,
@@ -2042,11 +3231,22 @@ def run_cdnots_gated(
 
     return GraceResult(
         graph=G_hat,
-        df=df,
+        df=df_input,
         var_names=list(df.columns),
         gate_values=gate_values,
         skeleton=info["skeleton"],
         lambda_l0=info.get("lambda_l0"),
-        gate_threshold=gate_threshold,
+        gate_threshold=cut,
+        gate_threshold_rule=threshold_rule,
+        grow_history=grow_history if grow_rounds > 0 else None,
+        effect_floor=info["effect_floor"],
+        n_effect_pruned=info["n_effect_pruned"] if gated_or_floored else None,
+        effect_pruned=effect_pruned,
+        ar_path=bool(ar_path),
+        lambda_rule=lambda_rule if refine == "gates" else None,
         runtime=info.get("runtime"),
+        refine=refine,
+        edge_pvalue=edge_pvalue,
+        edge_strength=edge_strength,
+        contemporaneous_result=contemporaneous_result,
     )

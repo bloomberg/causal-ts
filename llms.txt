@@ -6,8 +6,9 @@
 
 - **CDNOTS** — Constraint-based causal discovery for nonstationary time series. Detects nonstationarity via a time-index variable C. Fast with linear CI tests, works well for small-to-medium dimensionality.
 - **CEDAR** — Causal Edge Discovery for AutoRegressive processes. Uses lag selection (distance correlation) followed by pairwise CI testing. Most scalable algorithm (linear in d). Includes MCI pruning.
-- **GRACE** — Hybrid method: CDNOTS skeleton + neural gated refinement with L0 regularization (Hard Concrete gates). Best for high-dimensional data (d >= 20). Automatically prunes false positives.
-- **GRACE-SS** — GRACE with stability selection. Sweeps L0 penalties and keeps edges that appear consistently. Experimental — not suitable for large dimensions, use `run_cdnots_gated()` (GRACE) instead for high-d problems.
+- **GRACE** (`run_grace`) — Hybrid method: a directed candidate graph (CDNOTS by default, or any method's graph) + neural gated refinement with L0 regularization (Hard Concrete gates). Best for high-dimensional data (d >= 20). Automatically prunes false positives.
+- **REAP** (`run_reap`) — Same candidate graph, refined by a regression-based grow-shrink: grow rounds add missed lagged parents, then backward elimination drops each target's weak parents by partial F-tests. No training, much faster than GRACE.
+- **GRACE-SS** — GRACE with stability selection. Sweeps L0 penalties and keeps edges that appear consistently. Experimental — not suitable for large dimensions, use `run_grace()` instead for high-d problems.
 - **LUCID** — Not a discovery algorithm but a *correction* applied to a discovered graph, for when the causal-sufficiency assumption fails (unobserved common causes). Infers from the VAR-residual spectrum whether latent confounding is **sparse** (few affected variables) or **pervasive** (a factor loading on everything), then applies the matching correction — the two need opposite treatments and the wrong one is damaging. Composes with any engine via `res.deconfound()`.
 
 ## CLI Usage
@@ -128,19 +129,22 @@ result = run_cedar(
 ### GRACE
 
 ```python
-from causalts.grace import run_cdnots_gated, run_stability_selection
+from causalts import run_grace, run_reap
+from causalts.grace import run_stability_selection
 
-# Single-shot gated refinement
-res = run_cdnots_gated(
-    df=df,
-    max_lag=3,
-    gate_threshold=0.5,
-    device="cpu",       # or "cuda", "mps"
-    model_seed=42,
-)
-res.cg_tig        # binary numpy array shape (n_vars, n_vars, max_lag+1)
-res.gate_values   # learned Hard-Concrete gate values
-res.skeleton      # the CDNOTS skeleton before gating
+# GRACE: neural gated refinement (the GRACE paper configuration by default)
+res = run_grace(df, max_lag=3, model_seed=42)   # device: auto ("cuda", "mps", "cpu")
+res.cg_tig           # binary numpy array shape (n_vars, n_vars, max_lag+1)
+res.gate_values      # learned Hard-Concrete gate values (cross edges; self-loops are F-tested, 0 here)
+res.candidate_graph  # the candidate graph that was refined, incl. grow-round additions
+
+# Refine another method's directed graph instead of the default CDNOTS one
+res = run_grace(df, max_lag=3, candidate_graph=G_other)   # shape (n_vars, n_vars, max_lag+1)
+
+# REAP: regression-based refinement (no training; backward elimination by partial F-tests,
+# three grow rounds by default)
+res_reap = run_reap(df, max_lag=3)
+res_reap.edge_pvalue, res_reap.edge_strength
 
 # With stability selection (more robust)
 res_ss = run_stability_selection(
@@ -152,7 +156,7 @@ res_ss = run_stability_selection(
     model_seed=42,
 )
 res_ss.cg_tig, res_ss.stability_scores
-# Both return a GraceResult (a CausalResult subclass) — NOT a tuple. Like every other
+# All return a GraceResult (a CausalResult subclass) — NOT a tuple. Like every other
 # result object it carries .plot() and the DoWhy bridge methods directly.
 ```
 
@@ -371,7 +375,7 @@ GPU tests accept `device="cpu"/"cuda"/"mps"`. CDNOTS and CEDAR overwrite CI test
 - **CDNOTS** — Constraint-based discovery for time series. Works well for d < 20 variables. Use `alpha=0.01` for best results.
 - **CDNOTS+** (`run_cdnots_plus`) — Adds MCI two-phase skeleton. Strongly recommended for scale-free (hub-structured) graphs: +0.12 mean F1 on scale-free vs plain CDNOTS. Neutral or slightly negative on Erdős–Rényi and small-world. Requires `alpha=0.01`. At `alpha=0.05`, CDNOTS+ is net negative.
 - **CEDAR** — Most scalable algorithm. Linear complexity in d. Best when you have many variables with pairwise relationships. Includes lag selection to find the most important lags automatically.
-- **GRACE** (`run_cdnots_gated`) — Use for d >= 10-20 variables where CDNOTS produces too many false positives. The neural gated refinement prunes spurious edges. Recommended over GRACE-SS for practical use.
+- **GRACE** (`run_grace`) — Use for d >= 10-20 variables where CDNOTS produces too many false positives. The neural gated refinement prunes spurious edges. Recommended over GRACE-SS for practical use.
 - **GRACE-SS** (`run_stability_selection`) — Experimental. Multi-lambda sweep for more robust edge selection, but computationally expensive and not suitable for large dimensions. Use GRACE instead for high-d.
 - **Quick rule:** d < 10 → CDNOTS or CDNOTS+. d = 10-20 → CDNOTS+ (if hub-structured) or GRACE. d > 20 → GRACE or CEDAR.
 

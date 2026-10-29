@@ -18,9 +18,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * `run_cdnots(collider_search="full"|"sepset")`: which conditioning sets the lag-0 collider
   vote searches. `run_cdnots_plus(return_prefix=True)` + `finish_cdnots_plus()` reuse one
   skeleton for several `orient_margin` values.
+* `run_grace` and `run_reap` (`causalts.run_grace`, `causalts.run_reap`), two refinements of a
+  directed candidate graph: any method's graph passed as `candidate_graph=`, or a CDNOTS graph
+  built on the data. GRACE refines it with neural Hard Concrete gates under an L0 penalty.
+  REAP refines it by a regression-based grow-shrink: per target, the weakest candidate parent is dropped while a
+  partial F-test on its natural-spline block (Huber-clipped residuals) says it adds nothing;
+  three grow rounds by default; optional lag-0 edges (`contemporaneous=True`, CDNOTS+ with the
+  lagged edges pinned) and an adaptive effect floor (`effect_floor="adaptive"`). Both call
+  `run_cdnots_gated(refine="gates" | "shrink")`. `reap` is a registered algorithm, and
+  `causal-ts discover --algorithm reap` is the same as `--algorithm grace --refine shrink`.
+* GRACE stages and options on `run_grace` / `run_cdnots_gated` (CLI flags in parentheses):
+  grow rounds that test the lagged pairs outside the candidates, for an effect on the mean and
+  on the noise scale, and add the hits (`grow_rounds`, `grow_q`, `grow_transform`,
+  `grow_variance`, `grow_nuisance_basis`; `--grow-rounds`); an ungated autoregressive head
+  whose self-loops are kept by a partial F-test (`ar_path`, `self_loop_basis`; `--ar-path`);
+  a cutoff chosen from the gate values (`gate_threshold="auto" | "li"`); closed-form L0
+  strengths (`lambda_rule="xcorr" | "density" | "dT"`; `--lambda-rule`); a minimum edge effect
+  as an adjusted partial R² (`effect_floor`; `--effect-floor`); a rank transform
+  (`data_transform`) and a Student-t likelihood (`noise_model`). New `GraceResult` fields:
+  `candidate_graph`, `gate_threshold_rule`, `grow_history`, `effect_floor`, `n_effect_pruned`,
+  `effect_pruned`, `ar_path`, `lambda_rule`, `refine`, `edge_pvalue`, `edge_strength`,
+  `contemporaneous_result`.
 
 ### Changed
 
+* GRACE defaults to the configuration evaluated in the GRACE paper: rank-transformed data,
+  a Student-t likelihood, `lambda_rule="xcorr"` (bounded, scales with the data's background
+  lagged cross-correlation; was the density formula), one grow round with noise-scale
+  candidates, the autoregressive head with F-tested self-loops (when `max_lag >= 1`),
+  `gate_threshold="auto"` (was 0.5) and `effect_floor=1-exp(-0.02)`. Results change. Under
+  the default `ar_path`, self-loop entries of `gate_values` are 0, so bootstrap on
+  `cg_tig != 0` rather than on gate values.
+* A supplied candidate graph (`skeleton=` on `run_cdnots_gated`) is a starting point, not a
+  boundary: grow rounds can add lagged edges and the self-loop test can add self-loops. Pass
+  `grow_rounds=0, ar_path=False` to keep the result inside it.
+* `run_cdnots_gated`: `lambda_rule` follows `lambda_cv`, so `impute`, `impute_kwargs` and
+  `discrete_cols` moved one position; pass them by keyword.
+* `run_cdnots_plus` wraps a CI test that cannot handle discrete columns in `StratifiedCIT`,
+  as `run_cdnots` does (it detected discrete columns but passed e.g. `ParCorrGPU` through
+  unchanged). Results change only when discrete columns are detected or given;
+  `discrete_cols=[]` restores the old behaviour. A CI test class can declare
+  `handles_discrete = True` to skip the wrap.
 * `sigkci` / `SigKCIGPU` renamed to `linsig` / `LinSigCIGPU` (old names deprecated). Results
   change: kernel-scaled ridge (`ridge`, replaces `lamda`), no spurious lag-2 self-loops.
 * `RCOTGPU` defaults: `num_f2=min(25, floor(sqrt(T)))`, `n_avg=1`, `seed=42`
@@ -42,6 +80,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `StratifiedCIT` passes `set_lag_structure` on to the test it wraps, so a wrapped lag-aware
+  test learns the lag layout; its cache resets when the layout changes. A row missing a
+  discrete conditioning value no longer makes an empty stratum that turned stratification off
+  for that test, and the inner test's data is restored if a stratum test raises.
+* `CausalLearnChisq` / `CausalLearnGsq` are categorical tests, and CDNOTS no longer wraps them
+  in `StratifiedCIT`.
 * `CIT_Base.set_data` wrote buffered cache rows into the new data's cache file.
 * `RCOTGPU` p-values depended on the order of the conditioning set.
 * `ParCorrGPU.batch_test` (precision method) now runs the same

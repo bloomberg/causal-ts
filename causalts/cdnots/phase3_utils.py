@@ -589,11 +589,46 @@ def _majority_collider_step(
 
 
 def _is_discrete_aware(indep_test):
-    """Return True if the CI test natively handles discrete columns."""
+    """Return True if the CI test natively handles discrete columns.
+
+    A test class can declare that with ``handles_discrete = True``.
+    """
     from ..ci_tests.cmiknn_mixed_gpu import CMIknnMixedGPU
     from ..ci_tests.stratified_cit import StratifiedCIT
 
-    return isinstance(indep_test, (StratifiedCIT, CMIknnMixedGPU))
+    return isinstance(indep_test, (StratifiedCIT, CMIknnMixedGPU)) or bool(
+        getattr(indep_test, "handles_discrete", False)
+    )
+
+
+def _resolve_discrete(df, indep_test, discrete_cols):
+    """``(discrete_cols, indep_test)`` for the CDNOTS entry points.
+
+    ``discrete_cols=None`` auto-detects (with a warning if the test then needs
+    wrapping), ``[]`` opts out, a list names the columns. A test that cannot
+    handle discrete columns is wrapped in ``StratifiedCIT``.
+    """
+    if discrete_cols is None:
+        discrete_cols = _detect_discrete_cols(df, df.shape[0])
+        if discrete_cols and not _is_discrete_aware(indep_test):
+            warnings.warn(
+                f"Detected discrete columns: {discrete_cols}. "
+                f"Your CI test ({type(indep_test).__name__}) does not natively handle "
+                "discrete data — wrapping it in StratifiedCIT for correct conditioning. "
+                "Pass discrete_cols=[] to disable auto-wrapping.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+    if discrete_cols and not _is_discrete_aware(indep_test):
+        from ..ci_tests.stratified_cit import StratifiedCIT
+
+        indep_test = StratifiedCIT(
+            data=np.zeros((2, 2)),
+            discrete_cols=[],
+            inner_cit=indep_test,
+        )
+    return discrete_cols, indep_test
 
 
 def _resolve_knowledge(
@@ -761,30 +796,7 @@ def cdnots_discovery(
         raise ValueError(
             "collider_search must be 'full' or 'sepset', " f"got {collider_search!r}"
         )
-    # --- Discrete column handling ---
-    # discrete_cols=None  → auto-detect from df
-    # discrete_cols=[]    → explicit "no discrete columns" (opt-out)
-    # discrete_cols=[...] → user-specified column names
-    if discrete_cols is None:
-        discrete_cols = _detect_discrete_cols(df, df.shape[0])
-        if discrete_cols and not _is_discrete_aware(indep_test):
-            warnings.warn(
-                f"Detected discrete columns: {discrete_cols}. "
-                f"Your CI test ({type(indep_test).__name__}) does not natively handle "
-                "discrete data — wrapping it in StratifiedCIT for correct conditioning. "
-                "Pass discrete_cols=[] to disable auto-wrapping.",
-                UserWarning,
-                stacklevel=2,
-            )
-
-    if discrete_cols and not _is_discrete_aware(indep_test):
-        from ..ci_tests.stratified_cit import StratifiedCIT
-
-        indep_test = StratifiedCIT(
-            data=np.zeros((2, 2)),
-            discrete_cols=[],
-            inner_cit=indep_test,
-        )
+    discrete_cols, indep_test = _resolve_discrete(df, indep_test, discrete_cols)
 
     _IMPUTE_CHOICES = {None, "pairwise_complete", "var_em", "causal_iterative"}
     impute_kwargs = impute_kwargs or {}
@@ -1088,7 +1100,9 @@ def run_cdnots(
     impute_kwargs : dict or None
         Extra kwargs for imputation.
     discrete_cols : list or None
-        Discrete column names (auto-detected if None).
+        Discrete column names (auto-detected if None; ``[]`` opts out). A CI
+        test that cannot handle discrete columns is wrapped in
+        ``StratifiedCIT``.
     background_knowledge : BackgroundKnowledge or None
         Domain constraints (forbidden/required edges).
     lag_verify : bool
@@ -1222,7 +1236,9 @@ def run_cdnots_plus(
     impute_kwargs : dict or None
         Extra kwargs for imputation.
     discrete_cols : list or None
-        Discrete column names (auto-detected if None).
+        Discrete column names (auto-detected if None; ``[]`` opts out). A CI
+        test that cannot handle discrete columns is wrapped in
+        ``StratifiedCIT``.
     background_knowledge : BackgroundKnowledge or None
         Domain constraints (forbidden/required edges).
     lag_verify : bool
@@ -1265,8 +1281,7 @@ def run_cdnots_plus(
     ``result.to_marks()``.
     """
     validate_priority(priority)
-    if discrete_cols is None:
-        discrete_cols = _detect_discrete_cols(df, df.shape[0])
+    discrete_cols, indep_test = _resolve_discrete(df, indep_test, discrete_cols)
 
     _IMPUTE_CHOICES = {None, "pairwise_complete", "var_em", "causal_iterative"}
     impute_kwargs = impute_kwargs or {}

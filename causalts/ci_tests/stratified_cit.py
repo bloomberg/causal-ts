@@ -65,12 +65,13 @@ class StratifiedCIT(CIT_Base):
     For CI tests where the conditioning set Z contains discrete columns:
     partitions the sample into strata defined by the joint discrete values,
     runs the inner CI test on continuous Z within each stratum, then combines
-    stratum p-values via Fisher's method (-2·Σlog(p) ~ χ²(2k)).
+    stratum p-values via Fisher's method (-2·Σlog(p) ~ χ²(2k)). Rows missing a
+    discrete conditioning value belong to no stratum.
 
     Falls back to the inner CI test directly when:
     - No discrete columns appear in the conditioning set
-    - The number of strata exceeds max_strata
-    - Any stratum has fewer than min_stratum observations
+    - The number of strata exceeds max_strata, or there is none
+    - Any stratum has fewer than min_stratum complete observations
 
     Parameters
     ----------
@@ -85,7 +86,8 @@ class StratifiedCIT(CIT_Base):
     max_strata : int, default 8
         Maximum number of strata before falling back to inner_cit on full data.
     min_stratum : int, default 30
-        Minimum rows per stratum before falling back.
+        Minimum rows per stratum with X, Y and the continuous conditioning
+        columns observed, before falling back.
     """
 
     def __init__(
@@ -116,39 +118,58 @@ class StratifiedCIT(CIT_Base):
 
     data = property(get_data, set_data)
 
+    def set_lag_structure(self, n_vars, lags):
+        """Pass the lag embedding on to the inner test, if it uses one.
+
+        Cached results are dropped: CDNOTS+ re-embeds with the same leading
+        columns, so a key built from the data alone would return the result
+        computed under the old layout.
+        """
+        if hasattr(self.inner_cit, "set_lag_structure"):
+            self.inner_cit.set_lag_structure(n_vars=n_vars, lags=lags)
+            self.pvalue_cache = {}
+
     def __call__(self, X, Y, condition_set=None):
         self.n_tests += 1
         if condition_set is None:
             condition_set = []
 
+        disc_in_z = [c for c in condition_set if c in self._disc_set]
+        cont_in_z = [c for c in condition_set if c not in self._disc_set]
+
         cache_key = self._get_array_hash(X, Y, condition_set)
-        cache_key = f"strat-{cache_key}"
+        # Which conditioning columns are stratified on is part of the key.
+        disc_key = ",".join(str(c) for c in sorted(disc_in_z))
+        cache_key = f"strat-{cache_key}-{disc_key}"
         combined_hash = (cache_key, "stratified")
         if combined_hash in self.pvalue_cache:
             return self.pvalue_cache[combined_hash]
-
-        disc_in_z = [c for c in condition_set if c in self._disc_set]
-        cont_in_z = [c for c in condition_set if c not in self._disc_set]
 
         if not disc_in_z:
             p, stat = self.inner_cit(X, Y, condition_set)
             self.pvalue_cache[combined_hash] = (p, stat)
             return p, stat
 
-        # Partition rows by joint value of discrete conditioning columns
+        # Partition rows by joint value of discrete conditioning columns. A
+        # row missing one of them belongs to no stratum.
         data = self._data
         disc_vals = data[:, disc_in_z]
-        unique_combos = np.unique(disc_vals, axis=0)
+        valid = ~np.isnan(disc_vals).any(axis=1)
+        unique_combos = np.unique(disc_vals[valid], axis=0)
 
-        if len(unique_combos) > self.max_strata:
+        if not len(unique_combos) or len(unique_combos) > self.max_strata:
             p, stat = self.inner_cit(X, Y, condition_set)
             self.pvalue_cache[combined_hash] = (p, stat)
             return p, stat
 
+        # min_stratum counts the rows the inner test can use: it drops rows
+        # missing X, Y or a continuous conditioning value.
+        used = np.concatenate([np.atleast_1d(X), np.atleast_1d(Y), cont_in_z])
+        complete = ~np.isnan(data[:, used.astype(int)]).any(axis=1)
         pvals = []
         for combo in unique_combos:
-            mask = np.all(disc_vals == combo, axis=1)
-            if mask.sum() < self.min_stratum:
+            mask = np.all(disc_vals == combo, axis=1) & valid
+            if (mask & complete).sum() < self.min_stratum:
                 # Fall back: too few observations in this stratum
                 p, stat = self.inner_cit(X, Y, condition_set)
                 self.pvalue_cache[combined_hash] = (p, stat)
@@ -162,11 +183,11 @@ class StratifiedCIT(CIT_Base):
 
     def _test_stratum(self, X, Y, cont_in_z, mask):
         """Run inner_cit on the subset of rows defined by mask."""
-        stratum_data = self._data[mask]
-        self.inner_cit.data = stratum_data
-        p, stat = self.inner_cit(X, Y, cont_in_z)
-        self.inner_cit.data = self._data  # restore
-        return p, stat
+        self.inner_cit.data = self._data[mask]
+        try:
+            return self.inner_cit(X, Y, cont_in_z)
+        finally:
+            self.inner_cit.data = self._data  # restore
 
     @staticmethod
     def _fisher_combine(pvals):

@@ -1,6 +1,6 @@
 ---
 html_meta:
-  "description": "Causal discovery for nonstationary time series — CDNOTS, CDNOTS+, CEDAR, GRACE, GPU-accelerated CI tests"
+  "description": "Causal discovery for nonstationary time series — CDNOTS, CDNOTS+, CEDAR, GRACE, REAP, GPU-accelerated CI tests"
 ---
 
 ```{toctree}
@@ -98,7 +98,7 @@ Causal Edge Discovery for Autoregressive processes with minimum-lag selection (d
 
 **Hybrid neural**
 ^^^
-Constraint-based skeleton + neural L0-gated refinement (Hard Concrete). Orientation from skeleton algorithm, edge existence from gate values.
+Constraint-based candidate graph + neural L0-gated refinement (Hard Concrete). Orientation from the candidate graph; cross edges from gate values and a minimum effect, self-loops from an F-test. REAP is the regression-based alternative.
 
 +++
 {bdg-light}`O(d²)+NN` {bdg-primary-line}`gate pruning` {bdg-secondary-line}`precise`
