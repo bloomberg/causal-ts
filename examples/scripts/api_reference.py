@@ -22,7 +22,7 @@
 # | 1 | [CI Tests](#1-conditional-independence-tests) | KCIGPU, RCOTGPU, PartialCorr, ParCorrGPU, CMIKNN, CMIknnGPU, GCMIGPU, **SplitKCIGPU**, **DFCITGPU**, **SigKCIGPU**, **StratifiedCIT**, **CMIknnMixedGPU** |
 # | 2 | [CDNOTS](#2-cdnots) | Constraint-based causal discovery for nonstationary time series |
 # | 3 | [CEDAR](#3-cedar) | Scalable discovery via minimum-lag selection |
-# | 4 | [GRACE](#4-grace) | Neural gated refinement with L0 regularization |
+# | 4 | [GRACE and REAP](#4-grace) | Refine a candidate graph: neural gates with L0 regularization (GRACE) or a regression-based grow-shrink (REAP) |
 # | 5 | [LUCID](#5-lucid) | Latent-confounder correction: regime-adaptive deconfounding of a discovered graph |
 # | 6 | [Plotting](#6-plotting) | Graph visualization, comparison, metrics, p-values |
 # | 7 | [Synthetic Data](#7-synthetic-data) | Random SCP graph generation for benchmarking |
@@ -53,7 +53,7 @@ from causalts.ci_tests import SigKCIGPU
 from causalts import run_cdnots, run_cdnots_plus, make_c_array
 
 from causalts.cedar import run_cedar, Cedar
-from causalts.grace import run_cdnots_gated
+from causalts import run_grace, run_reap
 from causalts.effects.tigramite_effects import TigramiteEffects, pathwise_effects
 from causalts.utils import evaluate_graph
 from causalts.synthetic_data.synthetic_datasets import SCPGraphGenerator
@@ -252,7 +252,7 @@ print(f"Dataset B: {df_b.shape}, {len(names_b)} vars, max_lag={maxlag_b}")
 #
 # **Key method:** `batch_test(tests, max_batch_size=2048)` — evaluate a list of `(X, Y, condition_set)` tuples in vectorized GPU operations, grouped by conditioning set size.
 #
-# > **Note:** `ParCorrGPU` supports CUDA, MPS (Apple Silicon), and CPU. GRACE auto-selects `ParCorrGPU` when a GPU is available.
+# > **Note:** `ParCorrGPU` supports CUDA, MPS (Apple Silicon), and CPU. GRACE's candidate graph uses `ParCorrGPU` when CUDA is available, and the CPU `PartialCorr` otherwise.
 #
 # ---
 #
@@ -915,74 +915,118 @@ print(f"VAR-EM imputed:    {cedar_varem.n_tests} tests, {int(cedar_varem.cg_tig.
 
 # %% [markdown]
 # <a id="4-grace"></a>
-# # 4. GRACE
+# # 4. GRACE and REAP
 #
-# Two-stage framework: CDNOTS skeleton + neural gated refinement with L0 regularization.
+# Both refine a directed candidate graph: another method's graph passed as `candidate_graph`, or a high-recall CDNOTS graph built on the data. GRACE refines it with a neural gated model under an L0 penalty, after a grow round for the pairs it missed. REAP grows and prunes each target's candidate parents by regression (three grow rounds by default).
 #
 # ```python
-# from causalts.grace import run_cdnots_gated
+# from causalts import run_grace, run_reap
 # from causalts.utils import evaluate_graph
 # ```
 #
-# <a id="run_cdnots_gated"></a>
-# ## `run_cdnots_gated`
+# <a id="run_grace"></a>
+# ## `run_grace`
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# causalts.grace.<strong>run_cdnots_gated</strong>(<em>df, max_lag, alpha=0.05, ci_test_class=None, skeleton=None, skeleton_runtime=0.0, gate_threshold=0.5, normalize=True, max_epochs=150, batch_size=None, patience=20, device=None, verbose=True, ground_truth=None, model_seed=None, include_C_in_model=False, lambda_cv=False, impute=None, impute_kwargs=None, discrete_cols=None, **model_kwargs</em>) → <em>GraceResult</em>
+# causalts.<strong>run_grace</strong>(<em>df, max_lag: int, *, candidate_graph: Optional[numpy.ndarray] = None, alpha: float = 0.05, ci_test_class=None, include_C: bool = True, include_C_in_model: bool = False, c_preset: str = 'linear', data_transform: Optional[str] = 'rank', impute: Optional[str] = None, impute_kwargs: Optional[dict] = None, discrete_cols=None, grow_rounds: int = 1, grow_q: float = 0.1, grow_transform: Optional[str] = None, grow_variance: Optional[bool] = None, grow_nuisance_basis: Optional[str] = 'spline', effect_floor: float = EFFECT_FLOOR, ar_path: Optional[bool] = None, self_loop_basis: str = 'union', gate_threshold: Union[float, str] = 'auto', lambda_rule: str = 'xcorr', lambda_cv: bool = False, noise_model: str = 'student_t', normalize: bool = True, max_epochs: int = 150, batch_size: Optional[int] = None, patience: int = 20, device: Optional[str] = None, model_seed: Optional[int] = None, verbose: bool = True, ground_truth: Optional[numpy.ndarray] = None, candidate_runtime: float = 0.0, ci_test=None, **model_kwargs</em>) → <em>GraceResult</em>
 # </div>
 #
-# Run CDNOTS skeleton discovery followed by single gated neural refinement.
+# Build or take a candidate graph, then refine it. With the defaults: one grow round adds lagged pairs the candidates missed (effects on the mean and on the noise scale); a gated model with the `"xcorr"` L0 strength selects cross edges, cut at the `auto` cutoff; self-loops come from an ungated autoregressive head and a partial F-test; and cross edges below the minimum effect `effect_floor` are removed. Same as `run_cdnots_gated(..., refine="gates")`.
 #
 # <div style="border-left: 3px solid #ddd; padding-left: 16px; margin: 12px 0;">
 #
-# **Parameters:**
+# **Parameters** (main ones; see the docstring for all):
 #
 # <dl style="margin-left: 8px;">
 # <dt><strong>df</strong> : <em>DataFrame</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Time series data (T, d).</dd>
 # <dt><strong>max_lag</strong> : <em>int</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Maximum lag.</dd>
+# <dt><strong>candidate_graph</strong> : <em>ndarray or None, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Directed candidate graph, shape (d, d, max_lag+1): a non-zero <code>candidate_graph[cause, effect, lag]</code> marks cause(t-lag) → effect(t). Any method's graph; None builds a CDNOTS graph. The grow round can add lagged edges and the self-loop test self-loops; pass <code>grow_rounds=0, ar_path=False</code> to stay inside it.</dd>
 # <dt><strong>alpha</strong> : <em>float, default=0.05</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Significance level for CDNOTS skeleton.</dd>
-# <dt><strong>ci_test_class</strong> : <em>class, default=None</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">CI test class (default: auto-select ParCorr).</dd>
-# <dt><strong>skeleton</strong> : <em>ndarray, default=None</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Pre-computed binary skeleton array (d, d, max_lag+1). Skips CDNOTS phase if provided.</dd>
-# <dt><strong>skeleton_runtime</strong> : <em>float, default=0.0</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Wall-clock time of the pre-computed skeleton (for reporting).</dd>
-# <dt><strong>gate_threshold</strong> : <em>float, default=0.5</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Threshold for gate values.</dd>
-# <dt><strong>normalize</strong> : <em>bool, default=True</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Z-score normalize data before training.</dd>
-# <dt><strong>max_epochs</strong> : <em>int, default=150</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Maximum training epochs.</dd>
-# <dt><strong>batch_size</strong> : <em>int, default=None</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Batch size (<code>None</code> = auto).</dd>
-# <dt><strong>patience</strong> : <em>int, default=20</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Early stopping patience.</dd>
-# <dt><strong>device</strong> : <em>str, default=None</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;"><code>'cuda'</code>, <code>'mps'</code>, <code>'cpu'</code>, or <code>None</code> (auto-detect).</dd>
-# <dt><strong>verbose</strong> : <em>bool, default=True</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Print progress.</dd>
-# <dt><strong>ground_truth</strong> : <em>ndarray, default=None</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">If given, logs evaluation metrics.</dd>
-# <dt><strong>model_seed</strong> : <em>int, default=None</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Random seed for reproducibility.</dd>
-# <dt><strong>include_C_in_model</strong> : <em>bool, default=False</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Include the time-index node C as input to the neural model. C-related edges are stripped from the output graph.</dd>
-# <dt><strong>lambda_cv</strong> : <em>bool, default=False</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Use cross-validation for lambda selection instead of the adaptive formula.</dd>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">CDNOTS significance level for the candidate graph (unused when <code>candidate_graph</code> is given).</dd>
+# <dt><strong>include_C</strong> : <em>bool, default=True</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Include the C nonstationarity node in the CDNOTS candidate graph.</dd>
+# <dt><strong>c_preset</strong> : <em>str, default='linear'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">C basis preset (as in <code>run_cdnots</code>).</dd>
+# <dt><strong>data_transform</strong> : <em>{'rank', None}, default='rank'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Map continuous columns to normal scores of their ranks first.</dd>
 # <dt><strong>impute</strong> : <em>str or None, default=None</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Missing-value strategy. <code>None</code> — no imputation. <code>'var_em'</code> — iterative VAR-EM.</dd>
-# <dt><strong>impute_kwargs</strong> : <em>dict or None</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Extra keyword arguments forwarded to the imputer.</dd>
-# <dt><strong>discrete_cols</strong> : <em>list or None</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Column names or indices of discrete variables.</dd>
+# <dt><strong>grow_rounds</strong> : <em>int, default=1</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Grow rounds: test the lagged pairs outside the candidates, add the hits, retrain.</dd>
+# <dt><strong>grow_variance</strong> : <em>bool or None, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Grow rounds also test parents of the noise scale (None: on with a grow round).</dd>
+# <dt><strong>effect_floor</strong> : <em>float, default=EFFECT_FLOOR (≈0.0198)</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Minimum adjusted partial R² of a grown or final cross edge; 0 turns it off.</dd>
+# <dt><strong>ar_path</strong> : <em>bool or None, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Ungated autoregressive head; self-loops decided by a partial F-test (None: on when <code>max_lag &gt;= 1</code>).</dd>
+# <dt><strong>gate_threshold</strong> : <em>float, 'auto' or 'li', default='auto'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Cutoff on the cross-edge gates, chosen from the data under 'auto' / 'li'.</dd>
+# <dt><strong>lambda_rule</strong> : <em>{'xcorr', 'density', 'dT'}, default='xcorr'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Closed-form rule for the L0 strength.</dd>
+# <dt><strong>max_epochs</strong> : <em>int, default=150</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Training epochs.</dd>
+# <dt><strong>device</strong> : <em>str or None, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">'cuda', 'mps', 'cpu', or None to detect.</dd>
+# <dt><strong>model_seed</strong> : <em>int or None, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Seed of the gated model.</dd>
 # <dt><strong>**model_kwargs</strong> : <em>dict</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Forwarded to GatedCausalDiscovery (e.g. <code>hidden_dim</code>, <code>lr</code>).</dd>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Forwarded to GatedCausalDiscovery (e.g. <code>hidden_size</code>, <code>lr</code>).</dd>
 # </dl>
 #
-# **Returns:** `GraceResult` — Result object with attributes `cg_tig` (binary graph), `gate_values` (continuous gate values), `skeleton`, `lambda_l0`, `gate_threshold`, `runtime`, and inherited plotting / DoWhy bridge methods.
+# **Returns:** `GraceResult` — `cg_tig` (final graph), `gate_values` (gates of the candidate cross edges; self-loops are 0 under the autoregressive head, and edges in `effect_pruned` keep their gates although the effect floor removed them), `candidate_graph` (the candidate graph that was refined, including grow additions), `lambda_l0`, `lambda_rule`, `ar_path`, `gate_threshold`, `gate_threshold_rule`, `grow_history`, `effect_floor`, `n_effect_pruned`, `effect_pruned`, `runtime`, and inherited plotting / DoWhy bridge methods.
+#
+# </div>
+#
+# <a id="run_reap"></a>
+# ## `run_reap`
+#
+# <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
+# causalts.<strong>run_reap</strong>(<em>df, max_lag: int, *, candidate_graph: Optional[numpy.ndarray] = None, alpha: float = 0.05, ci_test_class=None, include_C: bool = True, include_C_in_model: bool = False, c_preset: str = 'linear', data_transform: Optional[str] = 'rank', impute: Optional[str] = None, impute_kwargs: Optional[dict] = None, discrete_cols=None, prune_alpha: float = 0.001, basis: str = 'spline', robust: bool = True, interactions: bool = False, effect_floor: Union[NoneType, str, float] = None, grow_rounds: int = 3, grow_q: float = 0.1, grow_transform: Optional[str] = 'rank', grow_nuisance_basis: Optional[str] = 'spline', contemporaneous: bool = False, contemporaneous_test='spline', contemporaneous_alpha: float = 0.001, verbose: bool = True, ground_truth: Optional[numpy.ndarray] = None, candidate_runtime: float = 0.0, ci_test=None, **kwargs</em>) → <em>GraceResult</em>
+# </div>
+#
+# Build or take a candidate graph, then prune each target's candidate parents by backward elimination: an additive regression with one feature block per parent, dropping the weakest parent while a partial F-test says it adds nothing. Nothing is trained. Same as `run_cdnots_gated(..., refine="shrink")` with the `shrink_` options renamed.
+#
+# <div style="border-left: 3px solid #ddd; padding-left: 16px; margin: 12px 0;">
+#
+# **Parameters** (main ones; see the docstring for all):
+#
+# <dl style="margin-left: 8px;">
+# <dt><strong>df</strong> : <em>DataFrame</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Time series data (T, d).</dd>
+# <dt><strong>max_lag</strong> : <em>int</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Maximum lag.</dd>
+# <dt><strong>candidate_graph</strong> : <em>ndarray or None, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Directed candidate graph, shape (d, d, max_lag+1): a non-zero <code>candidate_graph[cause, effect, lag]</code> marks cause(t-lag) → effect(t). Any method's graph; None builds a CDNOTS graph. The grow rounds can add lagged edges outside it; with <code>grow_rounds=0</code> the lagged edges of the result are inside it.</dd>
+# <dt><strong>alpha</strong> : <em>float, default=0.05</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">CDNOTS significance level for the candidate graph (unused when <code>candidate_graph</code> is given).</dd>
+# <dt><strong>include_C</strong> : <em>bool, default=True</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Include the C nonstationarity node in the CDNOTS candidate graph.</dd>
+# <dt><strong>c_preset</strong> : <em>str, default='linear'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">C basis preset (as in <code>run_cdnots</code>).</dd>
+# <dt><strong>data_transform</strong> : <em>{'rank', None}, default='rank'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Map continuous columns to normal scores of their ranks first.</dd>
+# <dt><strong>impute</strong> : <em>str or None, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Missing-value strategy. <code>None</code> — no imputation. <code>'var_em'</code> — iterative VAR-EM.</dd>
+# <dt><strong>prune_alpha</strong> : <em>float, default=0.001</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Significance level for keeping a parent (approximate fixed-basis F-tests).</dd>
+# <dt><strong>basis</strong> : <em>{'spline', 'rff'}, default='spline'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Feature block per lagged parent.</dd>
+# <dt><strong>robust</strong> : <em>bool, default=True</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Huber-clip residuals before each test.</dd>
+# <dt><strong>interactions</strong> : <em>bool, default=False</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Add pairwise products of each target's parents to the regressions.</dd>
+# <dt><strong>effect_floor</strong> : <em>None, 'adaptive' or float, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Remove lagged cross edges with a small unique effect after pruning.</dd>
+# <dt><strong>grow_rounds</strong> : <em>int, default=3</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Grow rounds after the first pruning (on rank-transformed data with the default <code>grow_transform='rank'</code>); stops early once a round adds nothing.</dd>
+# <dt><strong>contemporaneous</strong> : <em>bool, default=False</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Add lag-0 edges with CDNOTS+, lagged edges pinned to REAP's selection.</dd>
+# </dl>
+#
+# **Returns:** `GraceResult` — `cg_tig` (final graph), `edge_pvalue` and `edge_strength` (REAP's tests), `candidate_graph`, `grow_history`, `effect_pruned`, `runtime`, and inherited plotting / DoWhy bridge methods; `gate_values` is None.
 #
 # </div>
 
@@ -991,20 +1035,23 @@ print(f"VAR-EM imputed:    {cedar_varem.n_tests} tests, {int(cedar_varem.cg_tig.
 gen = SCPGraphGenerator(n_vars=25, max_lag=5)
 result = gen.sample(seed=42, T=2000)
 
-res = run_cdnots_gated(
-    df=result["df"], max_lag=result["max_lag"],
-    verbose=True, device="cpu", model_seed=42,
+res = run_grace(
+    result["df"], max_lag=result["max_lag"],
+    verbose=False, device="cpu", model_seed=42,
 )
-G_hat, gate_vals = res.cg_tig, res.gate_values
+G_hat, gate_vals = res.cg_tig, res.gate_values  # self-loops: F-tested, gate value 0
+print(res)
+print(f"lambda rule {res.lambda_rule}, cutoff rule {res.gate_threshold_rule}, "
+      f"grow history {res.grow_history}, removed by the effect floor: {res.n_effect_pruned}")
 
 # %%
 fig, axes = plt.subplots(1, 2, figsize=(10, 8))
 _,_,pos = tp.compare_graphs(
-    graph_true=result["ground_truth"], graph_discovered=res.skeleton,
-    var_names=result["var_names"], node_layout="neato",
+    graph_true=result["ground_truth"], graph_discovered=res.candidate_graph,
+    var_names=result["var_names"], node_layout="fdp",
     node_size=0.15, arrow_linewidth=3, link_label_fontsize=6,
-    title="Skeleton vs True Graph",
-    legend_loc=None,
+    title="Candidate set (after the grow round) vs True Graph",
+    legend_loc="lower left",
     tp_color='black',
     fig_ax=(fig, axes[0]),
     return_pos=True, node_label_size=8,
@@ -1014,7 +1061,7 @@ tp.compare_graphs(
     var_names=result["var_names"],
     node_size=0.15, arrow_linewidth=3, link_label_fontsize=6,
     title="GRACE vs True Graph",
-    legend_loc=None,
+    legend_loc="lower left",
     tp_color='black',
     fig_ax=(fig, axes[1]),
     node_pos=pos,
@@ -1027,9 +1074,17 @@ plt.show()
 skel_metrics = evaluate_graph(res.skeleton, result["ground_truth"])
 grace_metrics = evaluate_graph(G_hat, result["ground_truth"])
 
-print(f"{'Metric':<12} {'Skeleton':>10} {'GRACE':>10}")
+print(f"{'Metric':<12} {'Candidates':>10} {'GRACE':>10}")
 for k in ["Precision", "TPR", "F1", "SHD"]:
     print(f"{k:<12} {skel_metrics[k]:>10.3f} {grace_metrics[k]:>10.3f}")
+
+# %%
+# REAP on the same data: regression-based grow-shrink, nothing trained
+res_reap = run_reap(result["df"], max_lag=result["max_lag"], verbose=False)
+m_reap = evaluate_graph(res_reap.cg_tig, result["ground_truth"])
+print(res_reap)
+print(f"REAP: Precision={m_reap['Precision']:.3f}  TPR={m_reap['TPR']:.3f}  "
+      f"F1={m_reap['F1']:.3f}  SHD={m_reap['SHD']}  ({res_reap.runtime:.1f}s)")
 
 # %% [markdown]
 # ---
@@ -1742,7 +1797,7 @@ for k, v in metrics.items():
 #
 # Optional integration with [DoWhy](https://www.pywhy.org/dowhy/) for causal effect estimation, counterfactual analysis, and root cause attribution. Requires `pip install dowhy>=0.11` (or `pip install causalts[dowhy]`).
 #
-# Every built-in algorithm (`run_cdnots`, `run_cdnots_plus`, `SYPI`, `run_cdnots_gated`,
+# Every built-in algorithm (`run_cdnots`, `run_cdnots_plus`, `SYPI`, `run_grace`, `run_reap`,
 # `run_stability_selection`, `run_cedar`, `run_lucid`, ...) returns a `CausalResult`
 # subclass with these methods bound automatically: `res.estimate_effect(...)`.
 # `wrap_graph` is only needed for a **third-party algorithm that returns a plain
@@ -1879,7 +1934,7 @@ for k, v in metrics.items():
 #
 # ```python
 # from causalts.effects import wrap_graph
-# res = run_cdnots_gated(df, max_lag=3)
+# res = run_grace(df, max_lag=3)
 # cg = wrap_graph(res.cg_tig, df)
 # cg.estimate_effect("PKC", "Mek", treatment_lag=1)  # works identically
 # ```
@@ -1949,7 +2004,7 @@ for k, v in metrics.items():
 #
 # <dl style="margin-left: 8px;">
 # <dt><strong>graph</strong> : <em>ndarray (d, d, max_lag+1)</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Binary causal graph — use <code>result.cg_tig</code> from <code>run_cdnots</code>, or the first return of <code>run_cdnots_gated</code>.</dd>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Binary causal graph — use <code>result.cg_tig</code> from <code>run_cdnots</code>, or <code>result.cg_tig</code> from <code>run_grace</code>.</dd>
 # <dt><strong>df</strong> : <em>DataFrame (T, d)</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Original time-series data (not lag-embedded).</dd>
 # <dt><strong>X_var</strong> : <em>str or int</em></dt>

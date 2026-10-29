@@ -1,7 +1,7 @@
 # Causal-TS
 
 [![Release](https://img.shields.io/github/v/release/bloomberg/causal-ts?display_name=tag)](CHANGELOG.md)
-[![Documentation](https://readthedocs.org/projects/causal-ts/badge/?version=latest)](https://causal-ts.readthedocs.io/en/latest/)
+[![Documentation](https://img.shields.io/readthedocs/causal-ts/latest?label=docs)](https://causal-ts.readthedocs.io/en/latest/)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/bloomberg/causal-ts/badge)](https://scorecard.dev/viewer/?uri=github.com/bloomberg/causal-ts)
 [![Lint](https://github.com/bloomberg/causal-ts/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/marketplace/actions/super-linter)
 [![Tests](https://github.com/bloomberg/causal-ts/actions/workflows/test.yml/badge.svg)](https://github.com/bloomberg/causal-ts/actions/workflows/test.yml)
@@ -18,7 +18,7 @@ Causal-TS is a Python framework for causal discovery in time series data. It imp
 - **CDNOTS** — Constraint-based discovery handling nonstationarity via a time-index node.
 - **CDNOTS+** — PCMCI+-style two-phase skeleton (MCI conditioning) for improved precision on dense graphs.
 - **CEDAR** — Scalable pairwise discovery using minimum-lag selection. O(d²) complexity.
-- **GRACE** — Hybrid: CDNOTS skeleton + neural gated refinement with L0 regularization for high-dimensional data.
+- **GRACE / REAP** — Hybrid: a directed candidate graph (CDNOTS by default, or any method's graph) + grow-shrink refinement for high-dimensional data, by neural L0 gates (GRACE) or by regression (REAP).
 
 **CI Tests:** Run `causal-ts ci-test-info` for a full selection guide.
 

@@ -133,7 +133,7 @@ from .algorithms import list_algorithms as _list_algorithms  # noqa: E402
 
 ALGORITHM_CHOICES = _list_algorithms()
 # Everything else in ALGORITHM_CHOICES is a third-party plugin (see .algorithms).
-_BUILTIN_ALGORITHMS = ("cdnots", "cdnots+", "cedar", "grace", "grace-ss")
+_BUILTIN_ALGORITHMS = ("cdnots", "cdnots+", "cedar", "grace", "grace-ss", "reap")
 PLOT_FORMAT_CHOICES = ["png", "pdf", "svg"]
 DATASET_CHOICES = ["ex1", "ex2", "ex3", "henon"]
 LAG_SEL_CHOICES = ["partial_dcor", "dcor", "dcor_biased", "pearson", "lasso"]
@@ -142,7 +142,13 @@ DENSITY_CHOICES = ["sparse", "dense"]
 
 
 def _make_ci_test(name, data, device):
-    return create_ci_test(name, data, device=device)
+    try:
+        return create_ci_test(name, data, device=device)
+    except TypeError as e:
+        # CPU-only tests (parcorr, cmiknn, ...) take no device argument
+        if "unexpected keyword argument 'device'" not in str(e):
+            raise
+        return create_ci_test(name, data)
 
 
 def _make_output_dir(base, prefix):
@@ -170,6 +176,15 @@ def _parse_figsize(value):
     if len(parts) != 2:
         raise click.BadParameter("figsize must be two numbers: e.g. 10,8")
     return (float(parts[0]), float(parts[1]))
+
+
+def _parse_gate_threshold(ctx, param, value):
+    if value.strip().lower() in ("auto", "li"):
+        return value.strip().lower()
+    try:
+        return float(value)
+    except ValueError:
+        raise click.BadParameter("must be a number, 'auto' or 'li'")
 
 
 def _log(ctx, msg):
@@ -299,7 +314,7 @@ def inspect(data, var_names, max_lag):
     "--alpha",
     type=float,
     default=None,
-    help="Significance level for cdnots, cdnots+ and grace/grace-ss (default: 0.01 "
+    help="Significance level for cdnots, cdnots+ and grace/grace-ss/reap (default: 0.01 "
     "for cdnots+, 0.05 otherwise). Cedar uses --alpha-cond1/--alpha-cond2.",
 )
 @click.option(
@@ -414,9 +429,59 @@ def inspect(data, var_names, max_lag):
 )
 @click.option(
     "--gate-threshold",
+    type=str,
+    default="auto",
+    callback=_parse_gate_threshold,
+    help="Gate threshold for GRACE: 'auto' (default), 'li', or a number.",
+)
+@click.option(
+    "--grow-rounds",
+    type=int,
+    default=None,
+    help="GRACE/REAP grow rounds: re-test lagged pairs the candidate graph missed and "
+    "refine again (0 = off; default 1 for GRACE, 3 for REAP).",
+)
+@click.option(
+    "--effect-floor",
     type=float,
-    default=0.5,
-    help="Gate threshold for GRACE.",
+    default=None,
+    help="GRACE minimum edge effect (adjusted partial R^2) on grow admission and final "
+    "edges; default the library's EFFECT_FLOOR (~0.0198); 0 turns it off.",
+)
+@click.option(
+    "--ar-path/--no-ar-path",
+    default=None,
+    help="GRACE (--refine gates): ungated autoregressive head, self-loops decided by an "
+    "F-test. Default on when --max-lag >= 1.",
+)
+@click.option(
+    "--lambda-rule",
+    type=click.Choice(["xcorr", "density", "dT"]),
+    default=None,
+    help="GRACE (--refine gates): closed-form rule for the L0 strength. Default xcorr.",
+)
+@click.option(
+    "--refine",
+    type=click.Choice(["gates", "shrink"]),
+    default=None,
+    help="GRACE refinement: 'gates' (neural gated model, default) or 'shrink' "
+    "(regression-based backward elimination, i.e. REAP; same as --algorithm reap).",
+)
+@click.option(
+    "--shrink-effect-floor",
+    type=str,
+    default=None,
+    help="REAP: prune lagged cross edges with a small unique effect "
+    "after the shrink: 'adaptive' (per target, below max(0.01, 0.2 x its strongest "
+    "edge's adjusted partial R^2); for long series) or a fixed floor in [0, 1).",
+)
+@click.option(
+    "--contemporaneous",
+    is_flag=True,
+    default=False,
+    help="REAP: also find contemporaneous (lag-0) edges with "
+    "CDNOTS+, lagged edges pinned to REAP's selection. Writes "
+    "edge_marks.npy (keeps unoriented lag-0 edges as 'o-o').",
 )
 @click.option(
     "--stability-threshold",
@@ -532,6 +597,13 @@ def discover(
     include_autoreg,
     assume_ar1,
     gate_threshold,
+    grow_rounds,
+    effect_floor,
+    ar_path,
+    lambda_rule,
+    refine,
+    shrink_effect_floor,
+    contemporaneous,
     stability_threshold,
     max_epochs,
     batch_size,
@@ -549,13 +621,25 @@ def discover(
     window_frac,
 ):
     """Run causal discovery on a time series file (CSV, parquet, or feather)."""
+    if algorithm == "reap":
+        # REAP is GRACE's regression-based refinement (run_reap = refine="shrink").
+        if refine == "gates":
+            raise click.BadParameter(
+                "--refine gates contradicts --algorithm reap (REAP is the "
+                "regression-based refinement); use --algorithm grace for the gates.",
+                param_hint="--refine",
+            )
+        refine = "shrink"
+    elif refine is None:
+        refine = "gates"
+    is_grace = algorithm in ("grace", "reap")
     if alpha is None:
         # Each engine's own default: CDNOTS+ runs at 0.01, like run_cdnots_plus.
         alpha = 0.01 if algorithm == "cdnots+" else 0.05
-    if do_validate and algorithm in ("grace", "grace-ss"):
+    if do_validate and algorithm in ("grace", "grace-ss", "reap"):
         raise click.BadParameter(
-            "--validate is not supported for GRACE (bootstrapping neural-gate "
-            "training over many windows is impractical). Re-run the stability "
+            "--validate is not supported for GRACE or REAP (re-running the "
+            "refinement over many windows is impractical). Re-run the stability "
             "check with --algorithm cdnots or cedar.",
             param_hint="--validate",
         )
@@ -573,12 +657,99 @@ def discover(
             "causalts.bootstrap.temporal_bootstrap.",
             param_hint="--validate",
         )
-    if want_pvalues and algorithm in ("grace", "grace-ss"):
+    if want_pvalues and algorithm in ("grace", "grace-ss", "reap"):
         raise click.BadParameter(
-            "--pvalues is not supported for GRACE (it emits continuous gate "
-            "values, not a per-test p-value). Re-run with --algorithm cdnots "
-            "or cedar for p-values.",
+            "--pvalues is not supported for GRACE or REAP (gates emit continuous "
+            "gate values; REAP always writes edge_pvalue.npy). Re-run "
+            "with --algorithm cdnots or cedar for CI-test p-values.",
             param_hint="--pvalues",
+        )
+    if refine != "gates" and not is_grace:
+        raise click.BadParameter(
+            f"--refine {refine} applies only to --algorithm grace "
+            f"(got --algorithm {algorithm}).",
+            param_hint="--refine",
+        )
+    if contemporaneous and (not is_grace or refine != "shrink"):
+        raise click.BadParameter(
+            "--contemporaneous applies only to --algorithm reap (or --algorithm grace "
+            "--refine shrink) "
+            f"(got --algorithm {algorithm} --refine {refine}).",
+            param_hint="--contemporaneous",
+        )
+    if grow_rounds and not is_grace:
+        raise click.BadParameter(
+            f"--grow-rounds applies only to --algorithm grace or reap "
+            f"(got --algorithm {algorithm}).",
+            param_hint="--grow-rounds",
+        )
+    for flag, value in (("--ar-path", ar_path), ("--lambda-rule", lambda_rule)):
+        if value is not None and not is_grace:
+            raise click.BadParameter(
+                f"{flag} applies only to --algorithm grace (got --algorithm {algorithm}).",
+                param_hint=flag,
+            )
+    if effect_floor is not None and not is_grace:
+        raise click.BadParameter(
+            f"--effect-floor applies only to --algorithm grace "
+            f"(got --algorithm {algorithm}).",
+            param_hint="--effect-floor",
+        )
+    if shrink_effect_floor is not None:
+        if not is_grace or refine != "shrink":
+            raise click.BadParameter(
+                "--shrink-effect-floor applies only to --algorithm reap (or --algorithm "
+                "grace --refine shrink) "
+                f"(got --algorithm {algorithm} --refine {refine}).",
+                param_hint="--shrink-effect-floor",
+            )
+        if shrink_effect_floor != "adaptive":
+            try:
+                shrink_effect_floor = float(shrink_effect_floor)
+            except ValueError:
+                shrink_effect_floor = -1.0
+            if not 0 <= shrink_effect_floor < 1:
+                raise click.BadParameter(
+                    "--shrink-effect-floor must be 'adaptive' or a number in [0, 1).",
+                    param_hint="--shrink-effect-floor",
+                )
+    if algorithm == "reap" and effect_floor is not None:
+        # run_reap's effect_floor is REAP's own floor; the CLI keeps the two flags.
+        raise click.BadParameter(
+            "--effect-floor is GRACE's floor; REAP's floor is --shrink-effect-floor "
+            "('adaptive' or a number in [0, 1)).",
+            param_hint="--effect-floor",
+        )
+    if is_grace and refine == "shrink":
+        # --device is not listed: the CDNOTS skeleton's CI test still uses it.
+        ignored = [
+            flag
+            for flag, value, default in (
+                ("--gate-threshold", gate_threshold, "auto"),
+                ("--max-epochs", max_epochs, 150),
+                ("--batch-size", batch_size, None),
+                ("--patience", patience, 20),
+                ("--effect-floor", effect_floor, None),
+                ("--ar-path", ar_path, None),
+                ("--lambda-rule", lambda_rule, None),
+            )
+            if value != default
+        ]
+        if ignored:
+            _log(
+                ctx,
+                f"Warning: {', '.join(ignored)} {'has' if len(ignored) == 1 else 'have'} "
+                "no effect with REAP (nothing is trained); ignoring."
+                + (
+                    " REAP's floor is --shrink-effect-floor."
+                    if "--effect-floor" in ignored
+                    else ""
+                ),
+            )
+    if is_grace and refine == "shrink" and impute == "pairwise_complete":
+        raise click.BadParameter(
+            "REAP needs complete data; use --impute var_em.",
+            param_hint="--impute",
         )
     from matplotlib import pyplot as plt
 
@@ -627,12 +798,24 @@ def discover(
         "output_files": {},
     }
 
+    # GRACE builds the candidate-graph test itself, on its transformed data: pass
+    # an explicit --ci-test through, else let it pick (and record that it did).
+    grace_ci_kw = {}
+    if is_grace or algorithm == "grace-ss":
+        if ctx.get_parameter_source("ci_test") == click.core.ParameterSource.DEFAULT:
+            summary["ci_test"] = "auto (parcorr-gpu on CUDA, else parcorr)"
+        else:
+            grace_ci_kw["ci_test_class"] = lambda data, **_: _make_ci_test(
+                ci_test, data, device
+            )
+
     if impute is not None and algorithm not in (
         "cdnots",
         "cdnots+",
         "cedar",
         "grace",
         "grace-ss",
+        "reap",
     ):
         _log(
             ctx,
@@ -798,8 +981,15 @@ def discover(
             f"n_tests={cedar_result.n_tests}, {elapsed:.1f}s",
         )
 
-    elif algorithm == "grace":
-        _log(ctx, "Running GRACE (CDNOTS + gated refinement)...")
+    elif is_grace:
+        _log(
+            ctx,
+            (
+                "Running REAP (regression-based refinement)..."
+                if refine == "shrink"
+                else "Running GRACE (gated refinement)..."
+            ),
+        )
         from .grace import run_cdnots_gated
 
         grace_res = run_cdnots_gated(
@@ -809,6 +999,17 @@ def discover(
             include_C=include_c,
             c_preset=c_preset,
             gate_threshold=gate_threshold,
+            **({} if grow_rounds is None else {"grow_rounds": grow_rounds}),
+            refine=refine,
+            **({} if effect_floor is None else {"effect_floor": effect_floor}),
+            shrink_effect_floor=shrink_effect_floor,
+            **({} if ar_path is None or refine != "gates" else {"ar_path": ar_path}),
+            **(
+                {}
+                if lambda_rule is None or refine != "gates"
+                else {"lambda_rule": lambda_rule}
+            ),
+            contemporaneous=contemporaneous,
             max_epochs=max_epochs,
             batch_size=batch_size,
             patience=patience,
@@ -817,15 +1018,43 @@ def discover(
             model_seed=ctx.obj["seed"],
             impute=impute,
             impute_kwargs=_impute_kwargs,
+            **grace_ci_kw,
         )
 
         np.save(os.path.join(outdir, "estimated_graph.npy"), grace_res.cg_tig)
-        np.save(os.path.join(outdir, "gate_values.npy"), grace_res.gate_values)
         summary["output_files"]["graph"] = "estimated_graph.npy"
-        summary["output_files"]["gate_values"] = "gate_values.npy"
-        summary["gate_threshold"] = gate_threshold
+        if grace_res.gate_values is not None:
+            np.save(os.path.join(outdir, "gate_values.npy"), grace_res.gate_values)
+            summary["output_files"]["gate_values"] = "gate_values.npy"
+        if getattr(grace_res, "effect_pruned", None) is not None:
+            # edges the gates or the shrink kept that the effect floor removed
+            np.save(os.path.join(outdir, "effect_pruned.npy"), grace_res.effect_pruned)
+            summary["output_files"]["effect_pruned"] = "effect_pruned.npy"
+        edge_strength = getattr(grace_res, "edge_strength", None)
+        if edge_strength is not None:
+            np.save(os.path.join(outdir, "edge_strength.npy"), edge_strength)
+            np.save(os.path.join(outdir, "edge_pvalue.npy"), grace_res.edge_pvalue)
+            summary["output_files"]["edge_strength"] = "edge_strength.npy"
+            summary["output_files"]["edge_pvalue"] = "edge_pvalue.npy"
+        if contemporaneous:
+            np.save(os.path.join(outdir, "edge_marks.npy"), grace_res.to_marks())
+            summary["output_files"]["edge_marks"] = "edge_marks.npy"
+            summary["contemporaneous"] = True
+            # --ci-test sets the candidate graph's test; lag-0 edges use this one
+            summary["contemporaneous_test"] = "spline"
+        summary["refine"] = refine
+        if shrink_effect_floor is not None:
+            summary["shrink_effect_floor"] = shrink_effect_floor
+            summary["n_effect_pruned"] = grace_res.n_effect_pruned
+        summary["gate_threshold"] = grace_res.gate_threshold
+        summary["gate_threshold_rule"] = grace_res.gate_threshold_rule
+        if getattr(grace_res, "grow_history", None):
+            summary["grow_history"] = grace_res.grow_history
         summary["include_C"] = include_c
-        summary["max_epochs"] = max_epochs
+        if refine == "gates":
+            summary["max_epochs"] = max_epochs
+            summary["ar_path"] = getattr(grace_res, "ar_path", None)
+            summary["lambda_rule"] = getattr(grace_res, "lambda_rule", None)
 
         if save_plot:
             try:
@@ -844,7 +1073,8 @@ def discover(
         summary["n_edges"] = n_edges
         _log(
             ctx,
-            f"GRACE complete. Graph shape: {grace_res.cg_tig.shape}, {n_edges} edges, {elapsed:.1f}s",
+            f"{'REAP' if refine == 'shrink' else 'GRACE'} complete. Graph shape: "
+            f"{grace_res.cg_tig.shape}, {n_edges} edges, {elapsed:.1f}s",
         )
 
     elif algorithm == "grace-ss":
@@ -867,6 +1097,7 @@ def discover(
             model_seed=ctx.obj["seed"],
             impute=impute,
             impute_kwargs=_impute_kwargs,
+            **grace_ci_kw,
         )
 
         np.save(os.path.join(outdir, "estimated_graph.npy"), grace_ss_res.cg_tig)
