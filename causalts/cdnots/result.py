@@ -43,7 +43,23 @@ class CdnotsResult(CausalResult):
         Whether stable skeleton discovery was used.
     lag_verify_stats : dict | None
         Stats from the multi-lag redundancy pass, or None if not run.
+    lag0_orientations : list[dict] | None
+        CDNOTS+ ``lag0_orient`` decisions, one per undirected lag-0 pair
+        between non-discrete, non-C variables (pairs touching those get no
+        record):
+        ``cause`` / ``effect`` (lag-0 indices) and ``cause_name`` /
+        ``effect_name``, ``agreement``, ``normality_p``, ``oriented``. None
+        when the step did not run.
+    lag_refinements : list[dict] | None
+        CDNOTS+ ``addback_alpha`` / ``veto_alpha`` net changes to lagged
+        links: ``cause`` / ``effect`` (indices), ``cause_name`` /
+        ``effect_name``, ``lag``, ``action`` (``"added"`` or ``"removed"``)
+        and ``p`` (its latest refinement p-value). None when the step did
+        not run.
     """
+
+    lag0_orientations = None  # also for results pickled before the field
+    lag_refinements = None  # likewise
 
     def __init__(
         self,
@@ -63,6 +79,7 @@ class CdnotsResult(CausalResult):
         num_c_cols: int = 1,
         c_node_names=None,
         undirected_policy: str = "bidirected",
+        lag0_orientations=None,
     ):
         self.graph = graph
         self.cg_tig = cg_tig
@@ -80,6 +97,7 @@ class CdnotsResult(CausalResult):
         self.num_c_cols = num_c_cols
         self.c_node_names = c_node_names
         self.undirected_policy = undirected_policy
+        self.lag0_orientations = lag0_orientations
         self._scm_cache = {}
 
     # ------------------------------------------------------------------

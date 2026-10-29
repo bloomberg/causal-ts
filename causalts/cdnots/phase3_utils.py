@@ -27,7 +27,7 @@ from .skeleton_discovery import (
     skeleton_discovery,
     skeleton_discovery_pervar,
 )
-from .uc_sepset import uc_sepset, validate_priority
+from .uc_sepset import uc_sepset, validate_majority_gamma, validate_priority
 
 _C_PRESETS = {
     "linear": lambda T: np.arange(T, dtype=float).reshape(-1, 1),
@@ -69,7 +69,8 @@ def make_c_array(T: int, preset: str = "linear") -> np.ndarray:
 
     Returns
     -------
-    np.ndarray of shape (T, k) where k depends on the preset.
+    np.ndarray
+        Array of shape ``(T, k)``, where ``k`` depends on the preset.
     """
     if preset not in _C_PRESETS:
         raise ValueError(
@@ -515,6 +516,36 @@ def _set_discrete_indices(indep_test, embedded_disc):
         indep_test._disc_global = set(embedded_disc)
 
 
+def _c_nodes(cg, num_lags, include_C, num_c_cols):
+    """Lag-0 indices of the C columns (the last ``num_c_cols`` of a slice)."""
+    if not include_C:
+        return ()
+    n_inst = cg.G.num_vars // (num_lags + 1)
+    return tuple(range(n_inst - num_c_cols, n_inst))
+
+
+def _deep_lags(lags):
+    """Slice lags of the deep array that MCI and the collider step read.
+
+    A lagged node is conditioned on its parents shifted by its lag, so the CI
+    test needs every sum of two window lags. The window's own lags come
+    first, so the deep array's first columns are exactly the window ``data``
+    (and, its deepest lag being ``2 * max(lags)``, the same rows dropped).
+    Contiguous lags give ``range(2 * num_lags + 1)``.
+    """
+    sums = {a + b for a in lags for b in lags}
+    return list(lags) + sorted(sums - set(lags))
+
+
+def _deep_array(df, lags):
+    """``(deep_lags, data_ext)``: ``df`` embedded at :func:`_deep_lags`."""
+    ext_lags = _deep_lags(lags)
+    data_ext = (
+        pd.concat([df.shift(i) for i in ext_lags], axis=1).iloc[2 * max(lags) :].values
+    )
+    return ext_lags, data_ext
+
+
 def _majority_collider_step(
     cg,
     indep_test,
@@ -529,44 +560,33 @@ def _majority_collider_step(
 ):
     """Run the CDNOTS+ (PCMCI+-style) majority-rule collider step.
 
-    A lagged endpoint is conditioned on its parents shifted by its lag, which
-    can reach lag ``2 * num_lags``, so with contiguous lags the CI test reads a
-    ``2 * num_lags``-deep embedding of ``df`` (which already holds any C
-    columns) for this step, as MCI does. Its first columns are exactly
-    ``data``: same lags, same ``2 * num_lags`` rows dropped. With a gapped
-    ``lag_list`` that no longer holds, so ``data`` is kept and shifted parents
-    outside it are dropped. ``indep_test.data`` and its discrete-column
-    indices are restored afterwards, also on error.
+    A lagged endpoint is conditioned on its parents shifted by its lag, so
+    the CI test reads the deep embedding of ``df`` (which already holds any C
+    columns) from :func:`_deep_array` for this step, as MCI does.
+    ``indep_test.data`` and its discrete-column indices are restored
+    afterwards, also on error.
     """
     from ..ci_tests.stratified_cit import compute_discrete_indices
 
-    use_ext = num_lags > 0 and lags == list(range(num_lags + 1))
+    use_ext = num_lags > 0
     swap_disc = use_ext and bool(discrete_cols) and hasattr(indep_test, "discrete_cols")
     old_disc = list(indep_test.discrete_cols) if swap_disc else None
     has_lags = hasattr(indep_test, "set_lag_structure")
+    ext_lags = _deep_lags(lags) if use_ext else lags
     try:
         if use_ext:
             if data_ext is None:
-                data_ext = (
-                    pd.concat([df.shift(i) for i in range(2 * num_lags + 1)], axis=1)
-                    .iloc[2 * num_lags :]
-                    .values
-                )
+                _, data_ext = _deep_array(df, lags)
             indep_test.data = data_ext
             if has_lags:
                 # e.g. residual-score tests size their CV embargo from it.
-                indep_test.set_lag_structure(
-                    n_vars=df.shape[1], lags=list(range(2 * num_lags + 1))
-                )
+                indep_test.set_lag_structure(n_vars=df.shape[1], lags=ext_lags)
             if swap_disc:
                 # df already includes the C columns, hence include_C=False.
                 _set_discrete_indices(
                     indep_test,
                     compute_discrete_indices(
-                        discrete_cols,
-                        df,
-                        list(range(2 * num_lags + 1)),
-                        include_C=False,
+                        discrete_cols, df, ext_lags, include_C=False
                     ),
                 )
         return uc_sepset(
@@ -576,13 +596,103 @@ def _majority_collider_step(
             ci_test=indep_test,
             lagged_parents=lagged_parents,
             no_of_var_ext=data_ext.shape[1] if use_ext else data.shape[1],
-            lags=lags,
+            lags=ext_lags,
             majority_mode="mci",
             **uc_kwargs,
         )
     finally:
         indep_test.data = data
         if use_ext and has_lags:
+            indep_test.set_lag_structure(n_vars=df.shape[1], lags=lags)
+        if swap_disc:
+            _set_discrete_indices(indep_test, old_disc)
+
+
+#: Refinement / re-orientation passes before giving up on a fixed point.
+_REFINE_PASSES = 5
+
+
+def _lag_refine_step(
+    cg,
+    indep_test,
+    df,
+    data,
+    lags,
+    num_lags,
+    discrete_cols,
+    include_C,
+    num_c_cols,
+    background_knowledge,
+    forbidden_ancestor_pairs,
+    knowledge,
+    var_names,
+    addback_alpha,
+    veto_alpha,
+    skip=(),
+    tested=None,
+):
+    """Run :func:`~.lag_refine.refine_lagged` on the deep embedding of ``df``.
+
+    ``cg`` (an oriented graph) is modified in place and the changes returned.
+    Swaps ``indep_test.data`` (and discrete indices) like
+    :func:`_majority_collider_step` and restores them afterwards, also on
+    error.
+    """
+    from ..ci_tests.stratified_cit import compute_discrete_indices
+    from .lag_refine import refine_lagged
+
+    swap_disc = bool(discrete_cols) and hasattr(indep_test, "discrete_cols")
+    old_disc = list(indep_test.discrete_cols) if swap_disc else None
+    has_lags = hasattr(indep_test, "set_lag_structure")
+    ext_lags, data_ext = _deep_array(df, lags)
+    complete = ~np.isnan(np.asarray(data_ext, dtype=float))
+    min_rows = getattr(indep_test, "_min_samples", 30)
+    nodes = cg.G.nodes
+    bk = background_knowledge
+    n_inst = data.shape[1] // (num_lags + 1)
+
+    def enough_rows(cols):
+        # cols = [X, Y] + Z, so len(cols) + 1 == |Z| + 3
+        return int(complete[:, cols].all(axis=1).sum()) >= max(min_rows, len(cols) + 1)
+
+    groups = []
+    if knowledge is not None:
+        for ancestor, desc in getattr(knowledge, "_required_ancestors", ()):
+            if ancestor in var_names and desc in var_names:
+                d = var_names.index(desc)
+                a = var_names.index(ancestor)
+                group = [(a + s * n_inst, d) for s in range(num_lags + 1)]
+                groups.append([(x, y) for x, y in group if x != y])
+    try:
+        indep_test.data = data_ext
+        if has_lags:
+            indep_test.set_lag_structure(n_vars=df.shape[1], lags=ext_lags)
+        if swap_disc:
+            # df already includes the C columns, hence include_C=False.
+            _set_discrete_indices(
+                indep_test,
+                compute_discrete_indices(discrete_cols, df, ext_lags, include_C=False),
+            )
+        return refine_lagged(
+            cg,
+            indep_test,
+            num_lags,
+            c_start=n_inst - num_c_cols if include_C else n_inst,
+            alpha_add=addback_alpha,
+            alpha_veto=veto_alpha,
+            is_forbidden=lambda x, y: bk is not None
+            and bk.is_forbidden(nodes[x], nodes[y]),
+            is_required=lambda x, y: bk is not None
+            and bk.is_required(nodes[x], nodes[y]),
+            forbidden_ancestor_pairs=forbidden_ancestor_pairs or (),
+            required_ancestor_groups=groups,
+            enough_rows=enough_rows,
+            skip=skip,
+            tested=tested,
+        )
+    finally:
+        indep_test.data = data
+        if has_lags:
             indep_test.set_lag_structure(n_vars=df.shape[1], lags=lags)
         if swap_disc:
             _set_discrete_indices(indep_test, old_disc)
@@ -720,6 +830,7 @@ def cdnots_discovery(
     contemp_collider_rule: str | None = "majority",
     orient_margin=0.0,
     collider_search="full",
+    majority_gamma=0.5,
 ):
     """Discover a CDNOTS causal graph.
 
@@ -749,8 +860,16 @@ def cdnots_discovery(
         costs about as much as the old contemporaneous-only rule and is far
         cheaper than ``"full"``, but orients fewer edges. Ignored when
         ``contemp_collider_rule`` is None.
+
+    majority_gamma : float, default 0.5
+        Ambiguity band of the majority rule, in ``[0, 0.5]``: a collider needs
+        the middle node in at most this share of the separating sets, a
+        non-collider in at least ``1 - majority_gamma``; shares in between
+        leave the triple ambiguous. ``0.5`` is the plain majority rule.
+        Ignored when ``contemp_collider_rule`` is None.
     """
     validate_priority(priority)
+    validate_majority_gamma(majority_gamma)
     if contemp_collider_rule not in ("majority", None):
         raise ValueError(
             "contemp_collider_rule must be 'majority' or None, "
@@ -761,7 +880,6 @@ def cdnots_discovery(
         raise ValueError(
             "collider_search must be 'full' or 'sepset', " f"got {collider_search!r}"
         )
-    # --- Discrete column handling ---
     # discrete_cols=None  → auto-detect from df
     # discrete_cols=[]    → explicit "no discrete columns" (opt-out)
     # discrete_cols=[...] → user-specified column names
@@ -915,6 +1033,7 @@ def cdnots_discovery(
             num_c_cols=num_c_cols,
             verbose=verbose,
             alpha_lv=alpha_lv,
+            background_knowledge=background_knowledge,
         )
 
     cg_skel_cnst = c_lag_cnst(
@@ -941,6 +1060,8 @@ def cdnots_discovery(
         majority_mode=_COLLIDER_SEARCH[collider_search],
         max_subsets_per_size=max_combinations,
         max_subset_size=max_degree,
+        majority_gamma=majority_gamma,
+        parentless=_c_nodes(cg_skel_cnst, num_lags, include_C, num_c_cols),
     )
     cg_meek = meek(
         cg_sepset,
@@ -1049,6 +1170,7 @@ def run_cdnots(
     *,
     orient_margin=0.0,
     collider_search="full",
+    majority_gamma=0.5,
 ):
     """CDNOTS causal discovery — returns a single :class:`CdnotsResult` object.
 
@@ -1106,6 +1228,11 @@ def run_cdnots(
         ``max_degree``); most accurate, but more CI tests. ``"sepset"``: only subsets of the
         skeleton's separating set plus the middle node; about the cost of the
         old contemporaneous-only rule, with fewer edges oriented.
+    majority_gamma : float
+        Ambiguity band of the lag-0 collider vote, in ``[0, 0.5]`` (default
+        0.5, the plain majority rule). A collider needs the middle node in at
+        most this share of the separating sets, a non-collider in at least
+        ``1 - majority_gamma``; shares in between leave the triple ambiguous.
 
     Returns
     -------
@@ -1147,6 +1274,7 @@ def run_cdnots(
         alpha_lv=alpha_lv,
         orient_margin=orient_margin,
         collider_search=collider_search,
+        majority_gamma=majority_gamma,
     )
     return disc_out[0]
 
@@ -1179,6 +1307,11 @@ def run_cdnots_plus(
     legacy_mci_conds=False,
     orient_margin=0.1,
     return_prefix=False,
+    majority_gamma=0.5,
+    lag0_orient=None,
+    alpha_mci=None,
+    addback_alpha=None,
+    veto_alpha=None,
 ):
     """CDNOTS+ causal discovery (PCMCI+-style two-phase skeleton).
 
@@ -1247,6 +1380,69 @@ def run_cdnots_plus(
         to a direction. Positive values (default ``0.1``) leave ambiguous
         contemporaneous edges undirected, and CDNOTS+ then drops them. No
         effect when ``include_C=False``.
+    majority_gamma : float
+        Ambiguity band of the majority collider rule, in ``[0, 0.5]``
+        (default 0.5, PCMCI+'s rule). A collider needs the middle node in at
+        most this share of the separating sets, a non-collider in at least
+        ``1 - majority_gamma``; shares in between leave the triple ambiguous.
+    lag0_orient : {None, "lingam"}
+        Orient lag-0 edges that conditional independence leaves undirected
+        (``o-o``) or conflicting (``x-x``). ``"lingam"`` orders the innovations
+        of each such component with DirectLiNGAM and orients an edge only when
+        the direction holds in at least 90% of bootstrap re-orderings, one
+        endpoint's innovations reject normality (``p < 0.01``), and it makes
+        no unshielded collider the CI step ruled out; Meek then propagates
+        the new arrowheads. Linear Gaussian data are left as they are. Needs
+        non-Gaussian noise to help, and assumes linear mechanisms: on spline
+        mechanisms with Laplace or Gaussian noise most of its orientations
+        were wrong (small F1 cost, SHD up to +0.75), though with uniform noise
+        it still helped; on CausalRivers it left F1 unchanged (SHD +0.5).
+        Discrete columns are never oriented. The decisions are stored on
+        ``result.lag0_orientations``. Cost: 101 DirectLiNGAM orderings per
+        undirected component, each O(k^3 n) for k nodes and n rows (vectorised;
+        about 0.1 s at k=30, n=1000). Default ``None`` (off).
+    alpha_mci : float or None
+        Significance level of the phase 2 MCI test only; ``None`` (default)
+        uses ``alpha``. A loose ``alpha`` with a strict ``alpha_mci`` (e.g.
+        0.05 / 0.001) picks conditioning sets permissively but keeps links
+        strictly, as PCMCI's ``pc_alpha`` / ``alpha_level`` do. With
+        ``addback_alpha`` / ``veto_alpha``, ``alpha=0.01`` without
+        ``alpha_mci`` lost less F1 than ``0.05 / 0.001`` at T=100 for d >= 30
+        and was within 0.01 F1 of it elsewhere (linear simulations, same
+        seeds).
+    addback_alpha, veto_alpha : float or None
+        Refine the lagged cross links of the finished graph (after
+        orientation, so oriented lag-0 parents are conditioned on). Add-back
+        re-tests every absent lagged link with the MCI conditioning set
+        (parents of both endpoints, ``X``'s shifted by its lag, plus each
+        endpoint's next lag) and adds it when ``p < addback_alpha``; the
+        veto then re-tests every lagged link of the grown graph the same way
+        and removes it when ``p > veto_alpha``. This recovers links that
+        phase 1 drops at depth 0, where ``Y``'s own past masks them. Lag-0,
+        self and C links are not touched. The graph is then re-oriented from
+        the refined skeleton, and refinement repeated on the new orientation
+        until a pass changes nothing (at most 5 passes). Each pass that
+        changes a link re-runs the majority collider step (the dominant cost
+        of CDNOTS+): about 1.5-2.7x a plain run in linear simulations
+        (d 10-30). A refined prefix cannot be finished at another
+        ``orient_margin`` or ``lag0_orient``. Changes are stored on
+        ``result.lag_refinements`` and their p-values written into
+        ``pvalue_matrix``. Contiguous lags only; not with ``max_conds_py`` /
+        ``max_conds_px``. In linear simulations (d 10-50, T 100-1000),
+        ``addback_alpha=1e-4, veto_alpha=0.001`` at ``alpha=0.01`` (no
+        ``alpha_mci``), against the plain run at the same alpha, lowered SHD
+        in every setting and raised F1 by 0.007-0.05, except at T=100 with
+        d=50 (F1 -0.03); against the best single plain alpha it raised F1 in
+        9 of 12 settings and lowered SHD in 11 of 12 (SHD +1.5 at T=1000,
+        d=50). On nonlinear simulations (spline / MLP, d 10-20, T 300-1000)
+        with ``raft`` and the same alphas it was about neutral (F1 within
+        0.03). It needs a CI test with power at the sample size, since the
+        veto drops links the test cannot detect (by default ``splitkci``
+        tests on half the rows, so at T=300 it lost up to 0.12 F1; about
+        neutral at T=1000), and p-values that
+        track effect size: on long real series (CausalRivers, 5-node graphs)
+        the add-back added about four false links per true one (F1
+        unchanged, SHD +2). Default ``None`` (off).
 
     Returns
     -------
@@ -1265,6 +1461,44 @@ def run_cdnots_plus(
     ``result.to_marks()``.
     """
     validate_priority(priority)
+    validate_majority_gamma(majority_gamma)
+    if lag0_orient not in (None, "lingam"):
+        raise ValueError(f"lag0_orient must be None or 'lingam', got {lag0_orient!r}")
+    for _name, _a in (
+        ("alpha_mci", alpha_mci),
+        ("addback_alpha", addback_alpha),
+        ("veto_alpha", veto_alpha),
+    ):
+        if _a is not None and not 0 < _a < 1:
+            raise ValueError(f"{_name} must be in (0, 1) or None, got {_a!r}")
+    _refine = addback_alpha is not None or veto_alpha is not None
+    if _refine:
+        if not np.isfinite(orient_margin) or orient_margin < 0:
+            raise ValueError(
+                f"orient_margin must be finite and >= 0, got {orient_margin!r}"
+            )
+        if max_conds_py is not None or max_conds_px is not None:
+            # A refinement-added parent has no rank among phase 1's: first
+            # would evict the strongest, last would fall outside the cap.
+            raise ValueError(
+                "addback_alpha / veto_alpha cannot be combined with "
+                "max_conds_py / max_conds_px"
+            )
+        if lag_list is not None:
+            if not len(lag_list) or list(lag_list) != list(range(1, len(lag_list) + 1)):
+                raise ValueError(
+                    "addback_alpha / veto_alpha need contiguous lags "
+                    f"(lag_list 1..L), got {list(lag_list)!r}"
+                )
+        elif (
+            isinstance(num_lags, bool)
+            or not isinstance(num_lags, (int, np.integer))
+            or num_lags < 1
+        ):
+            raise ValueError(
+                f"addback_alpha / veto_alpha need an integer num_lags >= 1, got "
+                f"{num_lags!r}"
+            )
     if discrete_cols is None:
         discrete_cols = _detect_discrete_cols(df, df.shape[0])
 
@@ -1387,24 +1621,28 @@ def run_cdnots_plus(
 
     # --- Extract parent sets from phase 1 skeleton ---
     no_of_inst_var = data.shape[1] // (num_lags + 1)
+    # Under a cap, strongest first (phase 1's ranking), so max_conds_py /
+    # max_conds_px keep the strongest parents as in PCMCI rather than the
+    # lowest node indices. Uncapped lists keep node order, so conditioning-set
+    # order (and result.pvals) is unchanged.
+    capped = max_conds_py is not None or max_conds_px is not None
+    order = getattr(cg_skel, "parent_order", {}) if capped else {}
     lagged_parents = {}
     for j in range(no_of_inst_var):
-        lagged_parents[j] = [p for p in cg_skel.neighbors(j) if p >= no_of_inst_var]
+        nbrs = [p for p in cg_skel.neighbors(j) if p >= no_of_inst_var]
+        ranked = [p for p in order.get(j, []) if p in nbrs]
+        lagged_parents[j] = ranked + [p for p in nbrs if p not in ranked]
 
-    # --- Extend data to 2×num_lags depth for phase 2 conditioning ---
+    # --- Extend data to the deep lags for phase 2 conditioning ---
     # MCI reads a deeper array; indep_test.data and its discrete indices are
     # restored afterwards, also on error.
     swap_disc = (
         num_lags > 0 and bool(discrete_cols) and hasattr(indep_test, "discrete_cols")
     )
+    ext_lags = lags
     try:
         if num_lags > 0:
-            ext_lags = list(range(2 * num_lags + 1))
-            data_ext = (
-                pd.concat([df.shift(i) for i in ext_lags], axis=1)
-                .iloc[2 * num_lags :]
-                .values
-            )
+            ext_lags, data_ext = _deep_array(df, lags)
             indep_test.data = data_ext
             no_of_var_ext = data_ext.shape[1]
             if hasattr(indep_test, "set_lag_structure"):
@@ -1427,7 +1665,7 @@ def run_cdnots_plus(
         mci_result = mci_skeleton(
             cg=cg_skel,
             ci_test=indep_test,
-            alpha=alpha,
+            alpha=alpha if alpha_mci is None else alpha_mci,
             lagged_parents=lagged_parents,
             num_lags=num_lags,
             include_C=include_C,
@@ -1440,6 +1678,7 @@ def run_cdnots_plus(
             no_of_var_ext=no_of_var_ext,
             background_knowledge=background_knowledge,
             legacy_mci_conds=legacy_mci_conds,
+            lags=ext_lags,
         )
     finally:
         indep_test.data = data
@@ -1467,6 +1706,7 @@ def run_cdnots_plus(
             num_c_cols=num_c_cols,
             verbose=verbose,
             alpha_lv=alpha_lv,
+            background_knowledge=background_knowledge,
         )
 
     # --- Orientation pipeline (same as CDNOTS) ---
@@ -1477,22 +1717,28 @@ def run_cdnots_plus(
         num_c_cols=num_c_cols,
         background_knowledge=background_knowledge,
     )
-    cg_sepset = _majority_collider_step(
-        cg_skel_cnst,
-        indep_test,
-        df,
-        data,
-        lags,
-        num_lags,
-        discrete_cols,
-        lagged_parents,
-        data_ext=data_ext if num_lags > 0 else None,
-        priority=priority,
-        background_knowledge=background_knowledge,
-        alpha=alpha,
-        max_conds_py=max_conds_py,
-        max_conds_px=max_conds_px,
-    )
+
+    def _collide(cg, parents):
+        return _majority_collider_step(
+            cg,
+            indep_test,
+            df,
+            data,
+            lags,
+            num_lags,
+            discrete_cols,
+            parents,
+            data_ext=data_ext if num_lags > 0 else None,
+            priority=priority,
+            background_knowledge=background_knowledge,
+            alpha=alpha,
+            max_conds_py=max_conds_py,
+            max_conds_px=max_conds_px,
+            majority_gamma=majority_gamma,
+            parentless=_c_nodes(cg, num_lags, include_C, num_c_cols),
+        )
+
+    cg_sepset = _collide(cg_skel_cnst, lagged_parents)
     state = CdnotsPlusPrefix(
         cg_sepset=cg_sepset,
         data=data,
@@ -1514,7 +1760,129 @@ def run_cdnots_plus(
         knowledge=knowledge,
         verbose=verbose,
         orient_margin=orient_margin,
+        lag0_orient=lag0_orient,
+        lag0_exclude=[
+            _var_names_orig.index(c)
+            for c in (discrete_cols or [])
+            if c in _var_names_orig
+        ],
     )
+    if _refine:
+        # Refine the lagged links on the oriented graph (its lag-0 parents
+        # enter the MCI sets), then re-orient from the refined skeleton: an
+        # added or removed lagged link can change colliders and Meek, and a
+        # changed lag-0 parent can change a refinement test, so repeat until
+        # a pass changes nothing.
+        from .lag_refine import apply_lag_changes, class_state, restore_class
+
+        n_inst = data.shape[1] // (num_lags + 1)
+        cg_ref = cg_skel_cnst
+        parents_ref = {j: list(v) for j, v in lagged_parents.items()}
+        net = {}  # (cause, effect, lag) -> net change
+        first = {}  # (cause, effect, lag) -> action of its first change
+        frozen = set()  # links that flipped back: kept at their original state
+        original = {}  # (cause, effect, lag) -> its copies before any change
+        parent_pos = {}  # (cause, effect, lag) -> its index in parents_ref, or None
+        last_p = {}  # (cause, effect, lag) -> p of its latest test
+        M0 = np.array(state.pvalue_matrix, dtype=float, copy=True)
+        converged = None  # finished result of the pass that changed nothing
+        for _ in range(_REFINE_PASSES):
+            tested = {}
+            finished = finish_cdnots_plus(state)
+            changes = _lag_refine_step(
+                # modified in place; finished may be returned as converged
+                deepcopy(finished.graph),
+                indep_test,
+                df,
+                data,
+                lags,
+                num_lags,
+                discrete_cols,
+                include_C,
+                num_c_cols,
+                background_knowledge,
+                _forb_ancestor_pairs,
+                knowledge,
+                _var_names_orig,
+                addback_alpha,
+                veto_alpha,
+                skip=frozen,
+                tested=tested,
+            )
+            last_p.update(tested)
+            cg_new = deepcopy(cg_ref)
+            snap = {}
+            for ch in changes:
+                key = (ch["cause"], ch["effect"], ch["lag"])
+                if key not in original:
+                    snap[key] = class_state(cg_new, *key, num_lags)
+            changes = apply_lag_changes(cg_new, changes, num_lags)
+            if not changes:
+                converged = finished
+                break
+            cg_ref = cg_new
+            for ch in changes:
+                key = (ch["cause"], ch["effect"], ch["lag"])
+                if key in snap:
+                    original[key] = snap[key]
+            for ch in changes:
+                key = (ch["cause"], ch["effect"], ch["lag"])
+                node = ch["cause"] + ch["lag"] * n_inst
+                lst = parents_ref.setdefault(ch["effect"], [])
+                if key not in parent_pos:
+                    parent_pos[key] = lst.index(node) if node in lst else None
+                if node in lst:
+                    lst.remove(node)
+                if ch["action"] == "added":
+                    lst.append(node)
+                if key in first and first[key] != ch["action"]:
+                    # Back to its original state after an earlier pass changed
+                    # it: an oscillation between orientations. Keep the
+                    # original and stop testing it.
+                    frozen.add(key)
+                    net.pop(key, None)
+                    restore_class(cg_ref, original[key])
+                    # Its conditioning-parent entry too: phase 1 can list a
+                    # parent that MCI dropped from the graph.
+                    if node in lst:
+                        lst.remove(node)
+                    if parent_pos[key] is not None:
+                        lst.insert(parent_pos[key], node)
+                else:
+                    first.setdefault(key, ch["action"])
+                    net[key] = {k: v for k, v in ch.items() if k != "conds"}
+            state.cg_sepset = _collide(cg_ref, parents_ref)
+        else:
+            warnings.warn(
+                f"lagged-link refinement still changed links after "
+                f"{_REFINE_PASSES} passes; keeping the last one",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        # Net changes carry the p-value of their latest test (on the final
+        # orientation once a pass changes nothing); links back at their
+        # original state keep the discovery p-value.
+        M = M0.copy()
+        for key, ch in net.items():
+            ch["p"] = last_p.get(key, ch["p"])
+            M[key] = ch["p"]
+        state.pvalue_matrix = M
+        state.lag_refinements = [
+            dict(
+                ch,
+                cause_name=_var_names_orig[ch["cause"]],
+                effect_name=_var_names_orig[ch["effect"]],
+            )
+            for ch in net.values()
+        ]
+        state.refined_orient_margin = state.orient_margin
+        state.refined_lag0_orient = state.lag0_orient
+        if converged is not None and not return_prefix:
+            # Same state as finish_cdnots_plus(state) below except these two
+            # fields, so skip the second orientation tail.
+            converged.pvalue_matrix = state.pvalue_matrix
+            converged.lag_refinements = state.lag_refinements
+            return converged
     if return_prefix:
         # Caller may evaluate several orientation settings against this one
         # (expensive) collider phase; finish_cdnots_plus(state) with no
@@ -1556,9 +1924,9 @@ def _resolve_undirected(undirected, keep_undirected):
 def _prep_for_conversion(gg, num_lags, include_C, num_c_cols):
     """Shared front half of both converters.
 
-    Returns ``(g, no_of_inst_var, edge_vars, orig)`` where ``g`` is a private
-    copy with C edges oriented and ``orig`` is a snapshot of the endpoints
-    *before* any policy is applied.
+    Returns ``(g, no_of_inst_var, orig)`` where ``g`` is a private copy with
+    C edges oriented and ``orig`` is a snapshot of the endpoints *before* any
+    policy is applied.
     """
     no_of_var = gg.G.num_vars
     assert no_of_var % (num_lags + 1) == 0
@@ -1577,18 +1945,30 @@ def _prep_for_conversion(gg, num_lags, include_C, num_c_cols):
                     g.G.graph[c_idx, i] = 0
                     g.G.graph[i, c_idx] = 1
 
-    # When include_C=True, convert edges for non-C variables only
-    # When include_C=False, convert all variables
-    edge_vars = (
-        c_start  # = no_of_inst_var - num_c_cols when include_C, else no_of_inst_var
-    )
-
-    # Decide from a snapshot of the incoming endpoints. The loop below visits
-    # both (i, j) and (j, i) and writes in place, so reading the live array
+    # Decide from a snapshot of the incoming endpoints. The callers visit
+    # both (i, j) and (j, i) and write in place, so reading the live array
     # would let one visit observe what the mirrored visit just wrote -- e.g.
     # the o-o branch writes (1, 1) under undirected="bidirected", which the
     # conflict branch would then mistake for an x-x marker and erase.
-    return g, no_of_inst_var, edge_vars, g.G.graph.copy()
+    return g, no_of_inst_var, g.G.graph.copy()
+
+
+def _lagged_marks(orig, no_of_inst_var):
+    """Marks of the lagged cells ``[lag-0 node a, lagged node b]``.
+
+    ``marks[a, b]`` describes ``b -> a``. A lagged edge is directed by time
+    order, causal-learn ``(1, -1)`` here. The rare other states are decoded,
+    not passed through: ``(-1, -1)`` is ``o-o``; ``(1, 1)``, and an arrowhead
+    on the earlier node (against time order), are ``x-x``. There is no
+    ``<--`` at a lag: the mirrored cell is a different lag relationship.
+    """
+    o = orig[:no_of_inst_var, no_of_inst_var:]
+    r = orig[no_of_inst_var:, :no_of_inst_var].T
+    return np.select(
+        [(o == 1) & (r != 1), (o == 1) | (r == 1), (o == -1) & (r == -1)],
+        ["-->", "x-x", "o-o"],
+        default="",
+    ).astype("<U3")
 
 
 def _to_tigramite_layout(arr, no_of_inst_var, num_lags):
@@ -1635,10 +2015,16 @@ def cdnots_to_tigramite_graph(
     conflict : {"drop", "bidirected"}, optional
         How to render a conflicting contemporaneous edge (causal-learn
         ``(1, 1)`` from ``priority=1`` conflict marking, tigramite ``x-x``).
-        Defaults to ``"drop"``.
+        Defaults to ``"drop"``. A C node has no parents, so an arrowhead into
+        C (a conflicting C edge, or an ``X -> C``) is a conflict too: under
+        ``"drop"`` it renders as ``C -> X``.
     keep_undirected : bool, optional
         Legacy spelling of ``undirected``. ``True`` -> ``"bidirected"``,
         ``False`` -> ``"drop"``. Cannot be combined with ``undirected``.
+
+    Lagged edges are directed by time order and ignore both policies: any
+    lagged adjacency, even a (rare) ``o-o`` or ``x-x``, renders as the
+    forward link.
 
     Notes
     -----
@@ -1659,12 +2045,12 @@ def cdnots_to_tigramite_graph(
             f"conflict must be one of {CONFLICT_POLICIES}, got {conflict!r}"
         )
 
-    g, no_of_inst_var, edge_vars, orig = _prep_for_conversion(
-        gg, num_lags, include_C, num_c_cols
-    )
+    g, no_of_inst_var, orig = _prep_for_conversion(gg, num_lags, include_C, num_c_cols)
 
-    for i in range(edge_vars):
-        for j in range(edge_vars):
+    # Lag-0 block, C columns included: the C edges oriented above are (0, 1)
+    # and pass through; a C conflict is handled below.
+    for i in range(no_of_inst_var):
+        for j in range(no_of_inst_var):
             if i == j:
                 continue
             else:
@@ -1689,6 +2075,24 @@ def cdnots_to_tigramite_graph(
                     mark = 1 if undirected == "bidirected" else 0
                     g.G.graph[i, j] = mark
                     g.G.graph[j, i] = mark
+
+    # The policies are for edges whose direction is not identified. A C edge
+    # is C -> X (C has no parents), so an arrowhead into C -- a conflict or an
+    # X -> C (e.g. a priority=0 collider overwrite), both x-x in to_marks --
+    # under "drop" loses only that arrowhead; "bidirected" shows both.
+    if include_C:
+        for c in range(no_of_inst_var - num_c_cols, no_of_inst_var):
+            for i in range(no_of_inst_var - num_c_cols):
+                if orig[c, i] == 1:
+                    keep = conflict == "bidirected"
+                    g.G.graph[c, i], g.G.graph[i, c] = int(keep), 1
+
+    # A lagged edge's direction is fixed by time order, so any adjacency
+    # renders as the forward link, whatever the policies (to_marks keeps a
+    # lagged o-o / x-x). Only the cell itself is written: its mirror is a
+    # different lag relationship.
+    lagged = _lagged_marks(orig, no_of_inst_var)
+    g.G.graph[:no_of_inst_var, no_of_inst_var:] = lagged != ""
 
     # Reshape to (no_of_inst_var, no_of_inst_var, num_lags+1) tigramite format
     # Output includes C columns when include_C=True
@@ -1718,23 +2122,22 @@ def cdnots_to_tigramite_marks(gg, num_lags=0, include_C=True, num_c_cols=1):
     :func:`cdnots_to_tigramite_graph` for that -- but it can be plotted
     directly.
 
-    Lags >= 1 are time-ordered, so ``o-o`` cannot legitimately occur there;
-    if the underlying graph somehow carries one it is reported rather than
-    silently rewritten.
+    Lags >= 1 are time-ordered, so ``o-o`` and ``x-x`` should not occur
+    there; if the underlying graph carries one it is reported rather than
+    silently rewritten. An arrowhead that background knowledge rules out --
+    on the earlier node of a lagged edge, or into a C node (``include_C``) --
+    is reported as ``x-x``; these are the only states whose raw marks are not
+    kept.
     """
-    _, no_of_inst_var, _, orig = _prep_for_conversion(
-        gg, num_lags, include_C, num_c_cols
-    )
+    _, no_of_inst_var, orig = _prep_for_conversion(gg, num_lags, include_C, num_c_cols)
 
     # marks[a, b] describes the link b -> a, matching the transpose baked into
     # _to_tigramite_layout (result[cause, effect, lag] == marks[effect, col]).
-    #
-    # Base rule covers the lagged columns, which cdnots_to_tigramite_graph
-    # also passes through untouched: there a bare 1 already means "this column
-    # causes this row". Lag >= 1 is deliberately *not* mirrored -- tigramite
-    # only fills graph[i, j, tau] for tau > 0, since the transposed cell means
-    # a different lag relationship, not the reverse of this one.
-    marks = np.where(orig == 1, "-->", "").astype("<U3")
+    # Lag >= 1 is deliberately *not* mirrored -- tigramite only fills
+    # graph[i, j, tau] for tau > 0, since the transposed cell means a
+    # different lag relationship, not the reverse of this one.
+    marks = np.full(orig.shape, "", dtype="<U3")
+    marks[:no_of_inst_var, no_of_inst_var:] = _lagged_marks(orig, no_of_inst_var)
 
     # The whole lag-0 block, C columns included. Contemporaneous marks *are*
     # mirrored in tigramite ("-->" opposite "<--"), and the cases below are
@@ -1755,6 +2158,11 @@ def cdnots_to_tigramite_marks(gg, num_lags=0, include_C=True, num_c_cols=1):
         default="",
     )
     np.fill_diagonal(marks, "")
+    if include_C:  # C has no parents: an arrowhead into C is a conflict
+        for c in range(no_of_inst_var - num_c_cols, no_of_inst_var):
+            for i in range(no_of_inst_var - num_c_cols):
+                if orig[c, i] == 1:
+                    marks[c, i] = marks[i, c] = "x-x"
 
     return _to_tigramite_layout(marks, no_of_inst_var, num_lags)
 
@@ -1795,22 +2203,51 @@ class CdnotsPlusPrefix:
     knowledge: object = None
     verbose: bool = False
     orient_margin: float = 0.1
+    lag0_orient: object = None
+    lag0_exclude: list = None
+    lag_refinements: object = None
+    refined_orient_margin: object = None
+    refined_lag0_orient: object = None
 
 
-def finish_cdnots_plus(state, orient_margin=None):
+_UNSET = object()
+
+
+def finish_cdnots_plus(state, orient_margin=None, lag0_orient=_UNSET):
     """Run the orientation tail of CDNOTS+ on a :class:`CdnotsPlusPrefix`.
 
-    Meek rules -> nonstationarity orientation -> tigramite conversion.
+    Meek rules -> nonstationarity orientation -> (optional) lag-0 orientation
+    from non-Gaussianity -> tigramite conversion. The optional step works on a
+    copy, so the prefix is reusable. A lagged-link refinement
+    (``addback_alpha`` / ``veto_alpha``) is already applied to the prefix by
+    :func:`run_cdnots_plus`; this function only reports it.
     :func:`run_cdnots_plus` calls exactly this function, so reusing a prefix
     is bit-identical to calling ``run_cdnots_plus`` directly with the same
     ``orient_margin`` -- there is no second implementation to drift.
 
     ``orient_margin`` defaults to the value stored on ``state`` (the one passed
     to ``run_cdnots_plus``), so ``finish_cdnots_plus(state)`` reproduces the
-    direct call. Pass it to override.
+    direct call. Pass it to override. ``lag0_orient`` works the same way
+    (``None`` turns the step off), so one prefix can be finished with and
+    without it.
     """
     if orient_margin is None:
         orient_margin = state.orient_margin
+    if lag0_orient is _UNSET:
+        lag0_orient = state.lag0_orient
+    if lag0_orient not in (None, "lingam"):
+        raise ValueError(f"lag0_orient must be None or 'lingam', got {lag0_orient!r}")
+    refined = state.refined_orient_margin
+    if refined is not None and (
+        orient_margin != refined or lag0_orient != state.refined_lag0_orient
+    ):
+        # The lagged-link refinement was decided on the orientation at that
+        # margin and lag0_orient; other settings would need it recomputed.
+        raise ValueError(
+            "this prefix was refined (addback_alpha / veto_alpha) at "
+            f"orient_margin={refined}, lag0_orient={state.refined_lag0_orient!r}; run "
+            "run_cdnots_plus again for other settings"
+        )
     num_lags = state.num_lags
     include_C = state.include_C
     num_c_cols = state.num_c_cols
@@ -1858,6 +2295,33 @@ def finish_cdnots_plus(state, orient_margin=None):
             verbose=state.verbose,
         )
 
+    lag0_decisions = None
+    if lag0_orient == "lingam":
+        from .lingam_orient import lingam_orient_lag0
+
+        cg_obj = deepcopy(cg_obj)
+        n_inst = data.shape[1] // (num_lags + 1)
+        forb = state.forbidden_ancestor_pairs or ()
+        lag0_decisions = lingam_orient_lag0(
+            cg_obj,
+            data,
+            num_lags,
+            c_start=n_inst - num_c_cols if include_C else n_inst,
+            can_orient=lambda cg, x, y: _can_orient(
+                cg, x, y, state.background_knowledge, forb
+            ),
+            orient=_orient,
+            exclude_vars=state.lag0_exclude or (),
+        )
+        if any(d["oriented"] for d in lag0_decisions):
+            # Propagate the new arrowheads (phase three ends with Meek too).
+            cg_obj = meek(
+                cg_obj,
+                background_knowledge=state.background_knowledge,
+                num_lags=num_lags,
+                forbidden_ancestor_pairs=state.forbidden_ancestor_pairs,
+            )
+
     # CDNOTS+ drops unoriented lag-0 edges, where CDNOTS keeps them. This is
     # deliberate, not an oversight: it suits regimes where contemporaneous
     # edges are invalid or confounded. Score the other way with
@@ -1869,7 +2333,7 @@ def finish_cdnots_plus(state, orient_margin=None):
         num_c_cols=num_c_cols,
         undirected="drop",
     )
-    return _build_result(
+    result = _build_result(
         cg_obj,
         cg_tig,
         state.pvalue_matrix,
@@ -1888,3 +2352,11 @@ def finish_cdnots_plus(state, orient_margin=None):
         c_node_names=state.c_node_names,
         undirected_policy="drop",
     )
+    if lag0_decisions is not None:
+        names = state.var_names_orig
+        for d in lag0_decisions:
+            d["cause_name"] = names[d["cause"]]
+            d["effect_name"] = names[d["effect"]]
+    result.lag0_orientations = lag0_decisions
+    result.lag_refinements = state.lag_refinements
+    return result

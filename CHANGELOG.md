@@ -18,6 +18,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * `run_cdnots(collider_search="full"|"sepset")`: which conditioning sets the lag-0 collider
   vote searches. `run_cdnots_plus(return_prefix=True)` + `finish_cdnots_plus()` reuse one
   skeleton for several `orient_margin` values.
+* `run_cdnots_plus(lag0_orient="lingam")`: orients contemporaneous edges that conditional
+  independence leaves undirected (`o-o`) or conflicting (`x-x`), which PCMCI+-style search
+  cannot do. Each such component's innovations are ordered by DirectLiNGAM, and an edge is
+  oriented only when the direction holds in at least 90% of bootstrap re-orderings, one
+  endpoint's innovations reject normality (p < 0.01), and it creates no unshielded
+  collider the CI step ruled out; Meek then propagates the new arrowheads. Decisions are
+  on `result.lag0_orientations`. Off by default. On held-out linear simulations (d 10–30,
+  ParCorr) it added +0.02 to +0.04 F1 under non-Gaussian noise when 60% of the true edges
+  are contemporaneous (+0.002 to +0.017 with a 0.3 share), and changed F1 on Gaussian
+  data by at most 0.0003 on average (0.0008 in any single cell). It assumes linear
+  mechanisms: on spline mechanisms with Laplace or Gaussian noise most of its orientations
+  were wrong (small F1 cost, SHD up to +0.75), though with uniform noise it still helped,
+  and on CausalRivers it left F1 unchanged while raising SHD by about 0.5. Discrete
+  columns are never oriented.
+* `run_cdnots_plus(addback_alpha=..., veto_alpha=..., alpha_mci=...)`: grow-then-prune
+  refinement of lagged links. After orientation, every absent lagged cross link is
+  re-tested with the MCI conditioning set (parents of both endpoints, the cause's shifted
+  by its lag, plus each endpoint's next lag) and added when `p < addback_alpha`; every
+  lagged link of the grown graph is then re-tested and removed when `p > veto_alpha`.
+  Phase 1 drops most missed lagged links at depth 0, where the target's own past masks
+  them. The graph is then re-oriented from the refined skeleton, repeating until a pass
+  changes nothing; a link changes together with its lag copies, within background
+  knowledge and ancestral constraints, and a test with too few complete rows changes
+  nothing. `alpha_mci` sets the phase 2 MCI level apart from `alpha`. Changes are on
+  `result.lag_refinements`, their p-values in `pvalue_matrix`. On held-out linear
+  simulations (ParCorr, d 10–50, T 100–1000, Gaussian and Laplace noise),
+  `addback_alpha=1e-4, veto_alpha=0.001` at `alpha=0.01`, against the plain run at the
+  same alpha, lowered SHD (by 0.1–5) in every setting and raised F1 by 0.007–0.05, except
+  at T=100 with d=50 (F1 -0.03). Against CDNOTS+ at its best single alpha it raised F1 in
+  9 of 12 settings (not at T=100, d=50: -0.03; nor at T=1000 with d=10 or 50: -0.002
+  and -0.006) and lowered SHD in 11 of 12 (+1.5 at T=1000, d=50). A strict `alpha_mci` is
+  not needed at `alpha=0.01`. On nonlinear simulations (spline / MLP, d 10–20, T 300–1000)
+  with `raft` and the same alphas it was about neutral (F1 within 0.03). It needs a CI
+  test with power at the sample size, since the veto drops links the test cannot detect
+  (`splitkci` tests on half the rows, so at T=300 it lost up to 0.12 F1; about neutral at
+  T=1000), and p-values that track effect size: on CausalRivers the add-back left F1
+  unchanged while raising SHD by 2. All default `None`: results unchanged.
+* `majority_gamma` on `run_cdnots`, `run_cdnots_plus`, `cdnots_discovery` and `uc_sepset`:
+  an ambiguity band for the majority collider rule (Zhalama, Zhang & Mayer 2017). With
+  share `f` of separating sets containing the middle node, a triple is a collider if
+  `f < 0.5` and `f <= majority_gamma`, a non-collider if `f > 0.5` and
+  `f >= 1 - majority_gamma`, and ambiguous (left for Meek not to orient through)
+  otherwise. The default 0.5 is the plain majority rule, so results are unchanged; 0
+  orients only unanimous votes, as conservative PC does. On a CDNOTS+ / ParCorr
+  simulation grid `0.4` gave F1 +0.003 and SHD −0.35 on held-out seeds; it is untested on
+  other CI tests and on plain CDNOTS.
 
 ### Changed
 
@@ -80,6 +126,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * `select_features(algo="cdnots", markov_blanket=True)` with a custom `c_array` silently
   dropped spouses whose column name equalled the C node's label (e.g. `C3`). Colliding C
   labels now get a `_` prefix (`_C3`).
+* `run_cdnots_plus(include_C=True)`: the majority-rule collider step now conditions every
+  vote on both endpoints' C parents (phase 2 MCI does so for the effect), instead of
+  offering C as an optional subset member. Votes without C tested an endpoint whose
+  regime shift swamps the dependence, found spurious separating sets and declared false
+  colliders, which showed up as conflicting (`x-x`) lag-0 edges at nonstationary
+  variables. With a C-driven mean shift on 20% of the variables (linear Gaussian, d 10–20,
+  alpha 0.01) correctly oriented lag-0 edges rose by 2–7% and F1 by +0.004 to +0.016 for a
+  strong shift, ~0 for a weak one. Outputs with `include_C=False`, or where no variable is
+  C-adjacent, are unchanged.
+* `run_cdnots_plus(max_conds_py=..., max_conds_px=...)` now keeps the *strongest* lagged
+  parents, as PCMCI does. Phase 1 ranks each variable's parents by test strength, but
+  phase 2 rebuilt the lists from graph neighbours in node order, so the caps kept the
+  lowest-indexed parents instead. The same lists condition the majority-rule collider
+  votes, so capped runs can change orientations as well as the skeleton. Uncapped runs
+  (the default) are unchanged.
+* `run_cdnots_plus` with a gapped `lag_list` (e.g. `[2, 4]`): the MCI phase read a dense
+  `0..2*len(lag_list)` embedding with different rows from the phase-1 window, so tested
+  and conditioning columns sat at the wrong lags, and parents were shifted by slice
+  position instead of lag. MCI and the collider step now read every sum of two window
+  lags, aligned with the window. On 20 simulated series with true lags 2 and 4, lagged F1
+  rose from 0.46 to 0.96. Contiguous lags are unchanged.
+* CDNOTS+ phase 2 (MCI) and the plain CDNOTS skeleton no longer CI-test edges that
+  background knowledge requires; they ran the tests and discarded the result, as CDNOTS+
+  phase 1 already avoided. A required neighbour now ranks first as a conditioning
+  candidate, as in phase 1, so outputs with required edges can change slightly; without
+  background knowledge they are unchanged. Required edges get no MCI p-value
+  (`pvalue_matrix` NaN, as from phase 1). `lag_verify=True` no longer removes a required
+  lagged edge. In every skeleton phase, an edge whose time-shifted copy is required (e.g.
+  `make_background_knowledge(required=[("A", "B", 2, 1)])`) now counts as required:
+  removing an edge also removes its copies, so the required copy used to be lost.
+* The CDNOTS / CDNOTS+ collider step no longer takes a C column as the middle of a
+  collider. C has no parents, so `X -> C <- Y` was always wrong: `priority=1` turned the C
+  edges into conflicts (`x-x` in `to_marks()`) and `priority=0` reversed them. `cg_tig`
+  was already rendered as C -> X; the CPDAG and its marks now are too. `uc_sepset` gains
+  `parentless=` for such nodes.
+* CDNOTS graph rendering (`cg_tig`, `to_binary`, `to_marks`) covers every endpoint state.
+  Lagged cells read only a bare "1": a lagged `o-o` leaked into the binary graph as -1, and
+  `to_marks()` showed a lagged `x-x` as `-->`. `to_marks()` now reports lagged `o-o` /
+  `x-x` (and an arrowhead against time order as `x-x`), and the binary graph renders any
+  lagged adjacency as the forward link, since time order fixes its direction. A
+  conflicting C edge rendered as symmetric 1s (including the impossible X -> C) even with
+  `conflict="drop"`. C has no parents, so an arrowhead into C (that conflict, or an
+  X -> C from e.g. a `priority=0` collider overwrite) is `x-x` in `to_marks()` and
+  C -> X under `"drop"`. With `priority=1` this can change `cg_tig` on normal runs with C.
+  `tigramite_graph_to_binary` renders a lagged `o-o` / `x-x` as the forward link and no
+  longer writes its mirrored cell, a different link.
+* Forbidden-ancestor cleanup (`AncestralKnowledge.add_forbidden_ancestor`) no longer
+  removes an edge that background knowledge requires, or one a satisfied required ancestor
+  (`add_required_ancestor`) depends on. With `A -> Y -> D`, `Y -> D` required and `A`
+  forbidden as an ancestor of `D`, it removed `Y -> D` and reported no violation; it now
+  cuts the path at its last edge that is neither required nor needed by a satisfied
+  required ancestor (here `A -> Y`, with its lag copies), or reports the violation when
+  there is no such edge. When the cleanup still leaves a forbidden ancestor violated
+  because of competing required edges or ancestors, it now searches for the fewest edges
+  to cut (up to 4, each with its lag copies if possible, from the graph before its own
+  cuts) that satisfy every forbidden and satisfied required ancestor, and uses them if
+  found. With `A -> B, A -> C, B -> C, B -> D, C -> E, D -> E`, `A` required and `B`
+  forbidden as ancestors of `E`, it cut `C -> E` and reported `B => E` violated; it now
+  cuts `B -> C` and `B -> D`. Results where the cleanup succeeds are unchanged.
 
 ## [0.27.0]
 

@@ -146,11 +146,11 @@ def test_cdnots_entry_points_keep_released_positional_order():
     import inspect
 
     cases = [
-        ("phase3_utils", "cdnots_discovery", ["df", "indep_test", "num_lags", "lag_list", "include_C", "c_array", "c_preset", "alpha", "stable", "return_pvals", "max_degree", "max_combinations", "priority", "verbose", "show_progress", "impute", "impute_kwargs", "discrete_cols", "background_knowledge", "knowledge", "lag_verify", "alpha_lv"], ["contemp_collider_rule", "orient_margin", "collider_search"]),
-        ("phase3_utils", "run_cdnots", ["df", "indep_test", "num_lags", "lag_list", "include_C", "c_array", "c_preset", "alpha", "stable", "max_degree", "max_combinations", "priority", "verbose", "show_progress", "impute", "impute_kwargs", "discrete_cols", "background_knowledge", "knowledge", "lag_verify", "alpha_lv", "return_pvals"], ["orient_margin", "collider_search"]),
-        ("phase3_utils", "run_cdnots_plus", ["df", "indep_test", "num_lags", "lag_list", "include_C", "c_array", "c_preset", "alpha", "max_degree", "max_conds_py", "max_conds_px", "priority", "verbose", "show_progress", "impute", "impute_kwargs", "discrete_cols", "background_knowledge", "knowledge", "lag_verify", "alpha_lv", "return_pvals"], ["legacy_mci_conds", "orient_margin", "return_prefix"]),
+        ("phase3_utils", "cdnots_discovery", ["df", "indep_test", "num_lags", "lag_list", "include_C", "c_array", "c_preset", "alpha", "stable", "return_pvals", "max_degree", "max_combinations", "priority", "verbose", "show_progress", "impute", "impute_kwargs", "discrete_cols", "background_knowledge", "knowledge", "lag_verify", "alpha_lv"], ["contemp_collider_rule", "orient_margin", "collider_search", "majority_gamma"]),
+        ("phase3_utils", "run_cdnots", ["df", "indep_test", "num_lags", "lag_list", "include_C", "c_array", "c_preset", "alpha", "stable", "max_degree", "max_combinations", "priority", "verbose", "show_progress", "impute", "impute_kwargs", "discrete_cols", "background_knowledge", "knowledge", "lag_verify", "alpha_lv", "return_pvals"], ["orient_margin", "collider_search", "majority_gamma"]),
+        ("phase3_utils", "run_cdnots_plus", ["df", "indep_test", "num_lags", "lag_list", "include_C", "c_array", "c_preset", "alpha", "max_degree", "max_conds_py", "max_conds_px", "priority", "verbose", "show_progress", "impute", "impute_kwargs", "discrete_cols", "background_knowledge", "knowledge", "lag_verify", "alpha_lv", "return_pvals"], ["legacy_mci_conds", "orient_margin", "return_prefix", "majority_gamma", "lag0_orient", "alpha_mci", "addback_alpha", "veto_alpha"]),
         ("skeleton_discovery", "skeleton_discovery_pervar", ["cg", "alpha", "ci_test", "max_combinations", "background_knowledge", "verbose", "show_progress", "return_pvals", "max_degree", "num_lags"], ["include_C", "num_c_cols"]),
-        ("skeleton_discovery", "mci_skeleton", ["cg", "ci_test", "alpha", "lagged_parents", "num_lags", "include_C", "num_c_cols", "max_conds_py", "max_conds_px", "verbose", "show_progress", "return_pvals", "no_of_var_ext", "background_knowledge"], ["legacy_mci_conds"]),
+        ("skeleton_discovery", "mci_skeleton", ["cg", "ci_test", "alpha", "lagged_parents", "num_lags", "include_C", "num_c_cols", "max_conds_py", "max_conds_px", "verbose", "show_progress", "return_pvals", "no_of_var_ext", "background_knowledge"], ["legacy_mci_conds", "lags"]),
     ]  # fmt: skip
     for module, name, positional, keyword_only in cases:
         fn = getattr(importlib.import_module(f"causalts.cdnots.{module}"), name)
@@ -176,3 +176,42 @@ def test_cdnots_discovery_rejects_an_unknown_collider_rule():
             ParCorrGPU(np.zeros((2, 2)), device="cpu"),
             contemp_collider_rule="majorit",
         )
+
+
+def test_phase2_parent_lists_are_ranked_strongest_first_under_a_cap(monkeypatch):
+    """max_conds_py / max_conds_px truncate these lists, so under a cap the order
+    matters: phase 1 ranks parents by strength (as PCMCI does), not by node
+    index. Uncapped lists keep node order, so result.pvals is unchanged."""
+    import pandas as pd
+
+    import causalts.cdnots.phase3_utils as p3
+    from causalts.cdnots.phase3_utils import run_cdnots_plus
+
+    rng = np.random.default_rng(0)
+    T = 2000
+    x = rng.normal(size=(T, 3))
+    for t in range(1, T):
+        # X2 has a weak lag-1 parent X0 and a strong lag-1 parent X1
+        x[t, 2] = 0.15 * x[t - 1, 0] + 0.9 * x[t - 1, 1] + rng.normal()
+    df = pd.DataFrame(x, columns=["X0", "X1", "X2"])
+
+    seen = {}
+    real = p3.mci_skeleton
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs["lagged_parents"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(p3, "mci_skeleton", spy)
+    n = 3  # node = var + lag * n
+    for cap, expected in ((None, [0 + n, 1 + n]), (5, [1 + n, 0 + n])):
+        seen.clear()
+        run_cdnots_plus(
+            df,
+            ParCorrGPU(df.values, device=DEVICE),
+            num_lags=1,
+            include_C=False,
+            alpha=0.01,
+            max_conds_py=cap,
+        )
+        assert seen[2][:2] == expected

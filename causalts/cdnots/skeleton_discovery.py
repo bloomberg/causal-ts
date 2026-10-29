@@ -54,6 +54,47 @@ def initialize_graph(
     return cg
 
 
+def required_in_shift_class(background_knowledge, cg, a, b, num_lags):
+    """Whether knowledge requires the edge ``a - b`` or one of its copies.
+
+    Removing an edge also removes its time-shifted copies in the window, so
+    an edge whose copy is required (e.g. ``make_background_knowledge`` with
+    ``("A", "B", 2, 1)``) must be kept too.
+    """
+    if background_knowledge is None:
+        return False
+    n_inst = cg.G.num_vars // (num_lags + 1)
+    lo, hi = sorted((a // n_inst, b // n_inst))
+    nodes = cg.G.nodes
+    for k in range(-lo, num_lags - hi + 1):
+        na, nb = nodes[a + k * n_inst], nodes[b + k * n_inst]
+        if background_knowledge.is_required(na, nb) or background_knowledge.is_required(
+            nb, na
+        ):
+            return True
+    return False
+
+
+def _required_checker(background_knowledge, cg, num_lags):
+    """Memoised :func:`required_in_shift_class` for one graph: causal-learn's
+    pattern knowledge scans every rule (a regex each) per lookup."""
+    if background_knowledge is None:
+        return lambda a, b: False
+    n_inst = cg.G.num_vars // (num_lags + 1)
+    memo = {}
+
+    def check(a, b):
+        lo = min(a, b) // n_inst
+        key = tuple(sorted((a - lo * n_inst, b - lo * n_inst)))
+        if key not in memo:
+            memo[key] = required_in_shift_class(
+                background_knowledge, cg, a, b, num_lags
+            )
+        return memo[key]
+
+    return check
+
+
 def skeleton_cnst(cgg, data, num_lags, include_C=True, num_c_cols=1):
     """Modify the causal graph by removing edges based on temporal constraints.
 
@@ -175,6 +216,7 @@ def skeleton_discovery(
     no_of_inst_var = no_of_var // (num_lags + 1)
 
     cg = deepcopy(cg)
+    is_required = _required_checker(background_knowledge, cg, num_lags)
 
     depth = -1
     pbar = tqdm(total=no_of_inst_var) if show_progress else None
@@ -207,12 +249,20 @@ def skeleton_discovery(
     parent_strengths = {}  # (x, y) -> min |stat| across depths, for sorting
 
     def _sort_neighbors(neighbors, node):
-        """Sort neighbors by cached test statistic strength (strongest first)."""
+        """Sort neighbors by cached test statistic strength (strongest first).
+
+        Required neighbours are never tested, so they have no strength; they
+        rank first, as untested required parents do in CDNOTS+.
+        """
         if max_combinations is None or not parent_strengths:
             return neighbors
         return sorted(
             neighbors,
-            key=lambda n: parent_strengths.get((min(node, n), max(node, n)), 0),
+            key=lambda n: (
+                np.inf
+                if is_required(node, n)
+                else parent_strengths.get((min(node, n), max(node, n)), 0)
+            ),
             reverse=True,
         )
 
@@ -255,6 +305,8 @@ def skeleton_discovery(
                     ):
                         edge_removal.append((x, y))
                         continue
+                    if is_required(x, y):
+                        continue  # kept regardless, so not tested (as in MCI)
 
                     pair_specs = []
                     pair_inputs = []
@@ -350,6 +402,8 @@ def skeleton_discovery(
                 if len(neigh_x) < depth - 1:
                     continue
                 for y in neigh_x:
+                    if is_required(x, y):
+                        continue  # kept regardless, so not tested (as in MCI)
                     knowledge_ban_edge = False
                     sepsets = set()
                     if background_knowledge is not None and (
@@ -421,20 +475,10 @@ def skeleton_discovery(
                             if verbose:
                                 print(f"{x} ind {y} | {S} with p-value {p:.6f}")
                             if not stable:
-                                if background_knowledge is not None and (
-                                    background_knowledge.is_required(
-                                        cg.G.nodes[x], cg.G.nodes[y]
-                                    )
-                                    or background_knowledge.is_required(
-                                        cg.G.nodes[y], cg.G.nodes[x]
-                                    )
-                                ):
-                                    pass
-                                else:
-                                    remove_edge(x, y)
-                                    append_value(cg.sepset, x, y, S)
-                                    append_value(cg.sepset, y, x, S)
-                                    break
+                                remove_edge(x, y)
+                                append_value(cg.sepset, x, y, S)
+                                append_value(cg.sepset, y, x, S)
+                                break
                             else:
                                 edge_removal.append((x, y))
                                 for s in S:
@@ -449,10 +493,7 @@ def skeleton_discovery(
             pbar.refresh()
 
         for x, y in list(set(edge_removal)):
-            if background_knowledge is not None and (
-                background_knowledge.is_required(cg.G.nodes[x], cg.G.nodes[y])
-                or background_knowledge.is_required(cg.G.nodes[y], cg.G.nodes[x])
-            ):
+            if is_required(x, y):
                 continue
             remove_edge(x, y)
 
@@ -529,6 +570,7 @@ def skeleton_discovery_pervar(
     no_of_inst_var = no_of_var // (num_lags + 1)
 
     cg = deepcopy(cg)
+    is_required = _required_checker(background_knowledge, cg, num_lags)
     pbar = tqdm(total=no_of_inst_var) if show_progress else None
     pvals = []
 
@@ -599,12 +641,7 @@ def skeleton_discovery_pervar(
                 ):
                     nonsig_parents.append(parent)
                     continue
-                if background_knowledge is not None and (
-                    background_knowledge.is_required(cg.G.nodes[parent], cg.G.nodes[j])
-                    or background_knowledge.is_required(
-                        cg.G.nodes[j], cg.G.nodes[parent]
-                    )
-                ):
+                if is_required(parent, j):
                     continue  # always keep required edges — skip CI testing
 
                 other_parents = [p for p in parents if p != parent]
@@ -648,14 +685,18 @@ def skeleton_discovery_pervar(
 
             parents.sort(key=lambda p: val_min.get(p, 0), reverse=True)
 
-        surviving_parents[j] = set(parents)
+        surviving_parents[j] = list(parents)  # strongest first, as PCMCI ranks them
 
     # Apply all removals at once (after all variables processed). Lag-0
     # edges other than C's are untouched here — handled in Phase 2 (MCI).
     for j in range(no_of_inst_var):
+        keep = set(surviving_parents[j])
         for parent in initial_parents[j]:
-            if parent not in surviving_parents[j]:
+            if parent not in keep:
                 remove_edge(parent, j)
+    # The ranking is what max_conds_py / max_conds_px truncate in phase 2;
+    # graph neighbours alone come back in node order.
+    cg.parent_order = surviving_parents
 
     if show_progress:
         pbar.close()
@@ -682,6 +723,7 @@ def mci_skeleton(
     background_knowledge=None,
     *,
     legacy_mci_conds: bool = False,
+    lags: list | None = None,
 ) -> CausalGraph:
     """MCI skeleton pruning (phase 2 of CDNOTS+).
 
@@ -719,15 +761,26 @@ def mci_skeleton(
     return_pvals : bool
         If True, also return all CI test results.
     no_of_var_ext : int, optional
-        Upper bound for shifted-parent column indices. When the CI
-        test data was extended by one extra lag (cdnotsplus_discovery does
-        this), shifted parents beyond num_lags become accessible, matching
-        PCMCI+'s ability to condition on variables beyond tau_max.
+        Upper bound for shifted-parent column indices: the column count of
+        ``ci_test.data``. ``run_cdnots_plus`` deepens that array (see
+        ``lags``) so shifted parents beyond the window's deepest lag are
+        accessible, matching PCMCI+'s ability to condition on variables
+        beyond tau_max.
+    background_knowledge : BackgroundKnowledge, optional
+        A required edge (or one whose shifted copy is required) is kept
+        without CI tests, so it has no MCI p-value; it ranks first as a
+        conditioning candidate, as in phase 1.
     legacy_mci_conds : bool
         If True, restore the pre-alignment conditioning rule that dropped
         every lag-copy of X from Y's parent set and every lag-copy of Y
         from X's shifted parent set. The default (False) matches PCMCI+,
         which drops only the tested node itself.
+    lags : list of int, optional
+        Lag of each slice of ``ci_test.data``, the window's own lags first
+        (``[0] + lag_list``, then the deeper ones). Needed only for a gapped
+        ``lag_list``, where slice position and lag differ: a parent's
+        lagged parents are shifted by its real lag, and dropped if that lag
+        has no slice. Defaults to contiguous lags.
 
     Returns
     -------
@@ -740,11 +793,17 @@ def mci_skeleton(
     no_of_inst_var = no_of_var // (num_lags + 1)
     if no_of_var_ext is None:
         no_of_var_ext = no_of_var
+    if lags is None or list(lags) == list(range(len(lags))):
+        slice_lag = None  # slice position == lag
+    else:
+        slice_lag = list(lags)
+        lag_slice = {lag: s for s, lag in enumerate(slice_lag)}
 
     # c_start: first C column index within a lag slice; nodes >= c_start are C nodes
     c_start = no_of_inst_var - num_c_cols if include_C else no_of_inst_var
 
     cg = deepcopy(cg)
+    is_required = _required_checker(background_knowledge, cg, num_lags)
     pbar = tqdm(total=no_of_inst_var) if show_progress else None
     pvals = []
 
@@ -826,6 +885,11 @@ def mci_skeleton(
             base_j = all_base_j[j]
 
             for parent in list(parents):
+                if is_required(parent, j):
+                    # Kept whatever the test says, so not tested (as in phase
+                    # 1); its val_min stays inf, so it ranks first as a
+                    # conditioning candidate, again as in phase 1.
+                    continue
                 parent_inst = parent % no_of_inst_var
                 parent_lag = parent // no_of_inst_var
 
@@ -854,14 +918,21 @@ def mci_skeleton(
                 for p in lagged_parents.get(parent_inst, []):
                     p_inst = p % no_of_inst_var
                     p_lag = p // no_of_inst_var
-                    shifted_lag = p_lag + parent_lag
+                    if slice_lag is None:
+                        shifted_slot = p_lag + parent_lag
+                    else:
+                        shifted_slot = lag_slice.get(
+                            slice_lag[parent_lag] + slice_lag[p_lag]
+                        )
+                        if shifted_slot is None:
+                            continue
                     # PCMCI+ keeps every shifted lagged parent of X, including
                     # lag-copies of Y (the shift can never produce (j, 0)).
                     # Legacy CDNOTS+ dropped them all.
                     if legacy_mci_conds and p_inst == j:
                         continue
                     if not _is_c_node(p_inst):
-                        shifted_idx = p_inst + shifted_lag * no_of_inst_var
+                        shifted_idx = p_inst + shifted_slot * no_of_inst_var
                         if shifted_idx < no_of_var_ext and shifted_idx != j:
                             base_conds_x.append(shifted_idx)
                 if max_conds_px is not None:
@@ -900,11 +971,6 @@ def mci_skeleton(
 
         # --- Apply all removals at once (stable / breadth-first) ---
         for parent, j, _ in removals:
-            if background_knowledge is not None and (
-                background_knowledge.is_required(cg.G.nodes[parent], cg.G.nodes[j])
-                or background_knowledge.is_required(cg.G.nodes[j], cg.G.nodes[parent])
-            ):
-                continue
             if parent in all_parents.get(j, []):
                 all_parents[j].remove(parent)
                 all_val_min[j].pop(parent, None)
@@ -952,6 +1018,7 @@ def lag_verification_pass(
     num_c_cols: int = 1,
     verbose: bool = False,
     alpha_lv: float | None = None,
+    background_knowledge=None,
 ) -> tuple:
     """Multi-lag redundancy test: remove spurious lags between the same variable pair.
 
@@ -995,7 +1062,10 @@ def lag_verification_pass(
         Print each removal decision.
     alpha_lv : float, optional
         Significance level for the redundancy test. A lag is removed
-        when p > alpha_lv (independent = redundant). Defaults to ``alpha``.
+        when p > alpha_lv (independent = redundant). Defaults to ``alpha / 5``.
+    background_knowledge : BackgroundKnowledge, optional
+        Required edges are neither tested nor removed; they still enter the
+        other lags' conditioning sets.
 
     Returns
     -------
@@ -1012,6 +1082,7 @@ def lag_verification_pass(
 
     t0 = time.perf_counter()
     cg = deepcopy(cg)
+    is_required = _required_checker(background_knowledge, cg, num_lags)
 
     no_of_var = cg.G.num_vars
     no_of_inst_var = no_of_var // (num_lags + 1)
@@ -1077,6 +1148,8 @@ def lag_verification_pass(
         ]
 
         for tau, y in lag_list:
+            if is_required(x, y):
+                continue
             # Conditioning set: the OTHER lags of X_j in this pair + other parents.
             other_y = [n for n in y_nodes if n != y]
             cond_set = other_y + other_parents
