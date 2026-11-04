@@ -25,9 +25,9 @@ def test_ci_test_info(options):
         ("parcorr-gpu", "Works at any T and any d. Misses nonlinear edges."),
         ("gcmi", "(monotone) nonlinearity only; misses non-monotone dependencies."),
         ("kci", "Most general kernel test. O(T^3) — slow at large T."),
-        ("splitkci", "data. Performance improves with larger T."),
-        ("dfcit", "columns natively. Results vary by graph structure."),
-        ("rcot", "Fast. X/Y features sized to the sample; deterministic (seed=42)."),
+        ("splitkci", "loses power at small T; performance improves with larger T."),
+        ("dfcit", "found). Results vary by graph structure."),
+        ("rcot", "sized to the sample; deterministic (seed=42)."),
         (
             "cmiknn-gpu",
             "The permutation null stops early once the p-value is decided.",

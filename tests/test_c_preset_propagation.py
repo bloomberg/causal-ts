@@ -311,9 +311,63 @@ def test_discover_df_include_c_false_reaches_grace(monkeypatch):
     assert spy.calls[0]["include_C"] is False
 
 
-def test_discover_df_rejects_ci_test_for_grace():
-    with pytest.raises(ValueError, match="not supported for 'grace'"):
-        discover_df(_df(), algorithm="grace", ci_test="kci")
+@pytest.mark.parametrize("algorithm", ["grace", "reap"])
+def test_discover_df_named_ci_test_reaches_refinement_candidate(monkeypatch, algorithm):
+    """A named ci_test becomes the factory the refinement builds its candidate with."""
+    import causalts.grace.runners as gr
+
+    target = (gd, "run_cdnots_gated") if algorithm == "grace" else (gr, "run_reap")
+    spy = _Spy(d=3, max_lag=2)
+    monkeypatch.setattr(*target, spy)
+    discover_df(_df(), algorithm=algorithm, ci_test="parcorr", max_lag=2)
+    factory = spy.calls[0]["ci_test_class"]
+    test = factory(_df().values, cache_dir=None, data_hash=None)
+    assert type(test).__name__ == "PartialCorr"
+
+
+def test_discover_df_named_ci_test_turns_on_grace_ss_ci_skeleton(monkeypatch):
+    spy = _Spy(d=3, max_lag=2)
+    monkeypatch.setattr(gd, "run_stability_selection", spy)
+    discover_df(_df(), algorithm="grace-ss", ci_test="parcorr", max_lag=2)
+    assert spy.calls[0]["use_ci_skeleton"] is True
+
+
+@pytest.mark.parametrize("algorithm", ["cedar", "grace-ss"])
+def test_discover_df_rejects_cmiknn_mixed_where_discrete_cols_are_lost(algorithm):
+    with pytest.raises(ValueError, match="does not track which columns are discrete"):
+        discover_df(_df(), algorithm=algorithm, ci_test="cmiknn-mixed-gpu")
+
+
+def test_discover_df_rejects_ci_test_for_grace_ss_without_ci_skeleton():
+    with pytest.raises(ValueError, match="use_ci_skeleton=False"):
+        discover_df(
+            _df(), algorithm="grace-ss", ci_test="parcorr", use_ci_skeleton=False
+        )
+
+
+@pytest.mark.parametrize("algorithm", ["grace", "grace-ss"])
+def test_discover_df_device_reaches_gated_model_only_when_given(monkeypatch, algorithm):
+    name = "run_cdnots_gated" if algorithm == "grace" else "run_stability_selection"
+    spy = _Spy(d=3, max_lag=2)
+    monkeypatch.setattr(gd, name, spy)
+    discover_df(_df(), algorithm=algorithm, max_lag=2)
+    discover_df(_df(), algorithm=algorithm, max_lag=2, device="cpu")
+    assert "device" not in spy.calls[0]  # GRACE picks its own device
+    assert spy.calls[1]["device"] == "cpu"
+
+
+def test_discover_df_default_ci_test_leaves_refinement_default(monkeypatch):
+    spy = _Spy(d=3, max_lag=2)
+    monkeypatch.setattr(gd, "run_cdnots_gated", spy)
+    discover_df(_df(), algorithm="grace", max_lag=2)
+    assert "ci_test_class" not in spy.calls[0]
+
+
+def test_discover_df_rejects_ci_test_and_ci_test_class_together():
+    with pytest.raises(ValueError, match="not both"):
+        discover_df(
+            _df(), algorithm="grace", ci_test="kci", ci_test_class=lambda d, **_: None
+        )
 
 
 def test_discover_df_rejects_include_c_for_grace_ss_without_ci_skeleton():

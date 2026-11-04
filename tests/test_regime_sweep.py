@@ -58,7 +58,8 @@ def test_curved_form_maps_to_linear_quad():
     assert r["facts"]["stationarity"]["form"] == "curved"
 
 
-def test_high_dim_recommends_grace():
+def test_high_dim_recommends_cdnots_with_reap_refinement():
+    """No dimension cut-off: d=25 linear data still gets CDNOTS, refined by REAP."""
     r = np.random.default_rng(4)
     T, d = 400, 25
     a = r.standard_normal((T, d))
@@ -66,7 +67,9 @@ def test_high_dim_recommends_grace():
         for i in range(1, d):
             a[t, i] += 0.4 * a[t - 1, i - 1]
     df = pd.DataFrame(a, columns=[f"X{i}" for i in range(d)])
-    assert inspect_df(df)["recommendation"]["algorithm"] == "grace"
+    rec = inspect_df(df)["recommendation"]
+    assert rec["algorithm"] == "cdnots"
+    assert rec["refine"] == "reap"
 
 
 def test_constant_column_does_not_trigger_cmiknn():

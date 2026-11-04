@@ -382,13 +382,14 @@ def phase_three(
             )
             score.append(sc)
 
-        idd = int(np.argmin(score))
+        _s = np.asarray(score, dtype=float)
+        if not np.isfinite(_s).all():
+            # A non-finite score (e.g. from missing values) gives no ordering:
+            # argmin would return the first NaN, a guessed sink. Abstain.
+            break
+        idd = int(np.argmin(_s))
 
         if orient_margin > 0.0:
-            _s = np.asarray(score, dtype=float)
-            if not np.isfinite(_s[idd]):
-                # Degenerate score: refuse to guess a sink.
-                break
             if _s.size > 1:
                 _finite = np.sort(_s[np.isfinite(_s)])
                 if _finite.size < 2:
@@ -451,8 +452,8 @@ def build_pvalue_matrix(pvals, num_vars, max_lag, aggregation="min"):
 
     Returns
     -------
-    M : ndarray, shape (num_vars, num_vars, max_lag+1)
-        P-value matrix.  ``M[i, j, tau]`` is the aggregated p-value for
+    M : numpy.ndarray
+        P-value matrix of shape ``(num_vars, num_vars, max_lag + 1)``.  ``M[i, j, tau]`` is the aggregated p-value for
         the test of edge *i(t-tau) → j(t)* (same convention as the
         causal graph arrays).  Untested entries are ``NaN``.
     """

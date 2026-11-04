@@ -90,7 +90,8 @@ def check_linearity(data, alpha=0.05, max_lag=1, pairs=None):
     if fraction > 0.2:
         summary = (
             f"{n_nonlinear}/{n_total} pairs show significant nonlinearity "
-            f"(alpha={alpha}). Consider a nonlinear CI test (splitkci, dfcit)."
+            f"(alpha={alpha}). Consider a nonlinear CI test (raft; rcot if the "
+            f"dependence may act through the variance)."
         )
     elif n_nonlinear > 0:
         summary = (
