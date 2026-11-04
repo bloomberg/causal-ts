@@ -19,11 +19,9 @@ from hashlib import sha1
 
 import numpy as np
 import pandas as pd
-import six
 
 
-@six.add_metaclass(abc.ABCMeta)
-class CondIndTest:
+class CondIndTest(metaclass=abc.ABCMeta):
     """Base class of conditional independence tests.
 
     Provides useful general functions for different independence tests such as

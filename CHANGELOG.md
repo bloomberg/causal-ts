@@ -141,6 +141,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* Removed the undeclared `six` import from the CI-test base class; a core-only install
+  failed to import `ParCorr`, GRACE and REAP.
 * `CMIknnMixedGPU`: p = 1 for strong dependence in small discrete strata; a
   miscalibrated permutation null given discrete conditioning variables (now shuffled in
   blocks within strata); a biased statistic for all-discrete data; non-default
