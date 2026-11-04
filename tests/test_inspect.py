@@ -157,5 +157,104 @@ def test_latent_factor_does_not_change_algorithm_choice():
     assert a["include_C"] == b["include_C"]
 
 
+def test_variance_dependence_fact_and_recommendation():
+    rng = np.random.default_rng(0)
+    T, d = 600, 4
+    x = np.zeros((T, d))
+    for t in range(1, T):
+        scale = np.ones(d)
+        scale[3] = np.exp(0.6 * x[t - 1, 0])
+        x[t] = 0.4 * x[t - 1] + scale * rng.normal(size=d)
+    report = inspect_df(pd.DataFrame(x, columns=["a", "b", "c", "z"]))
+    vd = report["facts"]["variance_dependence"]
+    assert vd["detected"] is True and "a -> z" in vd["pairs"]
+    assert report["recommendation"]["ci_test"] == "rcot"
+    assert report["recommendation"]["refine"] == "grace"
+
+
+def test_contemporaneous_only_skips_variance_check_and_refinement():
+    df = pd.DataFrame(np.random.default_rng(0).normal(size=(200, 3)))
+    out = inspect_df(df, max_lag=0)
+    assert out["facts"]["variance_dependence"]["detected"] is None
+    assert out["recommendation"]["refine"] is None
+
+
+def test_variance_check_skipped_above_budget(monkeypatch):
+    import causalts.inspection as ins
+
+    monkeypatch.setattr(ins, "_VARIANCE_CHECK_BUDGET", 100)
+    df = pd.DataFrame(np.random.default_rng(0).normal(size=(200, 3)))
+    out = inspect_df(df, max_lag=1)
+    vd = out["facts"]["variance_dependence"]
+    assert vd["detected"] is None and vd["reason"] == "too_large"
+    assert "check skipped" in out["recommendation"]["rationale"]
+
+
+def test_variance_check_not_applicable_for_one_variable():
+    df = pd.DataFrame({"x": np.random.default_rng(0).normal(size=200)})
+    out = inspect_df(df, max_lag=1)
+    assert out["facts"]["variance_dependence"]["reason"] == "not_applicable"
+    assert "variance-dependence check" not in out["recommendation"]["rationale"]
+
+
+def _bool_variance_panel(T=600, seed=0):
+    """A Boolean b that only moves the noise scale of y one step later."""
+    rng = np.random.default_rng(seed)
+    b = rng.random(T) < 0.5
+    y = np.r_[0.0, np.where(b[:-1], 3.0, 0.3)] * rng.normal(size=T)
+    return pd.DataFrame({"b": b, "y": y, "z": rng.normal(size=T)})
+
+
+def test_boolean_columns_reach_the_variance_check():
+    out = inspect_df(_bool_variance_panel(), max_lag=1)
+    vd = out["facts"]["variance_dependence"]
+    assert vd["detected"] is True and "b -> y" in vd["pairs"]
+    assert out["data"]["discrete_cols"] == ["b"]
+
+
+def test_discover_df_accepts_boolean_columns():
+    from causalts.inspection import discover_df
+
+    df = _bool_variance_panel(T=200)
+    res = discover_df(df, ci_test="cmiknn-mixed-gpu", max_lag=1)
+    assert np.asarray(res.cg_tig).shape[:2] == (3, 3)
+
+
+def test_object_true_false_column_with_blank_is_numeric():
+    """read_csv leaves True/False with a blank cell as an object column."""
+    from causalts.inspection import numeric_frame
+
+    df = _bool_variance_panel(T=200)
+    col = df["b"].astype(object)
+    col.iloc[3] = None
+    df["b"] = col
+    out = numeric_frame(df)
+    assert out["b"].dtype == np.float64 and np.isnan(out["b"].iloc[3])
+    assert inspect_df(df, max_lag=1)["data"]["discrete_cols"] == ["b"]
+
+
+def test_any_missing_value_warns_and_imputes():
+    df = pd.DataFrame(
+        np.random.default_rng(0).normal(size=(120, 3)), columns=list("abc")
+    )
+    df.iloc[5, 1] = np.nan
+    out = inspect_df(df, max_lag=1)
+    assert any("b has missing values" in w for w in out["warnings"])
+    assert out["recommendation"]["refine_params"].get("impute") == "var_em"
+
+
+def test_merge_lag0_restores_candidate_contemporaneous_edges():
+    from causalts.inspection import merge_lag0
+
+    refined = np.zeros((3, 3, 2))
+    refined[0, 1, 1] = 1
+    candidate = np.zeros((2, 2, 2))
+    candidate[0, 1, 0] = 1
+    candidate[1, 0, 1] = 1  # lagged edges of the candidate are not copied
+    g = merge_lag0(refined, candidate)
+    assert g[0, 1, 0] == 1 and g[0, 1, 1] == 1 and g[1, 0, 1] == 0
+    assert g.shape == refined.shape and refined[0, 1, 0] == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

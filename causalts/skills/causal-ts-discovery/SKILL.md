@@ -46,7 +46,16 @@ warnings}`. Read it — do **not** re-derive these facts yourself.
   too-few rows). If a column is heavily missing or constant, recommend fixing it
   (impute/drop) before trusting results.
 - **`facts`** — linearity, per-column (non)stationarity + its `form`, suggested
-  max lag, and `latent_factor`.
+  max lag, `latent_factor`, and `variance_dependence`.
+  - **`variance_dependence`** — `{detected, n_pairs, pairs, reason}`. `detected: true`
+    means some lagged variable changes another's *noise scale* without moving its
+    mean (e.g. `"X0 -> X5"`). Mean-only tools (`raft`, `parcorr-gpu`, REAP) cannot
+    see those edges, which is why the recommendation then switches to `rcot` +
+    GRACE. `null` means the check did not run, and `reason` says why:
+    `"not_applicable"` (`max_lag` 0 or a single variable), `"too_large"` (skipped to
+    keep `inspect` cheap; mention to the user that variance-only parents were not
+    ruled out) or `"unavailable"` (missing values, too few rows, degenerate
+    columns). Never report `null` as "none found".
   - **`latent_factor`** — `{detected, spectral_ratio, tau}`. `detected: true` means
     one or more latent factors load broadly across the panel; plan on deconfounding
     (§5). Read the negatives narrowly: `false` only rules out factor structure this
@@ -54,8 +63,13 @@ warnings}`. Read it — do **not** re-derive these facts yourself.
     dominant eigenvalue and stays invisible — and `null` means the check could not run
     (missing values, `d < 2`, too few rows). **Never report either as "no
     confounding".**
-- **`recommendation`** — `{algorithm, ci_test, include_C, c_preset, max_lag,
-  rationale}`. This is a deterministic default; you may **override it** with
+- **`recommendation`** — `{algorithm, ci_test, refine, refine_params, include_C,
+  c_preset, max_lag, params, rationale}`. `algorithm` is always `cdnots`; `refine`
+  (`reap`, or `grace` when variance-only parents were detected) is an optional
+  second step that refines that CDNOTS graph's **lagged** edges, with keyword
+  arguments `refine_params` (`{"contemporaneous": true}` for REAP, which re-adds
+  lag-0 edges; GRACE returns none, see §4; plus `"impute": "var_em"` when values
+  are missing). This is a deterministic default; you may **override it** with
   context the tool can't see (e.g. the user says "these are already
   differenced/log-returns" → drop the C node; "I only care about causes of Y" →
   see `--target-var` in `causal-ts discover --help`).
@@ -68,15 +82,15 @@ rather than guessing.
 
 - `cost_class == "cheap"` → proceed to discovery without asking.
 - `cost_class == "moderate"` → proceed, but tell the user what you're running.
-- `cost_class == "expensive"` (large d, `kci`/`cmiknn-gpu`, or GRACE) →
+- `cost_class == "expensive"` (large d, `kci`/`cmiknn-gpu`/`cmiknn-mixed-gpu`) →
   **checkpoint first.** Tell the user the config and that it may be slow, then
   offer a concrete cheaper alternative — stay **inside causal-ts** (do NOT
   suggest external tools like PCMCI/tigramite; they are optional deps and may be
   absent). Pick the alternative by what makes it expensive:
-  - expensive from **GRACE / high `d`** → offer `cdnots` or `cedar` with
-    `parcorr-gpu` (same skeleton, no neural-gate training);
+  - expensive from **high `d`** → offer `parcorr-gpu` (or `raft` for nonlinear
+    mean effects), which scale best with the size of the conditioning sets;
   - expensive from the **CI test** (`kci` / `cmiknn-gpu`) → downshift to
-    `splitkci`;
+    `rcot` (still full conditional independence) or `raft` (mean only);
   - or lower `--max-lag`.
   Then wait for the go-ahead.
 
@@ -87,8 +101,23 @@ Use the recommended config. Example:
 ```bash
 causal-ts -o <out-dir> discover <data-file> --json \
   --algorithm <rec.algorithm> --ci-test <rec.ci_test> \
-  --max-lag <rec.max_lag> [--include-c --c-preset <rec.c_preset>]
+  --max-lag <rec.max_lag> <C flags> [--impute var_em]
 ```
+
+Add `--impute var_em` when `rec.params` has `impute` (the data has missing values).
+
+`<C flags>` is `--include-c --c-preset <rec.c_preset>` when `rec.include_C` is
+true and `--no-c` when it is false. Always pass one of them: the CLI's own
+default is `--include-c`.
+
+Then, as the optional refinement (skip it when `rec.refine` is null), run the
+same command with `--algorithm <rec.refine>` (plus `--contemporaneous` for
+REAP): REAP/GRACE build
+that CDNOTS graph with the given `--ci-test` and refine its lagged edges in one run (GRACE trains a neural model: tell the user
+it is slower, and checkpoint first when `d` is large); keep `--impute var_em` when
+`rec.refine_params` has `impute`. GRACE returns **no lag-0 edges**: report
+the lagged edges from the GRACE run and the lag-0 edges from the CDNOTS run
+(in Python, `causalts.inspection.merge_lag0(refined, cdnots_result)`).
 
 `-o` is a **global** option and must come *before* `discover` (same for other
 `causal-ts` commands). `--json` echoes the summary (including a named **edge
@@ -116,7 +145,7 @@ read it rather than eyeballing, then apply:
 
 - **`empty` (no edges)** → alpha may be too strict, max_lag too small, or the
   CI test underpowered for the mechanism. Suggest a looser alpha or a
-  higher-recall test (`dfcit`).
+  more general test (`rcot`, or `dfcit` for high recall).
 - **`saturated` (near-complete graph)** → likely over-connection. Common causes:
   unhandled nonstationarity (was `include_C` set when the data is nonstationary?)
   or near-unit-root persistence. Suggest a stricter alpha (e.g. 0.01),
@@ -159,8 +188,9 @@ causal-ts -o <dir> discover <data> --json --algorithm <rec.algorithm> \
 ```
 
 Report edges with `persistence >= ~0.6` as stable and the rest as fragile.
-`--validate` is **not supported for GRACE** (bootstrapping neural training is
-impractical) — validate a GRACE result with `--algorithm cdnots`/`cedar` instead,
+`--validate` is **not supported for GRACE, GRACE-SS or REAP** (re-running the
+refinement over many windows is impractical) — validate the CDNOTS graph they
+refine with `--algorithm cdnots` instead,
 or in Python drive `causalts.bootstrap.temporal_bootstrap` with a discovery
 function returning `run_grace(sub, max_lag=<...>)`'s final graph
 (`cg_tig != 0`), not its `gate_values`: self-loops are decided by an F-test and have

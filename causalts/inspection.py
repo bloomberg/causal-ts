@@ -28,17 +28,28 @@ Public API:
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
 from .cdnots.phase3_utils import _detect_discrete_cols
+from .utils.heteroskedasticity import check_variance_dependence
 from .utils.linearity import check_linearity
 from .utils.stationarity import check_stationarity_observed, detect_trend_form
 
 SCHEMA_VERSION = 1
 
 # Cost heuristics (Q6): the gate only needs "should I ask first?", not seconds.
-_EXPENSIVE_CI_TESTS = {"kci", "cmiknn-gpu"}
+_EXPENSIVE_CI_TESTS = {"kci", "cmiknn-gpu", "cmiknn-mixed-gpu"}
+_MODERATE_CI_TESTS = {"splitkci", "dfcit", "rcot", "rift"}
 _EXPENSIVE_ALGORITHMS = {"grace", "grace-ss"}
 _HIGH_DIM = 15
+# Most lags at which the variance-dependence check tests scale effects (its mean
+# model uses the suggested max lag). Longer blocks cost power and, on strongly
+# persistent drivers, calibration.
+_VARIANCE_CHECK_TEST_LAGS = 3
+# Largest d * (d - 1) * T the pre-flight variance check runs on (about 10 s at
+# d = 100, T = 2000); above it the check is reported as not run, and
+# check_variance_dependence can be called directly.
+_VARIANCE_CHECK_BUDGET = 2.5e7
 
 
 def _suggested_max_lag(arr, cap=5, default=3):
@@ -152,6 +163,43 @@ def diagnostics_from_graph(graph, var_names, saturated_frac=0.5):
     }
 
 
+def merge_lag0(refined, candidate):
+    """Lagged edges of ``refined`` with the lag-0 edges of ``candidate``.
+
+    GRACE refines lagged edges only and returns an empty lag-0 slice; this puts
+    back the contemporaneous edges of the CDNOTS graph it refined. Takes result
+    objects or ``cg_tig`` arrays and returns a new array shaped like
+    ``refined.cg_tig``; extra rows/columns of either graph (e.g. a C node) are
+    left as they are in ``refined``.
+    """
+    g = np.array(getattr(refined, "cg_tig", refined), dtype=float, copy=True)
+    c = np.asarray(getattr(candidate, "cg_tig", candidate))
+    k = min(g.shape[0], c.shape[0])
+    g[:k, :k, 0] = c[:k, :k, 0]
+    return g
+
+
+def numeric_frame(df):
+    """Return ``df`` with Boolean columns as 0/1 floats.
+
+    pandas keeps Booleans out of numeric selections and turns a frame that mixes
+    them with floats into an object array; as 0/1 they are ordinary discrete
+    columns for the checks, the discrete-aware CI tests and the lag embedding.
+    """
+    bool_cols = list(df.select_dtypes(include=["bool", "boolean"]).columns)
+    # True/False read from a file with a blank cell arrive as object columns.
+    for c in df.select_dtypes(include=["object"]).columns:
+        vals = df[c].dropna()
+        if len(vals) and vals.map(lambda v: isinstance(v, (bool, np.bool_))).all():
+            bool_cols.append(c)
+    if bool_cols:
+        df = df.copy()
+        for c in bool_cols:
+            df[c] = df[c].map(lambda v: np.nan if pd.isna(v) else float(v))
+            df[c] = df[c].astype("float64")
+    return df
+
+
 def _data_block(df):
     T, d = df.shape
     var_names = [str(c) for c in df.columns]
@@ -183,6 +231,11 @@ def _warnings(df, data):
         if frac >= 0.2:
             warns.append(
                 f"{col} is {frac:.0%} missing — impute or drop before discovery."
+            )
+        else:
+            warns.append(
+                f"{col} has missing values ({frac:.1%}); impute them before "
+                "discovery (the recommendation sets impute='var_em')."
             )
     if data["constant_cols"]:
         warns.append(
@@ -248,6 +301,48 @@ def _latent_factor_block(arr):
     }
 
 
+def _variance_dependence_block(arr, var_names, max_lag):
+    """``facts["variance_dependence"]``: lagged parents that move only the noise scale.
+
+    Wraps :func:`~causalts.utils.heteroskedasticity.check_variance_dependence`.
+    ``detected`` is None when the check did not run, which -- like the
+    latent-factor block -- means "not checked", not "none". ``reason`` says why:
+    ``"not_applicable"`` (``max_lag`` 0 or fewer than 2 variables: no lagged
+    cross pairs), ``"too_large"`` (``d * (d - 1) * T`` above
+    ``_VARIANCE_CHECK_BUDGET``) or ``"unavailable"`` (non-finite values, too few
+    rows, degenerate columns); it is None when the check ran.
+    """
+    T, d = arr.shape
+
+    def _not_run(reason):
+        return {"detected": None, "n_pairs": 0, "pairs": [], "reason": reason}
+
+    if int(max_lag) < 1 or d < 2:
+        return _not_run("not_applicable")
+    if d * (d - 1) * T > _VARIANCE_CHECK_BUDGET:
+        return _not_run("too_large")  # keep inspect cheap
+    try:
+        res = check_variance_dependence(
+            arr,
+            max_lag=int(max_lag),
+            test_lags=min(int(max_lag), _VARIANCE_CHECK_TEST_LAGS),
+        )
+    except Exception:  # a diagnostic must never break the whole report
+        return _not_run("unavailable")
+    if res["detected"] is None:
+        return _not_run("unavailable")
+    flagged = sorted(
+        (r for r in res["results"] if r["is_variance_parent"]),
+        key=lambda r: -r["partial_r2"],
+    )
+    return {
+        "detected": bool(res["detected"]),
+        "n_pairs": int(res["n_significant"]),
+        "pairs": [f"{var_names[r['x']]} -> {var_names[r['y']]}" for r in flagged[:5]],
+        "reason": None,
+    }
+
+
 def recommend_config(facts, data):
     """Map measured facts to a discovery configuration (pure, deterministic).
 
@@ -260,8 +355,27 @@ def recommend_config(facts, data):
 
     Returns
     -------
-    dict with keys ``algorithm``, ``ci_test``, ``include_C``, ``c_preset``,
-    ``max_lag``, ``params``, ``rationale``.
+    dict with keys ``algorithm``, ``ci_test``, ``refine``, ``refine_params``,
+    ``include_C``, ``c_preset``, ``max_lag``, ``params``, ``rationale``.
+
+    Notes
+    -----
+    The rule, in order:
+
+    - **Discovery** is always CDNOTS: its cost in ``d`` is set by the CI test, not
+      by the algorithm, so there is no dimension cut-off.
+    - **CI test.** Discrete/mixed columns -> ``cmiknn-mixed-gpu``. Otherwise, if
+      variance-only parents were detected -> ``rcot`` (full conditional
+      independence, sees dependence through the variance). Otherwise nonlinear ->
+      ``raft`` (fast, conditional-mean only), linear -> ``parcorr-gpu``.
+    - **Refinement** (``refine``, optional second step on the CDNOTS graph, with
+      keyword arguments ``refine_params``): ``"grace"`` when variance-only parents
+      were detected (its gated model keeps them, via ``grow_variance``), else
+      ``"reap"`` (regression-based, no training). Both refine lagged edges only:
+      REAP gets ``contemporaneous=True`` to re-add lag-0 edges; GRACE returns
+      no lag-0 edges, so put the CDNOTS graph's back with :func:`merge_lag0`.
+      With missing values, ``refine_params`` adds ``impute="var_em"`` (both
+      need complete data). ``refine`` is ``None`` when ``max_lag`` is 0.
     """
     d = data["n_vars"]
     T = data["n_rows"]
@@ -271,32 +385,73 @@ def recommend_config(facts, data):
     form = stat["form"]
     has_discrete = len(data["discrete_cols"]) > 0
     max_lag = facts["suggested_max_lag"]
+    vd = facts.get("variance_dependence") or {}
+    variance_parents = vd.get("detected") is True
 
-    reasons = []
-
-    # --- algorithm ---
-    if d > 20:
-        algorithm = "grace"
-        reasons.append(f"high dimensionality (d={d}) → GRACE (gated, scalable)")
-    else:
-        algorithm = "cdnots"
-        reasons.append(f"moderate dimensionality (d={d}) → CDNOTS")
-        if 6 <= d <= 20:
-            reasons.append("(Cedar is a good pairwise alternative)")
+    reasons = [f"CDNOTS (d={d}, T={T}; its cost in d is set by the CI test)"]
+    not_run = (
+        {
+            "too_large": (
+                "variance-dependence check skipped (too large for the pre-flight check), "
+                "so variance-only parents are not ruled out; run "
+                "causalts.utils.heteroskedasticity.check_variance_dependence directly"
+            ),
+            "unavailable": (
+                "variance-dependence check could not run (non-finite values, too few "
+                "rows or degenerate columns), so variance-only parents are not ruled out"
+            ),
+        }.get(vd.get("reason"))
+        if vd.get("detected") is None
+        else None
+    )
+    if not_run:
+        reasons.append(not_run)
 
     # --- CI test ---
     if has_discrete:
-        ci_test = "cmiknn-gpu"
-        reasons.append("discrete/mixed columns → cmiknn-gpu (discrete-aware)")
-    elif nonlinear and T < 300:
-        ci_test = "dfcit"
-        reasons.append(f"nonlinear + small T ({T}) → dfcit (high recall)")
+        ci_test = "cmiknn-mixed-gpu"
+        reasons.append("discrete/mixed columns → cmiknn-mixed-gpu (discrete-aware)")
+    elif variance_parents:
+        ci_test = "rcot"
+        reasons.append(
+            f"variance-only parents detected ({vd['n_pairs']} pairs) → rcot "
+            "(mean-only tests such as raft/parcorr cannot see them)"
+        )
     elif nonlinear:
-        ci_test = "splitkci"
-        reasons.append("nonlinear + sufficient T → splitkci (speed/F1)")
+        ci_test = "raft"
+        reasons.append("nonlinear → raft (fast; conditional-mean dependence)")
     else:
         ci_test = "parcorr-gpu"
         reasons.append("approximately linear → parcorr-gpu")
+
+    # --- refinement of the CDNOTS graph (optional second step) ---
+    # Both refinements refine lagged edges only. REAP can re-add lag-0 edges
+    # (contemporaneous=True); GRACE's are put back with merge_lag0.
+    if max_lag < 1:
+        refine, refine_params = None, {}
+        reasons.append("max_lag=0 → no refinement (both refine lagged edges)")
+    elif variance_parents:
+        refine, refine_params = "grace", {}
+        reasons.append(
+            "refine lagged edges with GRACE (its gated model keeps variance-only "
+            "parents); it drops lag-0 edges, so put the CDNOTS graph's back with "
+            "causalts.inspection.merge_lag0"
+        )
+    else:
+        refine, refine_params = "reap", {"contemporaneous": True}
+        reasons.append(
+            "refine with REAP (regression-based, no training; contemporaneous=True "
+            "re-adds lag-0 edges)"
+        )
+    # Missing values: impute (VAR-EM) in both steps. The refinements need
+    # complete data, and CDNOTS's nonstationarity orientation abstains on the
+    # non-finite scores missing values produce.
+    params = {}
+    if data["missing_by_col"]:
+        params["impute"] = "var_em"
+        if refine is not None:
+            refine_params = {**refine_params, "impute": "var_em"}
+        reasons.append("missing values → impute them (VAR-EM) in every step")
 
     # --- C node (nonstationarity) ---
     include_C = bool(nonstationary)
@@ -325,12 +480,14 @@ def recommend_config(facts, data):
         )
 
     return {
-        "algorithm": algorithm,
+        "algorithm": "cdnots",
         "ci_test": ci_test,
+        "refine": refine,
+        "refine_params": refine_params,
         "include_C": include_C,
         "c_preset": c_preset,
         "max_lag": int(max_lag),
-        "params": {},
+        "params": params,
         "rationale": "; ".join(reasons),
     }
 
@@ -342,7 +499,7 @@ def _cost_class(algorithm, ci_test, d, T):
         or algorithm in _EXPENSIVE_ALGORITHMS
     ):
         return "expensive"
-    if d > 8 or ci_test == "splitkci":
+    if d > 8 or ci_test in _MODERATE_CI_TESTS:
         return "moderate"
     return "cheap"
 
@@ -364,6 +521,7 @@ def inspect_df(df, max_lag=None):
         ``{schema_version, data, facts, recommendation, cost_class, warnings}``
         (see module docstring / DESIGN Q5 for the contract).
     """
+    df = numeric_frame(df)
     data = _data_block(df)
 
     # Facts are measured on the numeric, non-constant columns.
@@ -387,6 +545,9 @@ def inspect_df(df, max_lag=None):
         },
         "suggested_max_lag": int(suggested),
         "latent_factor": _latent_factor_block(arr),
+        "variance_dependence": _variance_dependence_block(
+            arr, [str(c) for c in numeric.columns], suggested
+        ),
     }
 
     recommendation = recommend_config(facts, data)
@@ -407,15 +568,22 @@ def inspect_df(df, max_lag=None):
     }
 
 
+_MIXED_UNSUPPORTED = (
+    "ci_test='cmiknn-mixed-gpu' is not supported for algorithm={algorithm!r}, "
+    "which does not track which columns are discrete; use 'cdnots', 'cdnots+', "
+    "'grace' or 'reap'."
+)
+
+
 def discover_df(
     df,
     algorithm="cdnots",
-    ci_test="parcorr-gpu",
+    ci_test=None,
     max_lag=3,
     include_C=False,
     c_preset="linear",
     alpha=None,
-    device="cpu",
+    device=None,
     **kwargs,
 ):
     """Run causal discovery on an in-memory DataFrame (Python twin of the CLI).
@@ -425,18 +593,32 @@ def discover_df(
     keyword args pass through to the underlying ``run_*`` function. For files,
     prefer the CLI; this is the no-temp-file path for notebooks/sessions.
 
-    Every argument is honoured by every algorithm, with one exception: GRACE
-    builds its CDNOTS skeleton with its own CI test, so ``ci_test`` applies to
-    the CDNOTS/Cedar paths only and is rejected for GRACE and REAP rather than silently
-    ignored (pass ``ci_test_class=<class>`` through ``**kwargs`` instead).
+    GRACE, GRACE-SS and REAP build their CDNOTS candidate graph on their own
+    (transformed) data, so for them a named ``ci_test`` is turned into the
+    ``ci_test_class`` factory they call, as the CLI does.
+
+    To run a recommendation from :func:`recommend_config`, call
+    ``discover_df(df, algorithm=rec["algorithm"], ci_test=rec["ci_test"], ...)``
+    for the CDNOTS graph, or ``algorithm=rec["refine"], **rec["refine_params"]``
+    (with the same ``ci_test``, ``max_lag``, ``include_C`` and ``c_preset``) to
+    build that same CDNOTS candidate and refine it in one call. Skip the
+    refinement when ``rec["refine"]`` is None (``max_lag`` 0).
 
     Parameters
     ----------
+    ci_test : str, optional
+        Registered CI-test name (see :func:`~causalts.ci_tests.list_ci_tests`).
+        ``None`` (default) means ``"parcorr-gpu"`` for CDNOTS/Cedar, and each
+        refinement's own default (partial correlation) for GRACE/REAP.
     alpha : float, optional
         Significance level. ``None`` (default) means "use the algorithm's own
         default" — 0.05 for CDNOTS and GRACE's skeleton, 0.01 for CDNOTS+ and
         Cedar's ``alpha_cond1`` / ``alpha_cond2``. Passing a float applies it
         to all of them.
+    device : str, optional
+        Device of the CI test (``None``, the default, means ``"cpu"``). For GRACE
+        and GRACE-SS it is also passed on for the gated model; ``None`` lets them
+        pick (CUDA if available).
     include_C : bool, default False
         Add the C nonstationarity node. Applied uniformly here, so the default
         is off for every algorithm — note that calling
@@ -447,9 +629,13 @@ def discover_df(
     Raises
     ------
     ValueError
-        If ``algorithm`` is unknown, or if a non-default ``ci_test`` is
-        requested for GRACE.
+        If ``algorithm`` is unknown; if both ``ci_test`` and ``ci_test_class``
+        are passed; if ``ci_test`` is passed to GRACE-SS with
+        ``use_ci_skeleton=False``; or if ``ci_test="cmiknn-mixed-gpu"`` is used
+        with CEDAR or GRACE-SS, which do not track discrete columns.
     """
+    df = numeric_frame(df)
+    test_device = device or "cpu"
     if algorithm in ("cdnots", "cdnots+"):
         from .cdnots.phase3_utils import run_cdnots, run_cdnots_plus
         from .ci_tests import create_ci_test
@@ -459,7 +645,9 @@ def discover_df(
             kwargs["alpha"] = alpha
         return fn(
             df=df,
-            indep_test=create_ci_test(ci_test, df.values, device=device),
+            indep_test=create_ci_test(
+                ci_test or "parcorr-gpu", df.values, device=test_device
+            ),
             num_lags=max_lag,
             include_C=include_C,
             c_preset=c_preset,
@@ -469,29 +657,53 @@ def discover_df(
         from .cedar.discovery import run_cedar
         from .ci_tests import create_ci_test
 
+        if ci_test == "cmiknn-mixed-gpu":
+            raise ValueError(_MIXED_UNSUPPORTED.format(algorithm=algorithm))
+
         if alpha is not None:
             kwargs.setdefault("alpha_cond1", alpha)
             kwargs.setdefault("alpha_cond2", alpha)
         return run_cedar(
             df=df,
-            ci_test=create_ci_test(ci_test, df.values, device=device),
+            ci_test=create_ci_test(
+                ci_test or "parcorr-gpu", df.values, device=test_device
+            ),
             max_lag=max_lag,
             include_C=include_C,
             c_preset=c_preset,
             **kwargs,
         )
     if algorithm in ("grace", "grace-ss", "reap"):
+        from .ci_tests import create_ci_test
         from .grace.gated_discovery import run_cdnots_gated, run_stability_selection
         from .grace.runners import run_reap
 
-        # GRACE instantiates a CI test class itself for the skeleton; a
-        # by-name instance has nowhere to go. Refuse rather than drop it.
-        if ci_test != "parcorr-gpu" and "ci_test_class" not in kwargs:
-            raise ValueError(
-                f"ci_test={ci_test!r} is not supported for {algorithm!r}: GRACE "
-                "builds its skeleton with its own CI test. Pass "
-                "ci_test_class=<class> instead, or use algorithm='cdnots'."
+        # The refinements instantiate the candidate-graph test themselves, on
+        # their transformed data: hand them a factory for the named test.
+        if ci_test is not None:
+            if "ci_test_class" in kwargs:
+                raise ValueError(
+                    "pass either ci_test (a name) or ci_test_class, not both"
+                )
+            if algorithm == "grace-ss":
+                if ci_test == "cmiknn-mixed-gpu":
+                    # Its CI skeleton rank-transforms every column first, which
+                    # hides the discrete ones from the test.
+                    raise ValueError(_MIXED_UNSUPPORTED.format(algorithm=algorithm))
+                # GRACE-SS only builds a candidate graph (and so calls the test)
+                # with its CI skeleton.
+                if kwargs.get("use_ci_skeleton") is False:
+                    raise ValueError(
+                        "ci_test is only used by GRACE-SS's CI skeleton; drop "
+                        "use_ci_skeleton=False or ci_test."
+                    )
+                kwargs["use_ci_skeleton"] = True
+            name = ci_test
+            kwargs["ci_test_class"] = lambda data, **_: create_ci_test(
+                name, data, device=test_device
             )
+        if algorithm in ("grace", "grace-ss") and device is not None:
+            kwargs.setdefault("device", device)
         if algorithm in ("grace", "reap"):
             if alpha is not None:
                 kwargs["alpha"] = alpha

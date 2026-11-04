@@ -93,8 +93,16 @@ def __dir__():
 
 # Explicit __all__ so that ``from causalts import *`` still exports the lazy
 # names; star-import consults __all__ and never triggers __getattr__ without it.
+# Import helpers and the incidentally-bound submodule ``tigramite_discovery``
+# are not public API.
+_NOT_EXPORTED = {
+    "TYPE_CHECKING",
+    "PackageNotFoundError",
+    "version",
+    "tigramite_discovery",
+}
 __all__ = sorted(
-    ({name for name in globals() if not name.startswith("_")} - {"TYPE_CHECKING"})
+    ({name for name in globals() if not name.startswith("_")} - _NOT_EXPORTED)
     | set(_LAZY_ATTRS)
     | set(_LAZY_SUBMODULES)
 )

@@ -143,7 +143,12 @@ class ParCorrGPU(CIT_Base):
         if self._has_nan:
             self.enable_batching = False
         if d is not None:
-            self.data_torch = torch.Tensor(d).to(self.device)
+            # pandas copy-on-write hands out read-only ``df.values``; torch
+            # warns on those, so copy only when the array is not writable.
+            arr = np.asarray(d)
+            if not arr.flags.writeable:
+                arr = arr.copy()
+            self.data_torch = torch.Tensor(arr).to(self.device)
             if not self._has_nan:
                 self._update_cov(d)
             else:

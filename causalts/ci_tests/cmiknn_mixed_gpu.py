@@ -17,13 +17,29 @@ from .cmiknn_gpu import CMIknnGPU
 
 
 def _msinf_knn(data_t, k, disc_local):
-    """k-th nearest Chebyshev neighbor with MSinf masking for discrete columns.
+    """Per-point k-th nearest Chebyshev neighbor with MSinf masking.
+
+    Neighbors can only come from the point's own discrete stratum of size
+    ``n_i``. A fractional ``k`` (< 1) is a fraction of that stratum,
+    ``k_i = max(1, int(k * n_i))``, as it is a fraction of T without discrete
+    columns; an integer ``k`` is used as is. Either way ``k_i`` is capped at the
+    ``n_i - 1`` other members, and the estimator uses ``digamma(k_i)`` for that
+    point. Points alone in their stratum get ``k_i = 0`` and are left out. Where
+    the ``k_i``-th distance is 0 (ties), ``k_i`` becomes the number of tied
+    points, as in the mixed estimator of Gao et al. (2017).
 
     Parameters
     ----------
     data_t : torch.Tensor (T, D)
-    k : int
+    k : int or float
     disc_local : list[int]  — local column indices that are discrete
+
+    Returns
+    -------
+    eps : torch.Tensor (T,)
+        Distance to the ``k_i``-th neighbor (0 where ``k_i == 0``).
+    k_i : torch.Tensor (T,)
+        Neighbors used per point.
     """
     T, D = data_t.shape
     cont_local = [i for i in range(D) if i not in set(disc_local)]
@@ -38,8 +54,49 @@ def _msinf_knn(data_t, k, disc_local):
         dists[vals.unsqueeze(0) != vals.unsqueeze(1)] = float("inf")
 
     dists.fill_diagonal_(float("inf"))
-    eps, _ = dists.kthvalue(k, dim=1)
-    return eps
+    others = torch.isfinite(dists).sum(dim=1)
+    if k < 1:
+        k_i = torch.minimum(
+            (k * (others + 1).double()).floor().long().clamp(min=1), others
+        )
+    else:
+        k_i = others.clamp(max=int(k))
+    k_max = max(int(k_i.max()), 1)
+    nearest, _ = dists.topk(k_max, dim=1, largest=False)  # ascending
+    eps = nearest.gather(1, (k_i - 1).clamp(min=0).unsqueeze(1)).squeeze(1)
+    eps = torch.where(k_i > 0, eps, torch.zeros_like(eps))
+    # Zero radius (ties, e.g. all columns discrete): the ball counts every tied
+    # point, so k_i is the number of ties (Gao et al. 2017).
+    zero = (k_i > 0) & (eps == 0)
+    k_i = torch.where(zero, (dists == 0).sum(dim=1), k_i)
+    return eps, k_i
+
+
+def _msinf_cmi(data, eps_k, xz_local, yz_local, z_local, disc_xz, disc_yz, disc_z):
+    """Frenzel-Pompe CMI from per-point radii and neighbor counts."""
+    eps, k_i = eps_k
+    # Strictly inside the k-th neighbor (Frenzel-Pompe); a relative shrink like
+    # eps * (1 - 1e-9) is a no-op in float32. A zero radius stays 0 and counts
+    # the ties, matching k_i from _msinf_knn.
+    eps = torch.nextafter(eps, torch.zeros_like(eps))
+    T = data.shape[0]
+    k_xz = _msinf_count(data[:, xz_local], eps, disc_xz)
+    k_yz = _msinf_count(data[:, yz_local], eps, disc_yz)
+    k_z = (
+        _msinf_count(data[:, z_local], eps, disc_z)
+        if z_local
+        else torch.full((T,), float(T), dtype=eps.dtype, device=data.device)
+    )
+    ok = k_i > 0
+    if not bool(ok.any()):
+        return 0.0
+    terms = (
+        torch.digamma(k_i[ok].to(eps.dtype))
+        + torch.digamma(k_z[ok])
+        - torch.digamma(k_xz[ok])
+        - torch.digamma(k_yz[ok])
+    )
+    return terms.mean().item()
 
 
 def _msinf_count(data_t, eps, disc_local):
@@ -108,6 +165,7 @@ class CMIknnMixedGPU(CMIknnGPU):
         # Stores the global column sequence [X_cols, Y_cols, Z_cols] for the
         # current __call__ invocation; used by _cmi_estimate to remap subspaces
         self._current_global_cols = []
+        self._query_disc = True
 
     def __call__(self, X, Y, condition_set=None):
         """Override to record the global column ordering before CMI estimation."""
@@ -117,6 +175,9 @@ class CMIknnMixedGPU(CMIknnGPU):
         y_cols = [Y] if isinstance(Y, (int, np.integer)) else list(Y)
         z_cols = list(condition_set)
         self._current_global_cols = x_cols + y_cols + z_cols
+        self._query_disc = any(
+            c in self._disc_global for c in self._current_global_cols
+        )
         return super().__call__(X, Y, condition_set)
 
     # ------------------------------------------------------------------
@@ -139,9 +200,8 @@ class CMIknnMixedGPU(CMIknnGPU):
 
     def _cmi_estimate(self, array, xyz):
         """Frenzel-Pompe CMI with MSinf distance for discrete columns."""
-        _, T = array.shape
-        knn = self._resolve_knn(T)
-
+        if not self._query_disc:
+            return super()._cmi_estimate(array, xyz)
         gcols = self._current_global_cols
         array = self._transform_preserve_discrete(array, gcols)
 
@@ -164,27 +224,25 @@ class CMIknnMixedGPU(CMIknnGPU):
         disc_yz = _subspace_disc([gcols[i] for i in yz_local], disc)
         disc_z = _subspace_disc([gcols[i] for i in z_local], disc)
 
-        eps = _msinf_knn(data, knn, disc_full) * (1 - 1e-9)
-
-        k_xz = _msinf_count(data[:, xz_local], eps, disc_xz)
-        k_yz = _msinf_count(data[:, yz_local], eps, disc_yz)
-        k_z = (
-            _msinf_count(data[:, z_local], eps, disc_z)
-            if z_local
-            else torch.full((T,), float(T), device=self.device)
+        return _msinf_cmi(
+            data,
+            _msinf_knn(data, self.k, disc_full),
+            xz_local,
+            yz_local,
+            z_local,
+            disc_xz,
+            disc_yz,
+            disc_z,
         )
-
-        val = torch.digamma(torch.tensor(float(knn), device=self.device))
-        val = (
-            val
-            + (torch.digamma(k_z) - torch.digamma(k_xz) - torch.digamma(k_yz)).mean()
-        )
-        return val.item()
 
     def _cmi_from_gpu_tensor(self, data_gpu, xyz, knn, knn_t=None):
-        """CMI from pre-uploaded tensor with MSinf (used by shuffle tests)."""
-        T = data_gpu.shape[0]
+        """CMI from pre-uploaded tensor with MSinf (used by shuffle tests).
 
+        ``knn`` and ``knn_t`` are unused: the estimator uses each point's own
+        ``k_i`` (see ``_msinf_knn``).
+        """
+        if not self._query_disc:
+            return super()._cmi_from_gpu_tensor(data_gpu, xyz, knn, knn_t)
         x_local = list(np.where(xyz == 0)[0])
         y_local = list(np.where(xyz == 1)[0])
         z_local = list(np.where(xyz == 2)[0])
@@ -200,23 +258,16 @@ class CMIknnMixedGPU(CMIknnGPU):
         disc_yz = _subspace_disc([gcols[i] for i in yz_local], disc)
         disc_z = _subspace_disc([gcols[i] for i in z_local], disc)
 
-        eps = _msinf_knn(data_gpu, knn, disc_full) * (1 - 1e-9)
-
-        k_xz = _msinf_count(data_gpu[:, xz_local], eps, disc_xz)
-        k_yz = _msinf_count(data_gpu[:, yz_local], eps, disc_yz)
-        k_z = (
-            _msinf_count(data_gpu[:, z_local], eps, disc_z)
-            if z_local
-            else torch.full((T,), float(T), device=self.device)
+        return _msinf_cmi(
+            data_gpu,
+            _msinf_knn(data_gpu, self.k, disc_full),
+            xz_local,
+            yz_local,
+            z_local,
+            disc_xz,
+            disc_yz,
+            disc_z,
         )
-
-        if knn_t is None:
-            knn_t = torch.tensor(float(knn), device=self.device)
-        val = (
-            torch.digamma(knn_t)
-            + (torch.digamma(k_z) - torch.digamma(k_xz) - torch.digamma(k_yz)).mean()
-        )
-        return val.item()
 
     # ------------------------------------------------------------------
     # Shuffle overrides: preserve original discrete values after transform
@@ -228,49 +279,91 @@ class CMIknnMixedGPU(CMIknnGPU):
         dtype = torch.float32 if self.device.type == "cuda" else torch.float64
         return torch.tensor(array.T, dtype=dtype, device=self.device)
 
+    def _stratum_block_permutation(self, members, bl):
+        """Shuffle a stratum's rows (in time order) by blocks of length bl.
+
+        Blocks are shortened so the stratum has at least 4 of them; with fewer,
+        the permutation barely moves the rows and the p-value goes to 1.
+        """
+        bl = max(1, min(bl, len(members) // 4))
+        blocks = [members[k : k + bl] for k in range(0, len(members), bl)]
+        order = self.random_state.permutation(len(blocks))
+        return np.concatenate([blocks[b] for b in order])
+
+    def _transform_z_rows(self, z_array):
+        """Transform continuous Z rows for neighbor search, as CMIknnGPU does."""
+        z_array = z_array.astype(np.float64)
+        T = z_array.shape[1]
+        if self.transform == "standardize":
+            mean = z_array.mean(axis=1, keepdims=True)
+            std = z_array.std(axis=1, keepdims=True)
+            std[std == 0] = 1.0
+            z_array = (z_array - mean) / std
+        elif self.transform == "uniform":
+            uniform = np.linspace(1.0 / T, 1.0, T)
+            z_array = np.stack([np.interp(r, np.sort(r), uniform) for r in z_array])
+        elif self.transform == "ranks":
+            z_array = z_array.argsort(axis=1).argsort(axis=1).astype(np.float64)
+        return z_array
+
     def _nn_shuffle(self, array, xyz, value, x_indices, z_indices):
-        """Override: build data_gpu with discrete columns un-transformed."""
+        """Neighborhood-preserving shuffle that never moves X across Z strata.
+
+        X is permuted only within the stratum of the discrete Z columns: by
+        blocks of consecutive members of each stratum when every Z column is
+        discrete (at least ``sig_blocklength`` long, and longer for a persistent
+        X, so its serial dependence survives in the null), and among each point's ``shuffle_neighbors``
+        nearest same-stratum neighbors in the continuous Z columns otherwise.
+        """
+        if not self._query_disc:
+            return super()._nn_shuffle(array, xyz, value, x_indices, z_indices)
         _, T = array.shape
         knn = self._resolve_knn(T)
         dtype = torch.float32 if self.device.type == "cuda" else torch.float64
 
         data_gpu = self._build_gpu_tensor(array)
 
-        # Build Z-space neighbors: use ranks for continuous Z, original for discrete Z
-        z_array = array[z_indices, :].copy()
         gcols = self._current_global_cols
-        for local_i_in_full, z_global in zip(z_indices, [gcols[i] for i in z_indices]):
-            row_idx = list(z_indices).index(local_i_in_full)
-            if z_global not in self._disc_global:
-                if self.transform == "ranks":
-                    z_array[row_idx] = (
-                        z_array[row_idx].argsort().argsort().astype(np.float64)
-                    )
-                # else keep as-is (standardize/uniform handled below)
+        disc_z = [r for r, zi in enumerate(z_indices) if gcols[zi] in self._disc_global]
+        cont_z = [r for r in range(len(z_indices)) if r not in set(disc_z)]
+        if disc_z:
+            _, strata = np.unique(
+                array[np.asarray(z_indices)[disc_z], :].T, axis=0, return_inverse=True
+            )
+            strata = np.asarray(strata).ravel()
+        else:  # the discrete columns are in X or Y only
+            strata = np.zeros(T, dtype=int)
 
-        z_data = torch.tensor(z_array.T, dtype=dtype, device=self.device)
-
-        # For MSinf: Z neighbor finding uses MSinf on discrete Z dims
-        disc_z_local = [
-            i for i, zi in enumerate(z_indices) if gcols[zi] in self._disc_global
-        ]
-        if disc_z_local:
-            z_dists = torch.zeros(T, T, dtype=dtype, device=self.device)
-            cont_z_local = [
-                i for i in range(len(z_indices)) if i not in set(disc_z_local)
-            ]
-            if cont_z_local:
-                z_dists = torch.cdist(
-                    z_data[:, cont_z_local], z_data[:, cont_z_local], p=float("inf")
-                )
-            for col in disc_z_local:
-                vals = z_data[:, col]
-                z_dists[vals.unsqueeze(0) != vals.unsqueeze(1)] = float("inf")
-        else:
+        neighbors = None
+        if cont_z:
+            # Continuous Z transformed as in CMIknnGPU; other strata are infinitely
+            # far away.
+            z_array = self._transform_z_rows(array[np.asarray(z_indices)[cont_z], :])
+            z_data = torch.tensor(z_array.T, dtype=dtype, device=self.device)
             z_dists = torch.cdist(z_data, z_data, p=float("inf"))
-
-        _, nn_idx = z_dists.topk(self.shuffle_neighbors, dim=1, largest=False)
-        neighbors = nn_idx.cpu().numpy().astype(np.int32)
+            same = torch.tensor(strata, device=self.device)
+            z_dists[same.unsqueeze(0) != same.unsqueeze(1)] = float("inf")
+            n_nb = min(self.shuffle_neighbors, T)
+            nn_d, nn_idx = z_dists.topk(n_nb, dim=1, largest=False)
+            neighbors = nn_idx.cpu().numpy().astype(np.int32)
+            finite = torch.isfinite(nn_d).cpu().numpy()
+            # A stratum smaller than shuffle_neighbors: cycle through its own
+            # members (self is always among them) instead of crossing strata.
+            for i in np.nonzero(~finite.all(axis=1))[0]:
+                own = neighbors[i, finite[i]]
+                neighbors[i] = np.resize(own, n_nb)
+        groups = [np.nonzero(strata == g)[0] for g in np.unique(strata)]
+        # Block length for the within-stratum shuffle: at least sig_blocklength,
+        # longer for persistent X ((1 + r) / (1 - r) for lag-1 autocorrelation
+        # r, the variance inflation of an AR(1) mean). Short blocks leave a
+        # persistent X's serial dependence in the data but not in the null.
+        r1 = 0.0
+        for xi in x_indices:
+            xs = array[xi]
+            if xs.std() > 0:
+                r1 = max(r1, abs(float(np.corrcoef(xs[:-1], xs[1:])[0, 1])))
+        r1 = min(r1, 0.95)
+        block_len = max(1, int(self.sig_blocklength), int(np.ceil((1 + r1) / (1 - r1))))
 
         null_dist = np.zeros(self.sig_samples)
         running_pvals = np.zeros(self.sig_samples)
@@ -278,10 +371,15 @@ class CMIknnMixedGPU(CMIknnGPU):
 
         sam = 0
         for sam in range(self.sig_samples):
-            order = self.random_state.permutation(T).astype(np.int32)
-            for i in range(T):
-                self.random_state.shuffle(neighbors[i])
-            perm = self._restricted_permutation(T, neighbors, order)
+            if neighbors is None:
+                perm = np.arange(T)
+                for g in groups:
+                    perm[g] = self._stratum_block_permutation(g, block_len)
+            else:
+                order = self.random_state.permutation(T).astype(np.int32)
+                for i in range(T):
+                    self.random_state.shuffle(neighbors[i])
+                perm = self._restricted_permutation(T, neighbors, order)
             perm_t = torch.tensor(perm, dtype=torch.long, device=self.device)
             data_shuf = data_gpu.clone()
             for i in x_indices:
@@ -308,6 +406,8 @@ class CMIknnMixedGPU(CMIknnGPU):
 
     def _random_shuffle(self, array, xyz, value, x_indices):
         """Override: build data_gpu with discrete columns un-transformed."""
+        if not self._query_disc:
+            return super()._random_shuffle(array, xyz, value, x_indices)
         _, T = array.shape
         knn = self._resolve_knn(T)
 

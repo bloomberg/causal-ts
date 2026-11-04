@@ -7,6 +7,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from causalts.ci_tests import ParCorrGPU
 from causalts.ci_tests.cmiknn_mixed_gpu import CMIknnMixedGPU
@@ -271,3 +272,106 @@ def test_detect_discrete_cols_heuristic():
     assert "count" in detected
     assert "cont" not in detected
     assert "high_card_int" not in detected
+
+
+def test_cmiknn_mixed_small_strata():
+    """Strata smaller than k: each point uses the neighbors its stratum has."""
+    rng = np.random.default_rng(0)
+    state = np.tile(np.arange(5), 80)  # 80 rows per level < k = 0.2 * 400
+    rng.shuffle(state)
+    y = 10 * state + rng.normal(scale=0.1, size=400)
+    ci = CMIknnMixedGPU(np.c_[state, y], discrete_cols=[0], device=DEVICE)
+    p, stat = ci(0, 1)
+    assert p < 0.01 and np.isfinite(stat)
+
+
+def test_cmiknn_mixed_fractional_k_is_per_stratum():
+    """Discrete Z: a fractional k is a fraction of each stratum, not of T."""
+    rng = np.random.default_rng(7)
+    z = np.repeat(np.arange(5), 80)
+    rng.shuffle(z)
+    x = rng.normal(size=400)
+    y = 5 * x + 10 * z + rng.normal(scale=0.2, size=400)
+    ci = CMIknnMixedGPU(
+        np.c_[x, y, z], discrete_cols=[2], device=DEVICE, sig_samples=49, seed=1
+    )
+    p, _ = ci(0, 1, [2])
+    assert p < 0.05
+
+
+def _null_rejections(make, n=40):
+    rej = 0
+    for s in range(n):
+        data, disc, z = make(np.random.default_rng(s))
+        ci = CMIknnMixedGPU(
+            data, discrete_cols=disc, device=DEVICE, sig_samples=100, seed=s
+        )
+        rej += ci(0, 1, z)[0] < 0.05
+    return rej
+
+
+def test_cmiknn_mixed_null_permutes_within_discrete_strata():
+    """Conditional H0 given a discrete Z, with balanced and with tiny strata."""
+
+    def balanced(r):
+        z = np.repeat(np.arange(4), 50)
+        r.shuffle(z)
+        return np.c_[r.normal(size=200) + z, r.normal(size=200) + z, z], [2], [2]
+
+    def tiny(r):
+        z = np.repeat(np.arange(40), 3)
+        r.shuffle(z)
+        x, y = r.normal(size=120) + 0.1 * z, r.normal(size=120) + 0.1 * z
+        return np.c_[x, y, z], [2], [2]
+
+    for make in (balanced, tiny):
+        assert 0 < _null_rejections(make) <= 6  # nominal 2 of 40
+
+
+def test_cmiknn_mixed_without_discrete_columns_matches_parent():
+    from causalts.ci_tests.cmiknn_gpu import CMIknnGPU
+
+    rng = np.random.default_rng(0)
+    z = rng.normal(size=(150, 2)) * [1, 1e5]
+    data = np.c_[z[:, 0] + rng.normal(size=150), z[:, 0] + rng.normal(size=150), z]
+    kw = dict(device=DEVICE, sig_samples=50, seed=3, transform="standardize")
+    assert CMIknnMixedGPU(data, discrete_cols=[], **kw)(0, 1, [2, 3]) == (
+        CMIknnGPU(data, **kw)(0, 1, [2, 3])
+    )
+
+
+def test_cmiknn_mixed_all_discrete_estimates_mutual_information():
+    """Zero radii (ties): the statistic is the plug-in MI, about 0 when independent."""
+    rng = np.random.default_rng(0)
+    a, b = rng.integers(0, 2, 400), rng.integers(0, 2, 400)
+
+    def stat(x, y):
+        ci = CMIknnMixedGPU(
+            np.c_[x, y].astype(float), discrete_cols=[0, 1], device=DEVICE
+        )
+        return ci(0, 1)[1]
+
+    assert abs(stat(a, b)) < 0.05
+    assert stat(a, a) == pytest.approx(np.log(2), abs=0.02)
+
+
+def test_cmiknn_mixed_null_keeps_serial_dependence():
+    """Independent AR(0.9) series given contiguous discrete regimes (H0)."""
+    T = 160
+    regime = np.repeat(np.arange(4), T // 4).astype(float)
+
+    def ar(r):
+        x = np.zeros(T)
+        for t in range(1, T):
+            x[t] = 0.9 * x[t - 1] + r.normal()
+        return x
+
+    rej = 0
+    for s in range(20):
+        r = np.random.default_rng(s)
+        data = np.c_[ar(r), ar(r), regime]
+        ci = CMIknnMixedGPU(
+            data, discrete_cols=[2], device=DEVICE, sig_samples=99, seed=s
+        )
+        rej += ci(0, 1, [2])[0] < 0.05
+    assert rej <= 4  # nominal 1 of 20; row-level shuffling rejected ~all

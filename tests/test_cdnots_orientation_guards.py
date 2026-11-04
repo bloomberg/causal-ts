@@ -301,6 +301,17 @@ def test_phase_three_does_not_close_a_directed_cycle(monkeypatch):
     assert not _directed(out, 3, 0)
 
 
+def test_phase_three_abstains_on_non_finite_scores(monkeypatch):
+    """A NaN score (e.g. from missing values) must not be taken as the sink."""
+    monkeypatch.setattr(
+        P, "infer_nonsta_dir", lambda cau, eff, c, w: np.nan if eff.name == 3 else 1.0
+    )
+    cg = _graph(5, undirected=[(0, 3)], directed=[(4, 0), (4, 3)])
+    data = np.random.default_rng(0).standard_normal((50, 5))
+    out = P.phase_three(cg, data, num_lags=0, include_C=True, num_c_cols=1)
+    assert not _directed(out, 0, 3) and not _directed(out, 3, 0)
+
+
 def test_phase_three_respects_background_knowledge(monkeypatch):
     bk = BackgroundKnowledge().add_forbidden_by_pattern("^X3$", "^X0$")
     cg = _graph(5, undirected=[(0, 3)], directed=[(4, 0), (4, 3)])

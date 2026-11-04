@@ -65,21 +65,49 @@ def create_ci_test(name, data, **kwargs):
     data : np.ndarray
         Data array of shape ``(T, d)``.
     **kwargs
-        Passed to the test constructor (e.g. ``device="cuda"``).
+        Passed to the test constructor (e.g. ``device="cuda"``). ``device`` is
+        dropped for CPU-only tests whose constructor does not take it. For
+        ``"cmiknn-mixed-gpu"``, ``discrete_cols`` defaults to the columns of
+        ``data`` that look discrete.
 
     Returns
     -------
     CIT_Base instance
     """
     if name in _REGISTRY:
-        return _REGISTRY[name](data=data, **kwargs)
-    if name in _LAZY_REGISTRY:
+        cls = _REGISTRY[name]
+    elif name in _LAZY_REGISTRY:
         mod_path, cls_name = _LAZY_REGISTRY[name]
-        mod = importlib.import_module(mod_path)
-        cls = getattr(mod, cls_name)
+        cls = getattr(importlib.import_module(mod_path), cls_name)
         _REGISTRY[name] = cls
+    else:
+        raise ValueError(
+            f"Unknown CI test '{name}'. Available: {sorted(list_ci_tests())}"
+        )
+    if name == "cmiknn-mixed-gpu" and "discrete_cols" not in kwargs:
+        import numpy as np
+        import pandas as pd
+
+        from ..cdnots.phase3_utils import _detect_discrete_cols
+
+        arr = np.asarray(data)
+        # Too few rows to tell discrete from continuous (e.g. a placeholder that
+        # a discovery run replaces): assume continuous.
+        kwargs["discrete_cols"] = (
+            _detect_discrete_cols(pd.DataFrame(arr), len(arr))
+            if arr.ndim == 2 and len(arr) >= 20
+            else []
+        )
+    try:
         return cls(data=data, **kwargs)
-    raise ValueError(f"Unknown CI test '{name}'. Available: {sorted(list_ci_tests())}")
+    except TypeError as e:
+        # CPU-only tests (parcorr, cmiknn, ...) take no device argument
+        if "device" not in kwargs or "unexpected keyword argument 'device'" not in str(
+            e
+        ):
+            raise
+        kwargs.pop("device")
+        return cls(data=data, **kwargs)
 
 
 def list_ci_tests():
@@ -90,6 +118,8 @@ def list_ci_tests():
 _CLASS_TO_MODULE = {
     cls_name: mod_path for mod_path, cls_name in _LAZY_REGISTRY.values()
 }
+# Exported classes that are wrappers rather than registered tests.
+_CLASS_TO_MODULE["StratifiedCIT"] = "causalts.ci_tests.stratified_cit"
 
 
 def __getattr__(name):

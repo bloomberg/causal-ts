@@ -11,6 +11,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+* `check_variance_dependence` (`causalts.utils.heteroskedasticity`): detects lagged
+  variance-only parents, which mean-based tools (`raft`, `parcorr`, REAP) cannot see.
+  It feeds the `inspect` recommendation; its docstring gives the method and simulation
+  results.
+* `inspect_df` / `causal-ts inspect`: `facts["variance_dependence"]`, and
+  `recommendation["refine"]` / `["refine_params"]` for an optional REAP or GRACE
+  refinement step. `causalts.inspection.merge_lag0` adds the CDNOTS lag-0 edges to a
+  GRACE result.
 * `corr_table()` — APA-style correlation table (r, stars, M/SD, CI, footnote), prints via `_repr_html_`/`__repr__`.
 * `pairs_panel()` — scatterplot matrix (histogram+KDE diagonal, scatter+fit, correlation text), colorblind-safe palette.
 * CI tests `gcm`, `wgcm`, `pcm` (residual-score) and `raft`, `rift` (random-feature F-tests).
@@ -88,6 +96,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+* `recommend_config`: discovery is always CDNOTS (the d>20 → GRACE rule is gone). CI
+  test: `cmiknn-mixed-gpu` for discrete columns, `rcot` when variance-only parents are
+  detected, `raft` for nonlinear and `parcorr-gpu` for linear data. Refinement: GRACE
+  when variance-only parents are detected, else REAP; none at `max_lag=0`. With missing
+  values both steps get `impute="var_em"`.
+* `discover_df(ci_test=...)` now reaches GRACE, GRACE-SS and REAP, and `device` reaches
+  GRACE; the default is `ci_test=None`.
+* `create_ci_test` ignores `device` for CPU-only tests and fills `discrete_cols` for
+  `cmiknn-mixed-gpu`.
+* `causal-ts ci-test-info`: updated selection table and test descriptions.
+* `causalts.__all__` no longer exports import helpers (`version`,
+  `PackageNotFoundError`, `TYPE_CHECKING`, `tigramite_discovery`).
 * GRACE defaults to the configuration evaluated in the GRACE paper: rank-transformed data,
   a Student-t likelihood, `lambda_rule="xcorr"` (bounded, scales with the data's background
   lagged cross-correlation; was the density formula), one grow round with noise-scale
@@ -121,6 +141,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `CMIknnMixedGPU`: p = 1 for strong dependence in small discrete strata; a
+  miscalibrated permutation null given discrete conditioning variables (now shuffled in
+  blocks within strata); a biased statistic for all-discrete data; non-default
+  transforms ignored when no column is discrete.
+* CDNOTS phase three could orient contemporaneous edges from NaN scores (e.g. with
+  missing values); it now leaves them unoriented.
+* Boolean columns crashed `discover_df` / `causal-ts discover` and were ignored by
+  `inspect_df`.
+* `causal-ts discover --ci-test cmiknn-mixed-gpu` crashed. `cmiknn-mixed-gpu` is now
+  rejected for CEDAR and GRACE-SS, which lose the discrete columns.
+* `from causalts.ci_tests import StratifiedCIT` raised `AttributeError`.
+* The CLI created an output directory for commands that write nothing.
+* `ParCorrGPU` warned on read-only input (e.g. `df.values` under pandas
+  copy-on-write).
 * `CIT_Base.set_data` wrote buffered cache rows into the new data's cache file.
 * `RCOTGPU` p-values depended on the order of the conditioning set.
 * `ParCorrGPU.batch_test` (precision method) now runs the same
@@ -371,7 +405,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * DoWhy integration for causal effect estimation, counterfactuals, and root-cause analysis
 * Comprehensive documentation and example notebooks
 * Synthetic data generators (nonstationary, mixed discrete-continuous, Lorenz-96)
-
 
 [unreleased]: https://github.com/bloomberg/causal-ts/compare/v0.27.0...HEAD
 [0.27.0]: https://github.com/bloomberg/causal-ts/compare/v0.26.0...v0.27.0

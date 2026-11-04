@@ -33,15 +33,18 @@ Conditional Independence Test Selection Guide
                Most general kernel test. O(T^3) — slow at large T.
 
   splitkci     Bias-controlled kernel CI (train/test split, gamma p-value).
-               10-20x faster than kci. Good speed/F1 tradeoff for nonlinear
-               data. Performance improves with larger T.
+               Faster than kci at large T. Tests on half the rows, so it
+               loses power at small T; performance improves with larger T.
 
   dfcit        Distribution-free CI (empirical CDFs, permutation p-value).
-               Strong recall on nonlinear data. Handles mixed discrete-continuous
-               columns natively. Results vary by graph structure.
+               Strong recall on nonlinear data; assumes continuous columns
+               (CDNOTS wraps it in StratifiedCIT when discrete columns are
+               found). Results vary by graph structure.
 
   rcot         Randomised conditional correlation (Random Fourier Features).
-               Fast. X/Y features sized to the sample; deterministic (seed=42).
+               Fast; full conditional independence, so it also sees
+               dependence through the conditional variance. X/Y features
+               sized to the sample; deterministic (seed=42).
 
   cmiknn-gpu   k-NN conditional mutual information. Nonparametric, no bandwidth.
                Sensitive to many dependency types but slow (O(T^2) k-NN search).
@@ -105,16 +108,18 @@ Conditional Independence Test Selection Guide
 
 When to use what
 ----------------
+  (causal-ts inspect applies the first four rows automatically.)
   Linear data, any T               -> parcorr-gpu (recommended), then gcmi
-  Nonlinear, smaller samples       -> dfcit (high recall)
-  Nonlinear, sufficient data       -> splitkci (best speed/F1 tradeoff)
-  Nonlinear, high collinearity     -> kci (uses all data, most robust)
-  Monotone nonlinear, fast needed  -> gcmi (analytic, near-instant)
-  Additive nonlinear, fast needed  -> raft (bootstrap null, ~2-10 ms/test)
+  Nonlinear mean effects           -> raft (fast; conditional mean only)
+  Dependence through the variance  -> rcot (full CI), or kci (slow, robust)
+  Mixed discrete and continuous    -> cmiknn-mixed-gpu (CDNOTS wraps other
+                                       tests in StratifiedCIT)
   Interacting or wiggly cond. vars -> rift (adaptive-adjustment raft)
+  Nonlinear, high collinearity     -> kci (uses all data, most robust)
+  Nonlinear, large T, full CI      -> splitkci
+  Monotone nonlinear, fast needed  -> gcmi (analytic, near-instant)
   Stochastic processes / SDEs      -> linsig
   All columns categorical          -> chisq or gsquared
-  Mixed discrete and continuous    -> dfcit, then cmiknn-mixed-gpu
   Runtime-constrained              -> parcorr-gpu or gcmi
   No GPU / torch unavailable       -> parcorr or cmiknn (CPU implementations)
 
@@ -142,13 +147,9 @@ DENSITY_CHOICES = ["sparse", "dense"]
 
 
 def _make_ci_test(name, data, device):
-    try:
-        return create_ci_test(name, data, device=device)
-    except TypeError as e:
-        # CPU-only tests (parcorr, cmiknn, ...) take no device argument
-        if "unexpected keyword argument 'device'" not in str(e):
-            raise
-        return create_ci_test(name, data)
+    # create_ci_test drops device for CPU-only tests and fills discrete_cols
+    # for cmiknn-mixed-gpu.
+    return create_ci_test(name, data, device=device)
 
 
 def _make_output_dir(base, prefix):
@@ -233,7 +234,8 @@ def main(ctx, output_dir, seed, device, verbose, quiet):
     ctx.obj["device"] = device
     ctx.obj["verbose"] = verbose
     ctx.obj["quiet"] = quiet
-    os.makedirs(output_dir, exist_ok=True)
+    # The base output dir is created lazily by _make_output_dir, only by the
+    # subcommands that write files (inspect / ci-test-info write nothing).
     _seed_all(seed)
 
 
@@ -760,9 +762,10 @@ def discover(
     lag_list_parsed = _parse_comma_list(lag_list, int)
 
     _log(ctx, f"Reading data from {data}")
+    from .inspection import numeric_frame
     from .utils.io import read_dataframe
 
-    df = read_dataframe(data)
+    df = numeric_frame(read_dataframe(data))
     if var_name_list:
         df.columns = var_name_list
     var_name_list = list(df.columns)
@@ -770,8 +773,19 @@ def discover(
     _log(ctx, f"Data shape: {df.shape}, variables: {var_name_list}")
     _log(ctx, f"Algorithm: {algorithm}, CI test: {ci_test}, max_lag: {max_lag}")
 
-    placeholder = np.zeros((2, 2))
-    ci = _make_ci_test(ci_test, placeholder, device)
+    if ci_test == "cmiknn-mixed-gpu":
+        if algorithm in ("cedar", "grace-ss"):
+            raise click.BadParameter(
+                f"cmiknn-mixed-gpu is not supported with --algorithm {algorithm} "
+                "(it does not track which columns are discrete); use cdnots, "
+                "cdnots+, grace or reap.",
+                param_hint="--ci-test",
+            )
+        # Discrete columns are detected from the real data.
+        ci = _make_ci_test(ci_test, df.to_numpy(dtype=float), device)
+    else:
+        placeholder = np.zeros((2, 2))
+        ci = _make_ci_test(ci_test, placeholder, device)
 
     import json as _json
 
