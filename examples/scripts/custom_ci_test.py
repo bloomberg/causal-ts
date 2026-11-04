@@ -20,8 +20,9 @@
 # 1. **Subclass `CIT_Base`** — the shared base every built-in test uses (caching, NaN
 #    handling, sample-size bookkeeping).
 # 2. **Implement `__call__(self, X, Y, condition_set=None)`** — return `(p_value, test_statistic)`.
-# 3. **Decorate with `@register_ci_test("name")`** — makes the test available to
-#    `list_ci_tests()`, `create_ci_test()`, and the `causal-ts discover --ci-test name` CLI.
+# 3. **Decorate with `@register_ci_test("name")`** — makes the test available by name to
+#    `list_ci_tests()`, `create_ci_test()` and `discover_df(..., ci_test="name")` in the
+#    current Python process.
 #
 # This notebook walks through a complete worked example: a **Spearman partial-correlation**
 # test — partial correlation computed on rank-transformed data, which catches monotone
@@ -48,8 +49,9 @@ print("Before registration:", list_ci_tests())
 #
 # Subclass `CIT_Base` and implement the test interface: given two column indices and an
 # optional list of conditioning-column indices, return `(p_value, test_statistic)`.
-# `CIT_Base.__init__` stores `data` as a NumPy array and handles caching — call
-# `super().__init__(data=data, method=...)` and you get that for free.
+# `CIT_Base.__init__` stores `data` as a NumPy array and sets up sample-size
+# bookkeeping and the p-value cache — call `super().__init__(data=data, method=...)`
+# to get them.
 
 # %%
 class SpearmanCIT(CIT_Base):
@@ -110,6 +112,11 @@ print("After registration:", list_ci_tests())
 # ## Step 3 — Use it directly
 #
 # Once registered, `create_ci_test` instantiates it by name like any built-in test.
+#
+# The planted edges are lagged, so the CI test has to be applied to a lagged pair:
+# `X0(t-1)` against `X1(t)`. Below we build a two-column array of those aligned
+# series and test it; testing the contemporaneous columns `X0(t)` and `X1(t)` would
+# (correctly) find no dependence.
 
 # %%
 # A small synthetic system: X0(t-1) -> X1(t) is monotone nonlinear (exp),
@@ -129,16 +136,23 @@ gt = np.zeros((d, d, max_lag + 1), dtype=np.int8)
 gt[0, 1, 1] = 1  # X0(t-1) -> X1(t)
 gt[1, 2, 1] = 1  # X1(t-1) -> X2(t)
 
+# Columns: X0(t-1), X1(t)
+lagged = np.column_stack([x0[:-1], x1[1:]])
+ci_lag = create_ci_test("spearman", lagged)
+p, stat = ci_lag(0, 1)
+print(f"X0(t-1) _|_ X1(t): p={p:.4f}, r={stat:.4f}")
+
 ci = create_ci_test("spearman", df.values)
 p, stat = ci(0, 1)
-print(f"X0 _|_ X1 (unconditional): p={p:.4f}, r={stat:.4f}")
+print(f"X0(t)   _|_ X1(t): p={p:.4f}, r={stat:.4f}")
 
 # %% [markdown]
 # ## Step 4 — Run a discovery algorithm with it
 #
-# Any registered CI test can be passed straight into `run_cdnots` (or `run_cdnots_plus`,
+# Any CI test instance can be passed straight into `run_cdnots` (or `run_cdnots_plus`,
 # `run_cedar`, ...) as `indep_test` — the algorithms only depend on the `__call__`
-# interface, not on which class implements it.
+# interface, not on which class implements it. Because the test is registered,
+# `discover_df` can also build it from its name.
 
 # %%
 res_spearman = run_cdnots(
@@ -148,6 +162,12 @@ res_spearman = run_cdnots(
 m_spearman = evaluate_graph(res_spearman.cg_tig, gt)
 print(f"Spearman  F1={m_spearman['F1']:.3f}  Precision={m_spearman['Precision']:.3f}  "
       f"Recall={m_spearman['TPR']:.3f}  SHD={m_spearman['SHD']}")
+
+# Same run, with the test looked up by its registered name
+from causalts import discover_df
+
+res_by_name = discover_df(df, algorithm="cdnots", ci_test="spearman", max_lag=1, alpha=0.05)
+print("Same graph via discover_df:", np.array_equal(res_by_name.cg_tig, res_spearman.cg_tig))
 
 # %% [markdown]
 # ## Step 5 — Compare against a built-in test
@@ -182,10 +202,11 @@ plt.tight_layout()
 plt.show()
 
 # %% [markdown]
-# ## Step 6 — CLI integration
+# ## Step 6 — Using the test from other code
 #
-# Once your module is imported, the CLI picks up your CI test automatically.
-# No edits to causal-ts source code are required.
+# Registration is held in memory, so a registered name is visible only in the Python
+# process that ran the registration. Put the class in a module and import it before
+# looking the test up by name:
 #
 # ```python
 # # my_spearman_plugin.py
@@ -196,19 +217,18 @@ plt.show()
 # class SpearmanCIT(CIT_Base): ...
 # ```
 #
-# ```bash
-# # In an environment where your module is importable:
-# causal-ts discover data.csv --algorithm cdnots --ci-test spearman --max-lag 3
-# ```
-#
-# Or from Python:
-#
 # ```python
-# from causalts.ci_tests import create_ci_test
 # import my_spearman_plugin  # triggers registration
+# from causalts import discover_df, run_cdnots
+# from causalts.ci_tests import create_ci_test
 #
-# ci = create_ci_test("spearman", df.values)
+# res = discover_df(df, algorithm="cdnots", ci_test="spearman", max_lag=3)
+# res = run_cdnots(df=df, indep_test=create_ci_test("spearman", df.values), num_lags=3)
 # ```
+#
+# The `causal-ts` command line tool does not see custom tests: its `--ci-test` option
+# is a fixed list of the built-in names, and there is no plugin entry point for CI
+# tests. Use the Python API for a custom test.
 
 # %% [markdown]
 # ## Summary — Minimal interface checklist
@@ -231,10 +251,12 @@ plt.show()
 #
 # **Inherited for free:**
 # - `self.data`, `self.sample_size`, `self.num_features` — set from the array passed in
-# - `cache_dir=` — on-disk p-value caching keyed by data hash and test parameters
+# - `cache_dir=` — sets up an on-disk p-value cache file (`self.pvalue_cache`,
+#   `self.save_incremental_cache`). The cache is only used if your `__call__` reads and
+#   writes it, as the built-in tests do; the Spearman example above does not.
 # - NaN detection (`self._has_nan`) — built-ins use this to fall back to pairwise-complete rows
-# - `list_ci_tests()` / `create_ci_test("my_test", data)` — discoverable everywhere
-# - `causal-ts discover --ci-test my_test data.csv` — CLI
+# - `list_ci_tests()` / `create_ci_test("my_test", data)` / `discover_df(..., ci_test="my_test")`
+#   — lookup by name within the current Python process
 # - Drop-in compatibility with every discovery algorithm's `indep_test=` parameter
 #
 # **Optional overrides:**

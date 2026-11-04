@@ -207,7 +207,7 @@ print(f"interventional  dAttacks/do(IceCream)  = {slope_do:+.2f}   <- what a ban
 # them.
 #
 # These are two different regimes of confounding. When the effect is confined to a small
-# part of the system, we call it **local**. When the same hidden driver reaches broadly
+# part of the system, we call it **sparse**. When the same hidden driver reaches broadly
 # across the system, we call it **pervasive**.
 #
 # To make the distinction concrete, we now expand the toy example to eight observed
@@ -252,13 +252,13 @@ for name, town in [("heat reaches 2 of 8", town_local), ("heat reaches all 8", t
 # %% [markdown]
 # Nine false edges in the first town; thirty-seven in the second. The hidden cause is the
 # same sun, but the damage it creates is very different. In the first town, confounding is
-# **local**: most of the system is unaffected, and the spurious structure is concentrated
+# **sparse**: most of the system is unaffected, and the spurious structure is concentrated
 # in one corner. In the second, it is **pervasive**: the hidden driver reaches nearly every
 # series, and false relationships spread throughout the graph.
 #
 # That distinction matters because the two cases call for different repairs. A correction
 # aggressive enough to remove pervasive confounding can destroy genuine structure when the
-# confounding is only local. So before correcting anything, we first need to determine
+# confounding is only sparse. So before correcting anything, we first need to determine
 # which regime the data are in — without observing the hidden cause itself.
 #
 # Fortunately, the two regimes leave different signatures. Fit a simple autoregressive

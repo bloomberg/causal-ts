@@ -333,8 +333,10 @@ class WrappedGraph:
         Parameters
         ----------
         intervention : dict
-            Dict of {variable: value}, e.g. {"Mek": 5.0}.
-            Names should match var_names (current-time nodes).
+            Dict of {node: value} on the lag-embedded graph, e.g.
+            ``{"Mek_lag1": 5.0}``. Current-time nodes have no children in the
+            transition graph, so intervening on one (``{"Mek": 5.0}``) changes
+            no other variable; intervene on a lagged node to see an effect.
         targets : str, list[str], or None
             Variable(s) to return. None returns all non-intervened.
         n_samples : int
@@ -433,7 +435,9 @@ class WrappedGraph:
 
         Uses the discovered causal graph to select relevant lagged
         predictors for each target, then fits an sklearn regressor.
-        Exogenous variables (no causal parents) get an auto-ETS fallback.
+        Exogenous variables (no causal parents) get a univariate fallback:
+        AR(1)-AR(3) or ETS, whichever has the lowest held-out multistep MSE
+        (see :class:`~causalts.effects.forecast.CausalForecaster`).
 
         Parameters
         ----------
@@ -445,7 +449,7 @@ class WrappedGraph:
         targets : list[str] or None
             Variables to forecast. Defaults to all with parents.
         exog_fallback : bool
-            Fit auto-ETS for parentless variables (default True).
+            Fit the AR/ETS fallback for parentless variables (default True).
 
         Returns
         -------

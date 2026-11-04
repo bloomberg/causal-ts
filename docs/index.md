@@ -1,6 +1,7 @@
 ---
-html_meta:
-  "description": "Causal discovery for nonstationary time series — CDNOTS, CDNOTS+, CEDAR, GRACE, REAP, GPU-accelerated CI tests"
+myst:
+  html_meta:
+    "description": "Causal discovery for nonstationary time series — CDNOTS, CDNOTS+, CEDAR, GRACE/REAP refinement, LUCID latent-confounder correction, GPU and CPU CI tests"
 ---
 
 ```{toctree}
@@ -22,7 +23,7 @@ cli
       <h1>Causal-<span class="ct-logo-ts">TS</span></h1>
       <p class="tagline">
         Causal discovery for nonstationary time series.<br/>
-        Four discovery algorithms · GPU-accelerated CI tests, linear and nonlinear · Effect estimation.
+        Constraint-based discovery · grow-shrink refinement · linear and nonlinear CI tests · effect estimation.
       </p>
       <div class="btn-group">
         <a href="getting_started/index.html" class="ct-btn ct-btn-primary">Get Started</a>
@@ -35,18 +36,18 @@ cli
 
 <div class="ct-stats-strip">
   <div class="ct-stat">
-    <span class="ct-stat-num">4</span>
+    <span class="ct-stat-num">5</span>
     <span class="ct-stat-label">Algorithms</span>
   </div>
   <div class="ct-stat-div"></div>
   <div class="ct-stat">
-    <span class="ct-stat-num">13</span>
+    <span class="ct-stat-num">19</span>
     <span class="ct-stat-label">CI Tests</span>
   </div>
   <div class="ct-stat-div"></div>
   <div class="ct-stat">
     <span class="ct-stat-num">GPU</span>
-    <span class="ct-stat-label">Accelerated</span>
+    <span class="ct-stat-label">or CPU</span>
   </div>
   <div class="ct-stat-div"></div>
   <div class="ct-stat">
@@ -54,8 +55,6 @@ cli
     <span class="ct-stat-label">Causal Inference</span>
   </div>
 </div>
-
----
 
 ## Discovery Algorithms
 
@@ -70,10 +69,10 @@ cli
 
 **Constraint-based**
 ^^^
-Extends PC to time series with one or more **C** nonstationarity nodes. Three-phase: skeleton discovery → collider orientation → nonstationarity-based direction inference. **CDNOTS+** replaces skeleton discovery with PCMCI+'s two-step approach for higher recall.
+Extends PC to time series with one or more **C** nonstationarity nodes: skeleton discovery → collider and Meek orientation → nonstationarity-based orientation. **CDNOTS+** re-tests the skeleton with PCMCI+-style MCI conditioning (only on discovered parents, avoiding over-conditioning on dense graphs), with opt-in LiNGAM orientation of contemporaneous edges.
 
 +++
-{bdg-primary-line}`nonstationary` {bdg-secondary-line}`any T` {bdg-light}`CDNOTS+`
+{bdg-primary-line}`nonstationary` {bdg-secondary-line}`any CI test` {bdg-light}`CDNOTS+`
 :::
 
 :::{grid-item-card} {fas}`shuffle;1.2em;sd-text-primary` &nbsp; CEDAR
@@ -82,43 +81,49 @@ Extends PC to time series with one or more **C** nonstationarity nodes. Three-ph
 :shadow: md
 :class-header: sd-bg-primary sd-text-white
 
-**Autoregressive · Scalable**
+**Autoregressive · Pairwise**
 ^^^
-Causal Edge Discovery for Autoregressive processes with minimum-lag selection (dcor, Pearson). Two CI tests per candidate edge — O(d²) overall, supports single-target discovery.
+Causal Edge Discovery for Autoregressive processes. Per-pair minimum-lag selection (partial distance correlation by default), two CI tests per candidate edge, then MCI pruning. Supports the C node and single-target discovery. Assumes an autoregressive design.
 
 +++
-{bdg-light}`O(d²)` {bdg-primary-line}`scalable` {bdg-secondary-line}`fast`
+{bdg-light}`O(d²)` {bdg-primary-line}`AR processes` {bdg-secondary-line}`single target`
 :::
 
-:::{grid-item-card} {fas}`brain;1.2em;sd-text-primary` &nbsp; GRACE
+:::{grid-item-card} {fas}`code-merge;1.2em;sd-text-primary` &nbsp; GRACE · REAP
 :link: algorithms
 :link-type: doc
 :shadow: md
 :class-header: sd-bg-primary sd-text-white
 
-**Hybrid neural**
+**Grow-shrink refinement**
 ^^^
-Constraint-based candidate graph + neural L0-gated refinement (Hard Concrete). Orientation from the candidate graph; cross edges from gate values and a minimum effect, self-loops from an F-test. REAP is the regression-based alternative.
+Refine the lagged edges of a directed candidate graph (CDNOTS by default, or any method's graph): a shrink step prunes, then grow rounds add missed lagged parents. **GRACE** prunes with neural L0 gates and can keep parents that change only a target's noise scale; **REAP** prunes by regression (partial F-tests), with no training.
 
 +++
-{bdg-light}`O(d²)+NN` {bdg-primary-line}`gate pruning` {bdg-secondary-line}`precise`
+{bdg-light}`any candidate graph` {bdg-primary-line}`gates (GRACE)` {bdg-secondary-line}`regression (REAP)`
 :::
 
 ::::
-
----
 
 ## Features
 
 ::::{grid} 3
 :gutter: 3
 
-:::{grid-item-card} {fas}`vials;1.1em;sd-text-primary` &nbsp; GPU-Accelerated CI Tests
+:::{grid-item-card} {fas}`vials;1.1em;sd-text-primary` &nbsp; CI Tests
 :link: ci_tests
 :link-type: doc
 :shadow: sm
 
-From instant linear (`ParCorrGPU`) to distribution-free (`DFCIT`) and linear-signature kernel (`LinSig`) — unified interface on CUDA, MPS, or CPU.
+Linear (`parcorr-gpu`), fast nonlinear-mean (`raft`), full conditional independence (`rcot`, `kci`), residual-score (`gcm`, `pcm`), distribution-free (`dfcit`) and discrete-aware (`cmiknn-mixed-gpu`) tests behind one interface; most run on CUDA, MPS or CPU.
+:::
+
+:::{grid-item-card} {fas}`stethoscope;1.1em;sd-text-primary` &nbsp; Inspect & Recommend
+:link: cli
+:link-type: doc
+:shadow: sm
+
+`causal-ts inspect` / `inspect_df` measure linearity, nonstationarity, variance-only dependence and latent-factor structure, then recommend a CI test, C-node preset and refinement. Also ships as an agent skill.
 :::
 
 :::{grid-item-card} {fas}`chart-line;1.1em;sd-text-primary` &nbsp; Effect Estimation
@@ -126,21 +131,8 @@ From instant linear (`ParCorrGPU`) to distribution-free (`DFCIT`) and linear-sig
 :link-type: doc
 :shadow: sm
 
-Estimate causal effects, fit SCMs, run counterfactuals, and attribute anomalies to root causes — powered by DoWhy under the hood.
+Estimate causal effects, fit SCMs, run counterfactuals, attribute anomalies, and validate or refute a discovered graph, through DoWhy (`pip install causalts[dowhy]`).
 :::
-
-:::{grid-item-card} {fas}`terminal;1.1em;sd-text-primary` &nbsp; CLI & Visualization
-:link: getting_started/index
-:link-type: doc
-:shadow: sm
-
-`causal-ts discover`, `generate`, `evaluate`, `plot` — full pipeline from the terminal. Network graphs and time-unrolled DAGs.
-:::
-
-::::
-
-::::{grid} 3
-:gutter: 3
 
 :::{grid-item-card} {fas}`eye-slash;1.1em;sd-text-primary` &nbsp; Latent Confounders (LUCID)
 :link: api/confounders
@@ -150,12 +142,36 @@ Estimate causal effects, fit SCMs, run counterfactuals, and attribute anomalies 
 Diagnose whether latent confounding is sparse or pervasive from the residual spectrum, then apply the matching correction to any discovered graph.
 :::
 
+:::{grid-item-card} {fas}`wave-square;1.1em;sd-text-primary` &nbsp; Regime Discovery
+:link: examples/regime_discovery
+:link-type: doc
+:shadow: sm
+
+Detect change points and regimes (`causalts.regime`), then discover a causal graph per regime.
+:::
+
 :::{grid-item-card} {fas}`table-cells-large;1.1em;sd-text-primary` &nbsp; Missing & Mixed Data
 :link: examples/index
 :link-type: doc
 :shadow: sm
 
-Pairwise-complete masking, VAR-EM imputation, and automatic discrete column detection with stratified testing.
+Pairwise-complete masking, VAR-EM imputation, and automatic discrete-column detection with stratified testing.
+:::
+
+:::{grid-item-card} {fas}`terminal;1.1em;sd-text-primary` &nbsp; CLI & Visualization
+:link: cli
+:link-type: doc
+:shadow: sm
+
+`causal-ts inspect`, `discover`, `deconfound`, `evaluate`, `plot` and the `dowhy` commands — the full pipeline from the terminal. Network graphs and time-unrolled DAGs.
+:::
+
+:::{grid-item-card} {fas}`plug;1.1em;sd-text-primary` &nbsp; Integrations
+:link: examples/tigramite_integration
+:link-type: doc
+:shadow: sm
+
+PCMCI, PCMCI+ and LPCMCI through tigramite (`pip install causalts[tigramite]`), plus plugin registries for your own algorithms and CI tests.
 :::
 
 :::{grid-item-card} {fas}`book-open;1.1em;sd-text-primary` &nbsp; Examples & Tutorials
@@ -163,12 +179,10 @@ Pairwise-complete masking, VAR-EM imputation, and automatic discrete column dete
 :link-type: doc
 :shadow: sm
 
-Hands-on notebooks covering all algorithms, CI tests, effect estimation, and the full discovery-to-estimation pipeline.
+Hands-on notebooks covering the algorithms, CI tests, effect estimation, and the full discovery-to-estimation pipeline.
 :::
 
 ::::
-
----
 
 ## Quick Example
 
@@ -201,6 +215,10 @@ compare_graphs(ground_truth, res.cg_tig[:d, :d, :],
                var_names=list(df.columns))
 ```
 
+Not sure which CI test or settings fit your data? `inspect_df(df)["recommendation"]`
+(or `causal-ts inspect data.csv`) measures the data and recommends them; see
+[Choosing a configuration](getting_started/index.md#choosing-a-configuration).
+
 ---
 
 ## Citation
@@ -214,6 +232,42 @@ If you use Causal-TS in your research, please cite:
 > Fesanghary, Havaldar. "GRACE: Gated Refinement for Accurate Causal Edge Discovery in High-Dimensional Time Series." [arXiv:2606.23880](https://arxiv.org/abs/2606.23880), 2026.
 >
 > Sadeghi, Gopal, Fesanghary. "Causal Discovery from Nonstationary Time Series." *International Journal of Data Science and Analytics*, 19, pp. 33–59, 2025. [doi:10.1007/s41060-024-00679-7](https://doi.org/10.1007/s41060-024-00679-7)
+
+:::{dropdown} BibTeX
+```bibtex
+@article{fesanghary2026causalts,
+  title={Causal-TS: A Python Library for Causal Discovery in High-Dimensional and Nonstationary Time Series},
+  author={Fesanghary, Mohammad},
+  journal={arXiv preprint arXiv:2607.24673},
+  year={2026}
+}
+
+@article{fesanghary2026cedar,
+  title={CEDAR: Causal Edge Discovery for Autoregressive Processes},
+  author={Fesanghary, Mohammad},
+  journal={arXiv preprint arXiv:2607.20696},
+  year={2026}
+}
+
+@article{fesanghary2026grace,
+  title={GRACE: Gated Refinement for Accurate Causal Edge Discovery in High-Dimensional Time Series},
+  author={Fesanghary, Mohammad and Havaldar, Abhinav},
+  journal={arXiv preprint arXiv:2606.23880},
+  year={2026}
+}
+
+@article{sadeghi2025cdnots,
+  title={Causal Discovery from Nonstationary Time Series},
+  author={Sadeghi, Agathe and Gopal, Achintya and Fesanghary, Mohammad},
+  journal={International Journal of Data Science and Analytics},
+  volume={19},
+  pages={33--59},
+  year={2025},
+  publisher={Springer},
+  doi={10.1007/s41060-024-00679-7}
+}
+```
+:::
 
 ---
 

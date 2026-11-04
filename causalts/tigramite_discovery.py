@@ -371,15 +371,17 @@ def tigramite_graph_to_binary(
     conflict : {"drop", "bidirected"}, optional
         How to render ``"x-x"``. Defaults to ``"drop"``.
 
-    Both policies apply at lag 0 only. At a lag ``tau >= 1`` time order fixes
-    the direction, so an ``"o-o"``, ``"x-x"``, ``"<--"`` or ``"<-o"`` renders as
-    ``i(t-tau) -> j(t)`` and only ``[i, j, tau]`` is written: ``[j, i, tau]``
-    is a different link.
-
     Returns
     -------
     numpy.ndarray
         Binary ndarray (d, d, tau_max+1), dtype int8.
+
+    Notes
+    -----
+    Both policies apply at lag 0 only. At a lag ``tau >= 1`` time order fixes
+    the direction, so an ``"o-o"``, ``"x-x"``, ``"<--"`` or ``"<-o"`` renders as
+    ``i(t-tau) -> j(t)`` and only ``[i, j, tau]`` is written: ``[j, i, tau]``
+    is a different link.
     """
     if undirected not in ("drop", "bidirected"):
         raise ValueError(
@@ -542,8 +544,9 @@ def run_pcmci(
     """Run PCMCI and return a binary causal graph.
 
     PCMCI (Runge et al. 2019) discovers lagged causal links via
-    PC-stable skeleton + MCI edge pruning. Does not handle contemporaneous
-    links -- use run_pcmciplus for that.
+    PC-stable skeleton + MCI edge pruning. With ``tau_min=0`` lag-0 links are
+    tested but not oriented (they come back as ``o-o``); use run_pcmciplus to
+    orient contemporaneous links.
 
     Parameters
     ----------

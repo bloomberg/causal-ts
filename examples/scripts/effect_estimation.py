@@ -17,20 +17,19 @@
 #
 # Demonstrates all `causalts.effects` features on the **ex3** dataset (Cascade Network (11-Node), linear, max_lag=3).
 #
-# **Features demonstrated:**
+# **Sections:**
 # 1. Graph discovery (CDNOTS)
-# 2. Effect estimation
+# 2. Effect estimation, with refutation and confounder sensitivity (2b)
 # 3. SCM fitting + counterfactual analysis
 # 4. Root cause analysis
-# 5. Graph falsification (no ground truth needed)
+# 5. Transition-structure validation (no ground truth needed)
 # 6. Structural refutation
-# 7. Arrow strength + parent relevance
+# 7. Arrow strength + parent relevance, and feature relevance (7b)
 # 8. Distribution change detection (concept drift)
+# 9. The same methods on a GRACE result
+# 10. Direct and mediated effects via Tigramite
 
 # %%
-import sys
-sys.path.insert(0, '.')
-
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -50,6 +49,10 @@ from dowhy.gcm.config import disable_progress_bars
 disable_progress_bars()
 
 print('DoWhy available:', dowhy_available())
+
+# DoWhy's sampling-based methods (attribution, relevance, refuters) draw from
+# NumPy's global random state; seed it so the outputs below are reproducible
+np.random.seed(0)
 
 # %% [markdown]
 # ## 1. Load Cascade Network (ex3, d=11) and Discover Graph
@@ -75,7 +78,6 @@ _res = run_cdnots(
     df, ci, num_lags=3, include_C=False, alpha=0.05, stable=True
 )
 disc_graph = _res.cg_tig
-graph = disc_graph  # alias for cells using old name
 cg = _res  # CdnotsResult — carries plot/effect methods
 
 m = evaluate_graph(disc_graph, true_graph)
@@ -101,8 +103,10 @@ pos = tp.compare_graphs(
 #
 # Estimate causal effects for key edges and compare to ground truth. Three columns:
 # - **True coeff** — the structural equation coefficient (direct effect only)
-# - **SCM coeff** — direct coefficient recovered by fitting a linear SCM to the discovered graph
-# - **ATE** — average treatment effect via DoWhy's backdoor criterion (includes all causal paths, direct + indirect)
+# - **SCM coeff** — direct coefficient recovered by fitting a linear SCM to the discovered graph (a regression of the outcome on all of its discovered parents)
+# - **ATE** — DoWhy backdoor estimate of the effect of the treatment at one lag origin, X(t-lag), on Y(t), adjusting for the parents of X(t-lag). This is the total effect *from that single time origin*: it includes a mediated path only if the path's edge lags add up to exactly `lag`. Effects of earlier or later lags of X are not included (Section 10 aggregates over lags).
+#
+# With no contemporaneous edges, a lag-1 treatment has no mediated path to Y(t), so its ATE targets the same direct coefficient as the SCM column. The two still differ numerically because they come from different regressions.
 
 # %%
 # Fit SCM first to extract direct coefficients
@@ -135,7 +139,7 @@ for treat, out, lag, true_coeff in edges_to_test:
 
 print('\nNote: "True coeff" = structural equation coefficient (direct effect).')
 print('      "SCM coeff"  = fitted direct effect from discovered graph.')
-print('      "ATE"        = average treatment effect (all paths, direct + indirect).')
+print('      "ATE"        = total effect of X(t-lag) on Y(t), adjusted for the parents of X(t-lag).')
 
 # %% [markdown]
 # ## 2b. Stress-Testing an Effect Estimate
@@ -198,8 +202,8 @@ print('zero-mean — it adds variance to Mek, not a directional bias.')
 # - **Positive** = pushed the target higher than expected, **negative** = pushed it lower
 # - A large |attribution| marks a node whose noise mechanism contributed materially to the anomaly
 #
-# > **What this run actually shows.** The spike is injected into PKC, but in the
-# > output below `PKA_lag1` (+0.870) outranks `PKC_lag1` (+0.724). Attribution
+# > **What this example shows.** The spike is injected into PKC, but in the
+# > output below `PKA_lag1` (+0.941) outranks `PKC_lag1` (+0.788). Attribution
 # > apportions the anomaly across every node's reconstructed noise term, and the
 # > largest share does not have to fall on the variable that was perturbed — so
 # > "top-ranked node = root cause" is not a rule you can apply blind. Read the
@@ -588,36 +592,9 @@ val_g = grace_res.validate_transition_graph()
 print(f"GRACE transition validation: {val_g}")
 
 # %% [markdown]
-# > **Read this GRACE graph with caution.** On this small linear problem (d=11, T=500) the default GRACE graph has 20 edges against 28 true ones, and the transition-structure check rejects it at PKA, Jnk, Erk and Akt: the parents it gives those nodes are not sufficient (section 5). The ATE above is unaffected: the adjustment set for `PKC(t-1)` uses only PKC's own history, which GRACE leaves unchanged, so it equals the CDNOTS estimate from section 2. Effects into the rejected nodes (for example PKA or Erk) may be biased on this graph. The CDNOTS graph from section 1 passes the same check, so it is the better input for effect estimation here. GRACE is aimed at higher-dimensional problems (d ≥ 20; see the tutorial).
-
-# %% [markdown]
-# ## Summary
-#
-# | Feature | Method | Ground truth? |
-# |---|---|---|
-# | Effect estimation | `cg.estimate_effect(treat, out, lag)` | No |
-# | SCM fitting (cached) | `cg.fit_scm()` | No |
-# | Counterfactual | `cg.counterfactual({node: val}, target)` | No |
-# | Interventional query | `cg.interventional_query({var: val}, targets)` | No |
-# | Observational query | `cg.observational_query({var: val}, targets)` | No |
-# | Root cause | `cg.attribute_anomaly(row, target)` | No |
-# | Transition-structure validation | `cg.validate_transition_graph()` | No |
-# | History depth check | `cg.history_sufficiency()` | No |
-# | Structural refutation | `cg.refute_structure()` | No |
-# | Effect refutation | `cg.refute_effect(treat, out, lag)` | No |
-# | Confounder sensitivity | `cg.sensitivity_analysis(treat, out, lag)` | No |
-# | Arrow strength | `cg.arrow_strength(target)` | No |
-# | Parent relevance | `cg.parent_relevance(target)` | No |
-# | Distribution change | `cg.distribution_change(df_new, target)` | No |
-#
-# These methods work on graphs from `run_cdnots` / `run_cdnots_plus` (via `CdnotsResult`), `run_cedar` (via `CedarResult`), and `run_grace` / `run_reap` (via `GraceResult`): result objects inherit them automatically, except the interventional and observational queries, which need the wrapped graph (`wrap_graph(res.cg_tig, df)`).
-#
-# See [Probabilistic Queries notebook](probabilistic_queries.ipynb) for full interventional/observational query examples.
-#
-# `cg.falsify()` still exists but is deprecated in favour of
-# `cg.validate_transition_graph()`; see section 5.
-#
-# Install: `pip install causalts[dowhy]`
+# > **Read this GRACE graph with caution.** On this small linear problem (d=11, T=500) the default GRACE graph has 20 edges against 28 true ones, and the transition-structure check rejects it at PKA, Jnk, Erk and Akt: the parents it gives those nodes are not sufficient (section 5). The ATE above is unaffected: the adjustment set for `PKC(t-1)` uses only PKC's own history, which GRACE leaves unchanged, so it equals the CDNOTS estimate from section 2. Effects into the rejected nodes (for example PKA or Erk) may be biased on this graph. The CDNOTS graph from section 1 passes the same check, so it is the better input for effect estimation here.
+# >
+# > The recommended workflow is CDNOTS for discovery (at any d), with an optional refinement step: REAP by default, or GRACE when some parents act only on the variance of their children, since only GRACE's gated model keeps such edges. Both return a `GraceResult`, so every method in this notebook applies to them.
 
 # %% [markdown]
 # ## 10. Direct and Mediated Effects via Tigramite
@@ -661,10 +638,34 @@ print(f"\nCumulative total: {result['cumulative']:+.4f}")
 # %% [markdown]
 # | Method | API | What it gives |
 # |--------|-----|---------------|
-# | DoWhy ATE | `estimate_effect()` | Average treatment effect (all paths pooled) |
+# | DoWhy ATE | `estimate_effect(X, Y, treatment_lag=k)` | Total effect of X(t-k) on Y(t), from that one lag origin |
 # | Tigramite total | `TigramiteEffects(X_lag=k).total_effect()` | Total at a specific lag horizon |
 # | Tigramite direct | `.direct_effect()` | Direct edge only, no mediation |
 # | Pathway decomposition | `pathwise_effects(graph, df, X, Y)` | All paths auto-discovered, per-path effects and % shares |
 
 # %% [markdown]
+# ## Summary
 #
+# | Feature | Method | Ground truth? |
+# |---|---|---|
+# | Effect estimation | `cg.estimate_effect(treat, out, lag)` | No |
+# | SCM fitting (cached) | `cg.fit_scm()` | No |
+# | Counterfactual | `cg.counterfactual({node: val}, target)` | No |
+# | Root cause | `cg.attribute_anomaly(row, target)` | No |
+# | Transition-structure validation | `cg.validate_transition_graph()` | No |
+# | History depth check | `cg.history_sufficiency()` | No |
+# | Structural refutation | `cg.refute_structure()` | No |
+# | Effect refutation | `cg.refute_effect(treat, out, lag)` | No |
+# | Confounder sensitivity | `cg.sensitivity_analysis(treat, out, lag)` | No |
+# | Arrow strength | `cg.arrow_strength(target)` | No |
+# | Parent relevance | `cg.parent_relevance(target)` | No |
+# | Distribution change | `cg.distribution_change(df_new, target)` | No |
+#
+# These methods work on graphs from `run_cdnots` / `run_cdnots_plus` (via `CdnotsResult`), `run_cedar` (via `CedarResult`), and `run_grace` / `run_reap` (via `GraceResult`): all are `CausalResult` objects and inherit them.
+#
+# Interventional and observational queries are not result methods. Use the standalone functions in `causalts.effects` (`interventional_query`, `observational_query`, `query_summary`) on a fitted SCM, or wrap the graph array with `wrap_graph(res.cg_tig, df)`, which exposes them as methods. See the [Probabilistic Queries notebook](probabilistic_queries.ipynb).
+#
+# `cg.falsify()` still exists but is deprecated in favour of
+# `cg.validate_transition_graph()`; see section 5.
+#
+# Install: `pip install causalts[dowhy]`

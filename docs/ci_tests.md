@@ -1,11 +1,19 @@
 # CI Test Selection Guide
 
-All CI tests share a common interface; the GPU tests run on CUDA, MPS, or CPU (`raft`
-and `rift` are CPU-only NumPy implementations). Run `causal-ts ci-test-info` for a terminal summary.
+All CI tests share a common interface (`create_ci_test(name, data)`, or the class directly). The torch-based tests
+(`parcorr-gpu`, `gcmi`, `kci`, `splitkci`, `rcot`, `dfcit`, `linsig`, `cmiknn-gpu`) run on CUDA or CPU, auto-detecting
+CUDA; `parcorr-gpu` and `gcmi` also auto-detect Apple MPS, and `cmiknn-gpu` does not support MPS. `parcorr`, `cmiknn`,
+`gcm`, `wgcm`, `pcm`, `raft`, `rift` and the causal-learn adapters (`fisherz`, `chisq`, `gsquared`) are CPU-only.
+Run `causal-ts ci-test-info` for a terminal summary.
 
----
+A useful first distinction is **what a test can detect**: `parcorr`/`parcorr-gpu` (linear), `raft`, `rift` and `pcm`
+test conditional-**mean** dependence only; `gcm` and `wgcm` test a residual moment; `rcot`, `kci`, `splitkci`, `dfcit`
+and `cmiknn` test full conditional independence, so they also see a parent that changes only the variance of its child.
 
 ## Quick Pick
+
+`inspect_df(df)` / `causal-ts inspect data.csv` measures linearity, discrete columns and variance-only dependence and
+applies the first four cards automatically (see [Choosing a configuration](getting_started/index.md#choosing-a-configuration)).
 
 ::::{grid} 3
 :gutter: 2
@@ -16,42 +24,53 @@ and `rift` are CPU-only NumPy implementations). Run `causal-ts ci-test-info` for
 
 **`parcorr-gpu`**
 
-Analytic p-value, near-instant. Works at any T and any d.
+Analytic p-value, near-instant at any T.
 
 {bdg-success}`recommended`
 :::
 
-:::{grid-item-card} {fas}`wave-square;1em;sd-text-primary` Nonlinear · sufficient T
+:::{grid-item-card} {fas}`wave-square;1em;sd-text-primary` Nonlinear mean effects
 :shadow: sm
 :class-card: ct-quickpick
 
-**`splitkci`**
+**`raft`**
 
-Good speed/F1 tradeoff. 10–20× faster than KCI. Performance improves with larger T.
+Random-feature F-test with a bootstrap null; a few ms per test. Conditional-mean dependence only.
 
-{bdg-primary}`balanced`
+{bdg-primary}`fast nonlinear`
 :::
 
-:::{grid-item-card} {fas}`magnifying-glass-chart;1em;sd-text-primary` Nonlinear · small T
+:::{grid-item-card} {fas}`chart-area;1em;sd-text-primary` Dependence through the variance
 :shadow: sm
 :class-card: ct-quickpick
 
-**`dfcit`**
+**`rcot`**
 
-Strong recall on nonlinear data at limited sample sizes. Results vary by graph structure.
+Full conditional independence via random Fourier features: also detects parents that change only the noise scale. `kci` is slower and more robust.
 
-{bdg-primary}`high recall`
+{bdg-primary}`full CI`
 :::
 
-:::{grid-item-card} {fas}`network-wired;1em;sd-text-danger` General nonlinear
+:::{grid-item-card} {fas}`table-cells;1em;sd-text-primary` Mixed discrete-continuous
 :shadow: sm
 :class-card: ct-quickpick
 
-**`kci`**
+**`cmiknn-mixed-gpu`**
 
-Uses all T points — no split bias. Most general kernel test.
+k-NN conditional mutual information with discrete columns kept discrete. CDNOTS also wraps any other test in `StratifiedCIT` when it detects discrete columns.
 
-{bdg-warning}`robust`
+{bdg-secondary}`discrete-aware`
+:::
+
+:::{grid-item-card} {fas}`diagram-project;1em;sd-text-primary` Interacting conditioning variables
+:shadow: sm
+:class-card: ct-quickpick
+
+**`rift`**
+
+`raft` with an interaction- and wiggle-aware adjustment for Z; about 2× the cost of `raft`.
+
+{bdg-secondary}`adaptive`
 :::
 
 :::{grid-item-card} {fas}`timeline;1em;sd-text-primary` Stochastic processes
@@ -65,44 +84,32 @@ Linear-signature kernel on path space. Built for SDEs and diffusions.
 {bdg-secondary}`path-space`
 :::
 
-:::{grid-item-card} {fas}`gauge-high;1em;sd-text-success` Runtime-constrained
-:shadow: sm
-:class-card: ct-quickpick
-
-**`parcorr-gpu`** or **`gcmi`**
-
-Fastest options. `parcorr-gpu` is instant (analytic); `gcmi` adds rank-normalisation overhead but handles mild nonlinearity.
-
-{bdg-success}`fast`
-:::
-
 ::::
-
-:::{tip} Not sure what your data looks like?
-Use `check_linearity(df)` from `causalts.utils.linearity` to run the Ramsey RESET test across all variable pairs. If no significant nonlinearity is found, `parcorr-gpu` is optimal.
-:::
-
----
 
 ## All Tests Overview
 
 | Test | Type | Speed | Best for |
 |------|------|:-----:|----------|
 | `parcorr-gpu` | Linear | {fas}`bolt;sd-text-warning` instant | Linear data, any T |
+| `parcorr` | Linear (CPU) | {fas}`bolt;sd-text-warning` instant | Linear data without torch / GPU |
 | `gcmi` | Monotone nonlinear | {fas}`forward;sd-text-success` fast | Mild nonlinearity, skewed data |
-| `splitkci` | Kernel | {fas}`gauge;sd-text-primary` moderate | Nonlinear, larger T |
-| `rcot` | RFF | {fas}`gauge;sd-text-primary` moderate | Any T; fast nonlinear option |
+| `raft` | Random-feature F-test, additive | {fas}`forward;sd-text-success` fast | Additive nonlinear mean effects; cheap nonlinear counterpart of `parcorr` |
+| `rift` | Random-feature F-test, interaction-adjusted | {fas}`forward;sd-text-success` fast | As `raft`, but also adjusts for interactions among, and wiggly effects of, conditioning variables |
+| `rcot` | RFF, full CI | {fas}`forward;sd-text-success` fast | Nonlinear dependence including through the variance |
+| `splitkci` | Kernel | {fas}`gauge;sd-text-primary` moderate | Nonlinear, large T |
 | `linsig` | Signature (linear) | {fas}`gauge;sd-text-primary` moderate | SDEs / stochastic processes, fast |
-| `dfcit` | Distribution-free | {fas}`gauge;sd-text-primary` moderate | High recall on nonlinear data; handles mixed discrete-continuous |
+| `dfcit` | Distribution-free | {fas}`gauge;sd-text-primary` moderate | High recall on nonlinear continuous data |
 | `kci` | Kernel | {fas}`snail;sd-text-danger` slow | General nonlinear; uses all samples (no split bias) |
 | `cmiknn-gpu` | k-NN | {fas}`snail;sd-text-danger` slow | Nonparametric baseline |
+| `cmiknn` | k-NN (CPU) | {fas}`snail;sd-text-danger` slow | Nonparametric baseline without torch / GPU |
+| `cmiknn-mixed-gpu` | k-NN, discrete-aware | {fas}`snail;sd-text-danger` slow | Mixed discrete-continuous columns |
 | `gcm` | Residual score | {fas}`forward;sd-text-success` fast | Nonlinear via a regression you choose; analytic p-value |
 | `wgcm` | Residual score | {fas}`gauge;sd-text-primary` moderate | Conditional covariance that changes sign across Z |
 | `pcm` | Residual score | {fas}`gauge;sd-text-primary` moderate | Conditional-**mean** effects; no weight bank needed |
-| `raft` | Random-feature F-test, additive | {fas}`forward;sd-text-success` fast | Additive nonlinear mean effects; cheap nonlinear counterpart of `parcorr` |
-| `rift` | Random-feature F-test, interaction-adjusted | {fas}`forward;sd-text-success` fast | As `raft`, but also adjusts for interactions among, and wiggly effects of, conditioning variables |
+| `fisherz` | Linear (causal-learn) | {fas}`bolt;sd-text-warning` instant | Gaussian data; causal-learn's Fisher-z test |
+| `chisq` / `gsquared` | Categorical (causal-learn) | {fas}`forward;sd-text-success` fast | All columns discrete |
 
----
+`sigkci` / `SigKCIGPU` is a deprecated alias of `linsig` / `LinSigCIGPU`.
 
 ## Test Details
 
@@ -115,11 +122,11 @@ Linear partial correlation with analytic p-value.
 
 **Strengths:**
 - Near-instant: analytic p-value, no permutations or kernel evaluations
-- Scales to any T and any d with no degradation
+- Cost grows only mildly with T and the conditioning-set size
 
 **Limitations:**
 - Assumes linear relationships — misses nonlinear edges
-- Run `check_linearity(df)` first to verify the assumption
+- `check_linearity(df)` (or `inspect_df`) checks the assumption; a non-significant RESET test is absence of evidence, not proof of linearity
 
 ### `gcmi`
 Gaussian Copula + Partial Correlation: rank-normalises variables then runs partial correlation.
@@ -147,7 +154,7 @@ Kernel CI test with RBF kernel and HBE p-value, using all T points.
 Bias-controlled kernel CI: splits data into train/test halves, uses gamma p-value.
 
 **Strengths:**
-- 10–20× faster than `kci` with similar power on nonlinear data
+- Faster than `kci` at large T (its kernel matrices are built on half the rows)
 - Bias-controlled: train/test split prevents distributional leakage
 
 **Limitations:**
@@ -158,10 +165,10 @@ Bias-controlled kernel CI: splits data into train/test halves, uses gamma p-valu
 Distribution-free CI using empirical CDFs and permutation p-values with early stopping.
 
 **Strengths:**
-- Only test that handles mixed discrete-continuous columns natively
 - Strong recall on nonlinear data, especially at small T where kernel tests lose power
 
 **Limitations:**
+- Assumes continuous columns: with discrete columns, CDNOTS wraps it in `StratifiedCIT` (or use `cmiknn-mixed-gpu`)
 - Permutation-based — slower than analytic tests
 - False positive rate can rise under near-collinear conditioning at large T
 
@@ -169,7 +176,8 @@ Distribution-free CI using empirical CDFs and permutation p-values with early st
 Randomized Conditional Correlation via Random Fourier Features.
 
 **Strengths:**
-- Near-instant regardless of T — runtime does not scale with sample size
+- Fast: the number of Fourier features is bounded, so runtime grows only linearly with T
+- Full conditional independence: also detects dependence through the conditional variance
 - Sizes its X/Y Fourier features to the sample, `min(25, floor(sqrt(T)))`, so short series do not pay for features they cannot estimate
 - Deterministic by default (`seed=42`); `n_avg>1` averages independent RFF draws via harmonic mean (Wilson 2019) at T ≤ 300
 
@@ -446,8 +454,6 @@ variables.
   it is built; each test adds temporaries of the same size); lower `n_boot` for very
   long series
 
----
-
 ## Key Tradeoffs
 
 ::::{grid} 2
@@ -458,7 +464,7 @@ variables.
 
 Large d: kernel tests (`kci`, `splitkci`) slow down as conditioning sets grow.
 
-**Use:** `parcorr-gpu` or `gcmi` — analytic p-values scale well.
+**Use:** `parcorr-gpu`, `gcmi` or `raft` — they stay fast as conditioning sets grow.
 :::
 
 :::{grid-item-card} {fas}`feather;1em;sd-text-primary` &nbsp; Weak edges
@@ -470,8 +476,6 @@ Nonlinear tests may need substantially more data than linear tests to detect low
 :::
 
 ::::
-
----
 
 ## Result Caching
 
@@ -488,11 +492,9 @@ ci_test2 = SplitKCIGPU(df.values, device="cpu", cache_dir="/tmp/myrun_splitkci")
 
 The cache key is derived from the data hash and test parameters. Caches are safe to share across runs on the same dataset. Delete the directory to invalidate.
 
----
-
 ## Custom CI Tests
 
-You can register your own CI test and use it with all discovery algorithms and the CLI. Subclass `CIT_Base`, implement `__call__`, and decorate with `@register_ci_test`:
+You can register your own CI test and use it with every discovery algorithm in Python. Subclass `CIT_Base`, implement `__call__`, and decorate with `@register_ci_test`:
 
 ```python
 import numpy as np
@@ -535,7 +537,7 @@ class MyCITest(CIT_Base):
         return p_value, statistic
 ```
 
-Once registered, the test is available everywhere:
+Once registered, the test is available by name in the same Python process (`create_ci_test`, `discover_df(ci_test="my_test")`). The `causal-ts` CLI runs in its own process with a fixed list of test names, so it does not see tests registered in your code.
 
 ```python
 from causalts.ci_tests import create_ci_test, list_ci_tests

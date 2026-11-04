@@ -112,7 +112,8 @@ def refine_lagged(
         ``(columns) -> bool``; a test whose columns have too few complete rows
         is skipped (no change), since a CI test's insufficient-data answer is
         not evidence either way.
-    skip : iterable of (cause, effect, lag)
+    skip : iterable of tuple
+        ``(cause, effect, lag)`` triples.
         Links not to test or change (e.g. frozen after oscillating).
     tested : dict or None
         If given, filled with ``(cause, effect, lag) -> p`` for every link

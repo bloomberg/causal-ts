@@ -15,17 +15,21 @@
 # %% [markdown]
 # # Real-World Discovery: Elbe River Network
 #
-# This notebook applies GRACE to real river flow data from the Elbe River main branch — a benchmark from the [CausalRivers](https://github.com/causalrivers/causalrivers) dataset.
+# This notebook applies GRACE to real river flow data from the Elbe River main branch — a benchmark from the [CausalRivers](https://github.com/CausalRivers/causalrivers) dataset.
 #
 # We use the **12 gauging stations** of the Elbe main branch, whose causal structure is known: water flows downstream. Flow is aggregated to 6-hour volumes and differenced; gaps are filled by interpolating each station's own series in time.
 #
 # We also demonstrate a **bootstrap approach**: running GRACE on several 1-year windows and keeping the edges found in most of them, to reduce sensitivity to individual seasons.
 #
+# [`regime_discovery.ipynb`](regime_discovery.ipynb) (§10) uses the same Elbe stations with different preprocessing (regime detection on flow levels, then per-regime discovery), so its numbers are not directly comparable with the ones here.
+#
 # ---
 #
 # ## Setup
 #
-# The next cell downloads the CausalRivers data (`product.zip`) into `CAUSALRIVERS_DIR` (default `/tmp/causalrivers`) if it is not already there.
+# The next cell downloads the CausalRivers data (`product.zip`, about 130 MB, from the project's GitHub release) into `CAUSALRIVERS_DIR` (default `/tmp/causalrivers`) if it is not already there.
+#
+# **Caution:** the river graph ships as a Python pickle, and `pickle.load` can execute arbitrary code. Only load the file from the official CausalRivers release, and do not point `CAUSALRIVERS_DIR` at a copy from an untrusted source.
 
 # %%
 import os
@@ -38,8 +42,8 @@ if not (DATA_DIR / "product" / "rivers_ts_east_germany.csv").exists():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     print("Downloading benchmark data...")
     subprocess.run([
-        "curl", "-L", "-o", str(DATA_DIR / "product.zip"),
-        "https://github.com/CausalRivers/benchmark/releases/download/First_release/product.zip"
+        "curl", "-sSL", "-o", str(DATA_DIR / "product.zip"),
+        "https://github.com/CausalRivers/causalrivers/releases/download/First_release/product.zip"
     ], check=True)
     subprocess.run(["unzip", "-q", str(DATA_DIR / "product.zip"), "-d", str(DATA_DIR)],
                    check=True)
@@ -68,7 +72,9 @@ from causalts.grace.gated_discovery import run_ci_skeleton
 ELBE_STATIONS = [166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177]
 RESAMPLE_H = 6
 
-full_G = pickle.load(open(DATA_DIR / "product" / "rivers_east_germany.p", "rb"))
+# The river graph is a pickle: only load it from the official release (see Setup).
+with open(DATA_DIR / "product" / "rivers_east_germany.p", "rb") as fh:
+    full_G = pickle.load(fh)
 ts_raw = pd.read_csv(DATA_DIR / "product" / "rivers_ts_east_germany.csv",
                      index_col=0, parse_dates=True)
 stations = [n for n in ELBE_STATIONS if str(n) in ts_raw.columns]

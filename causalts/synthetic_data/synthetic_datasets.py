@@ -186,8 +186,9 @@ def confounded_trends(seed=42, T=500, trend_strength=10.0):
     Five variables share a quadratic time trend driven by population growth.
     None of them cause each other -- the trend is an omitted confounder.
     Without conditioning on C, the algorithm links them via spurious edges.
-    With ``linear+quad`` C, all spurious edges vanish and only Temp->Energy
-    (the sole genuine causal link) remains.
+    A C node with the matching ``linear+quad`` basis removes most of the
+    spurious edges (see the multi-C nonstationarity notebook); Temp->Energy is
+    the only genuine causal link.
 
     Parameters
     ----------
@@ -250,6 +251,27 @@ def confounded_trends(seed=42, T=500, trend_strength=10.0):
 
 
 def ex2(seed=42, T=300):
+    """Six-variable linear VAR(3) with Gaussian noise ("6-Node Linear VAR").
+
+    Eleven lagged links (lags 1-3), including AR(1) self-links on X0, X3, X4
+    and X5 and a feedback loop X3 <-> X4 at lag 1. No contemporaneous links.
+
+    Parameters
+    ----------
+    seed : int, default 42
+        Seed for ``numpy.random.default_rng``.
+    T : int, default 300
+        Number of returned samples (a 3-step burn-in is discarded).
+
+    Returns
+    -------
+    dict
+        Keys ``"df"`` (DataFrame (T, 6), columns ``X0``..``X5``),
+        ``"max_lag"`` (3), ``"ground_truth"`` (binary ndarray (6, 6, 4),
+        indexed ``[cause, effect, lag]``), ``"weights"`` (linear coefficients,
+        same shape) and ``"name"``. There is no ``"var_names"`` key; use
+        ``df.columns``.
+    """
     max_lag = 3
     rng = np.random.default_rng(seed)
     x = rng.standard_normal((T + max_lag, 6))
@@ -314,6 +336,30 @@ def ex2(seed=42, T=300):
 
 
 def ex3(seed=42, T=300):
+    """Eleven-variable linear VAR(3) cascade ("Cascade Network (11-Node)").
+
+    Variables are named after the protein-signalling network of Sachs et al.
+    (Plcg, Pip3, Pip2, PKC, PKA, P38, Jnk, Raf, Mek, Erk, Akt), but the links
+    are a synthetic lagged cascade, not the Sachs graph. Every variable has an
+    AR(1) self-link; cross links are at lags 1-3 with Gaussian noise. No
+    contemporaneous links.
+
+    Parameters
+    ----------
+    seed : int, default 42
+        Seed for ``numpy.random.default_rng``.
+    T : int, default 300
+        Number of returned samples (a 3-step burn-in is discarded).
+
+    Returns
+    -------
+    dict
+        Keys ``"df"`` (DataFrame (T, 11) with the names above),
+        ``"max_lag"`` (3), ``"ground_truth"`` (binary int8 ndarray
+        (11, 11, 4), indexed ``[cause, effect, lag]``), ``"weights"`` (linear
+        coefficients, same shape) and ``"name"``. There is no ``"var_names"``
+        key; use ``df.columns``.
+    """
     rng = np.random.default_rng(seed)
     maxlag = 3
     x = rng.standard_normal((T + maxlag, 11))
@@ -506,6 +552,37 @@ DATASET_FUNCS = {
 
 
 def load_dataset(name, **kwargs):
+    """Generate a named synthetic dataset.
+
+    Parameters
+    ----------
+    name : str
+        One of ``"ex1"`` (:func:`ex1_nl`), ``"ex2"`` (:func:`ex2`), ``"ex3"``
+        (:func:`ex3`), ``"henon"`` (:func:`henon_chain`), ``"ercot_weather"``
+        (:func:`~causalts.synthetic_data.weather_datasets.ercot_weather`),
+        ``"scale_free"``, ``"scale_free_dense"``, ``"erdos_renyi"``,
+        ``"erdos_renyi_dense"``, ``"small_world"`` or ``"small_world_dense"``
+        (:func:`topology_scp` presets).
+    **kwargs
+        Forwarded to the generator, e.g. ``seed`` and ``T``.
+
+    Returns
+    -------
+    dict
+        The generator's bundle. Every bundle has ``"df"``, ``"max_lag"`` and
+        ``"ground_truth"`` (``[cause, effect, lag]``). Coefficients are in
+        ``"weights"`` (``None`` for ``henon`` and the topology presets), except
+        ``ex1``, which has ``"weights_lin"`` and ``"weights_sq"`` instead.
+        ``"name"`` is present for ``ex1``/``ex2``/``ex3``/``henon``/
+        ``ercot_weather``; ``"var_names"`` only for ``ercot_weather`` and the
+        topology presets (which also add ``"meta"``), so use
+        ``bundle["df"].columns`` for variable names in general.
+
+    Raises
+    ------
+    KeyError
+        If ``name`` is not a registered dataset.
+    """
     return DATASET_FUNCS[name](**kwargs)
 
 

@@ -76,9 +76,10 @@ class GrangerResult(CausalResult):
 # %% [markdown]
 # ## Step 2 — Implement and register the algorithm
 #
-# The function signature must accept `df`, `ci_test`, and `max_lag` as positional
-# arguments (so the registry can call it uniformly). Extra parameters go in `**kwargs`
-# or as keyword-only args.
+# The function must accept parameters named `df`, `ci_test` and `max_lag`:
+# `run_algorithm` calls every registered algorithm as
+# `fn(df=df, ci_test=ci_test, max_lag=max_lag, **kwargs)`, so the names matter, not
+# their positions. Extra parameters go in `**kwargs` or as keyword-only args.
 
 # %%
 @register_algorithm("granger")

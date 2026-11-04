@@ -61,11 +61,20 @@ autoapi_options = [
 autoapi_python_class_content = "both"
 autoapi_member_order = "groupwise"
 autoapi_add_toctree_entry = False
+# Deprecated shim that re-defines CIT_Base; documenting it makes every
+# ``CIT_Base`` type reference ambiguous.
+autoapi_ignore = ["*migrations*", "*/ci_tests/cit_base.py"]
 suppress_warnings = ["autoapi.python_import_resolution"]
 
 # Napoleon (numpy-style docstrings)
 napoleon_numpy_docstring = True
 napoleon_google_docstring = False
+# NumPy "Attributes" sections become :ivar: fields, not ``.. attribute::`` objects
+# that collide with the attributes autoapi documents on the same page.
+napoleon_use_ivar = True
+# The curated docs/api/*.md pages render autodoc entries without re-registering
+# them; the autoapi pages stay the canonical cross-reference targets.
+autodoc_default_options = {"no-index": True}
 
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]

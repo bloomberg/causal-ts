@@ -1,8 +1,8 @@
 # Algorithms
 
-Causal-TS implements four discovery algorithms for time series (GRACE with a regression-based variant, REAP). Use the table below to pick the right one, then read each section for details.
+Causal-TS implements five discovery algorithms for time series in three families: the constraint-based **CDNOTS** and **CDNOTS+**, the pairwise **CEDAR** for autoregressive processes, and the grow-shrink refinements **GRACE** and **REAP**, which refine a candidate graph from any method (CDNOTS by default). Latent-confounder correction ([LUCID](api/confounders.md)) and [regime discovery](examples/regime_discovery.ipynb) work on top of any of them.
 
----
+For a recommended configuration for your data, run `inspect_df(df)` or `causal-ts inspect data.csv` (see [Choosing a configuration](getting_started/index.md#choosing-a-configuration)).
 
 ::::{grid} 4
 :gutter: 3
@@ -17,7 +17,7 @@ Causal-TS implements four discovery algorithms for time series (GRACE with a reg
 
 Constraint-based · PC extension
 
-{bdg-primary-line}`full orientation`
+{bdg-primary-line}`CPDAG + C orientation`
 :::
 
 :::{grid-item-card}
@@ -30,7 +30,7 @@ Constraint-based · PC extension
 
 Constraint-based · PCMCI+ skeleton
 
-{bdg-primary-line}`full orientation`
+{bdg-primary-line}`CPDAG + C orientation`
 :::
 
 :::{grid-item-card}
@@ -41,7 +41,7 @@ Constraint-based · PCMCI+ skeleton
 
 **CEDAR**
 
-Pairwise · Scalable
+Pairwise · Autoregressive
 
 {bdg-primary-line}`pair-wise`
 :::
@@ -50,32 +50,30 @@ Pairwise · Scalable
 :shadow: sm
 :text-align: center
 
-{fas}`brain;2em;sd-text-primary`
+{fas}`code-merge;2em;sd-text-primary`
 
-**GRACE**
+**GRACE · REAP**
 
-Hybrid neural · High-dim
+Grow-shrink refinement
 
-{bdg-primary-line}`gate values`
+{bdg-primary-line}`any candidate graph`
 :::
 
 ::::
 
-| Algorithm | Complexity | Nonstationarity | Orientation |
+| Algorithm | CI tests | Nonstationarity | Orientation |
 |-----------|-----------|-----------------|-------------|
-| CDNOTS | O(d^p) | {fas}`check;sd-text-success` C node | Full (standard PC skeleton) |
-| CDNOTS+ | O(d^p) | {fas}`check;sd-text-success` C node | Full (PCMCI+ two-step skeleton) |
-| CEDAR | O(d²) | Via lag selection | Pairwise |
-| GRACE | O(d²) + NN | {fas}`check;sd-text-success` via skeleton | CDNOTS/CDNOTS+ skeleton + orientation → grow round, gates and effect floor select edges |
-| REAP | O(d²) + regressions | {fas}`check;sd-text-success` via skeleton | Same candidate graph → three grow rounds, then backward elimination by partial F-tests (no training) |
+| CDNOTS | Exponential in the conditioning-set size `p` | {fas}`check;sd-text-success` C node | Colliders, Meek rules and C; unresolved lag-0 edges stay undirected (`o-o`) |
+| CDNOTS+ | As CDNOTS, conditioning on discovered parents | {fas}`check;sd-text-success` C node | As CDNOTS; unoriented lag-0 edges are dropped from `cg_tig` (kept in `to_marks()`); opt-in LiNGAM orientation |
+| CEDAR | O(d²) pairs, plus MCI pruning | {fas}`check;sd-text-success` C node (`include_C`) | Lagged edges oriented by time |
+| GRACE | Candidate graph (CDNOTS by default) + O(d²) grow tests + neural training | {fas}`check;sd-text-success` via the candidate graph | Lagged edges (oriented by time): gates, then grow rounds and retraining; lag-0 edges are not refined |
+| REAP | Candidate graph + O(d²) grow tests + regressions | {fas}`check;sd-text-success` via the candidate graph | Lagged edges: backward elimination by partial F-tests, then three grow → re-shrink rounds (no training); optional lag-0 step |
 
 :::{note}
-**O(d^p) complexity:** `d` is the number of variables and `p` is the maximum conditioning set size tested during skeleton discovery (bounded by the maximum degree of the true graph). The PC skeleton grows conditioning sets from size 0 up to size `p`, giving O(d^p) CI tests in total. For sparse graphs `p` is small (typically 2–4) and the algorithm is tractable; for dense graphs `p` can grow with `d`.
+**Cost of the PC skeleton:** `d` is the number of variables and `p` the largest conditioning set tested (bounded by the maximum degree of the true graph). Each of the roughly d²·L candidate lagged pairs is tested against conditioning sets of size 0..`p` drawn from its neighbours, so the number of tests grows polynomially in `d` with exponent set by `p`. For sparse graphs `p` is small (typically 2–4) and discovery is tractable; for dense graphs `p` grows with `d`.
 
-Scalability in d is determined by the **CI test**, not the algorithm. Nonlinear kernel tests (KCI, SplitKCI) become expensive at large d due to growing conditioning sets. For high-dimensional problems, use linear tests (`parcorr-gpu`, `gcmi`) which scale to any d.
+In practice the **CI test** sets how far CDNOTS scales in `d`: kernel tests (`kci`, `splitkci`) become expensive as conditioning sets grow, while `parcorr-gpu`, `gcmi` and `raft` stay fast. There is no dimension above which another algorithm is required.
 :::
-
----
 
 ## {fas}`circle-nodes;1em;sd-text-primary` CDNOTS
 
@@ -86,6 +84,8 @@ Extends the PC algorithm to time series by embedding lagged variables and adding
 1. **Skeleton discovery** — conditional independence tests with temporal constraints
 2. **Orientation** — unshielded colliders + Meek rules with lag constraints
 3. **Nonstationarity-based orientation** — uses C to infer remaining edge directions
+
+The result is a CPDAG: contemporaneous edges that none of these rules can orient stay undirected (`o-o`) or conflicting (`x-x`); `result.to_marks()` shows them and `result.cg_tig` stores them as symmetric entries. `run_cdnots` defaults to `stable=True` (order-independent skeleton); the CLI's `--stable` flag is off by default. Other orientation options (`orient_margin`, `collider_search`, `majority_gamma`, the ambiguity band of the majority collider rule) are described in the `run_cdnots` docstring.
 
 ::::{tab-set}
 
@@ -137,9 +137,9 @@ res = run_cdnots(df=df, indep_test=ci_test, num_lags=3,
 ::::
 
 :::{tip}
-**CDNOTS vs CDNOTS+:** Use `run_cdnots` by default. Switch to `run_cdnots_plus` when the graph is likely dense (hub-structured or highly coupled) — it avoids the over-conditioning problem in standard PC by restricting conditioning sets to discovered parents. See `cdnots_or_cdnots_plus.ipynb` for a systematic comparison.
+**CDNOTS vs CDNOTS+:** Use `run_cdnots` by default. Switch to `run_cdnots_plus` when the graph is likely dense (hub-structured or highly coupled) — it avoids the over-conditioning problem in standard PC by restricting conditioning sets to discovered parents, and `alpha_mci` sets its MCI level apart from `alpha`. See [CDNOTS or CDNOTS+?](examples/cdnots_or_cdnots_plus.ipynb) for a systematic comparison.
 
-**C node basis:** The default `c_preset='linear'` (scalar time index) handles smooth monotone drift. For quadratic trends use `'linear+quad'`, for seasonal effects `'linear+sin'`. Supply `c_array` for any custom nonstationarity pattern. See `multi_c_nonstationarity.ipynb`.
+**C node basis:** The default `c_preset='linear'` (scalar time index) handles smooth monotone drift. For quadratic trends use `'linear+quad'`. `'linear+sin'` adds a single slow oscillation over the whole sample (`sin(2πt/T)`), not a seasonal cycle; for seasonality at a known period, supply `c_array` with the matching sine/cosine columns. See [Multi-C nonstationarity](examples/multi_c_nonstationarity.ipynb).
 :::
 
 ### Optional CDNOTS+ steps
@@ -172,15 +172,13 @@ res.lag_refinements     # links added or removed, with p-values
 | Real data (CausalRivers) | F1 unchanged, SHD +0.5. | F1 unchanged, SHD +2: on long series it adds about four false links per true one. |
 | Cost | 101 DirectLiNGAM orderings per undirected component. | About 1.5–2.7× a plain run. |
 
-Neither has improved results on the real data tested so far. Use `lag0_orient` when relationships are close to linear with non-Gaussian noise, and the refinement when the CI test is well powered and you can afford more false links in exchange for weak true ones. The `run_cdnots_plus` docstring has the full settings and numbers.
-
----
+Neither has improved results on the real data tested so far. Use `lag0_orient` when relationships are close to linear with non-Gaussian noise, and the refinement when the CI test is well powered and you can afford more false links in exchange for weak true ones. The `run_cdnots_plus` docstring has the full settings and numbers. Both are Python-only options (not exposed by `causal-ts discover`).
 
 ## {fas}`shuffle;1em;sd-text-primary` CEDAR
 
-**Causal Edge Discovery for Autoregressive processes** {bdg-primary}`pairwise` {bdg-secondary}`scalable`
+**Causal Edge Discovery for Autoregressive processes** {bdg-primary}`pairwise` {bdg-secondary}`autoregressive`
 
-Pairwise algorithm with O(d²) complexity. Uses `partial_dcor` lag selection (unbiased distance correlation on Y(t) residualised on Y(t-1), suppressing AR-mediated lag inflation) followed by two CI tests per candidate edge.
+Pairwise algorithm over the O(d²) ordered pairs, designed for autoregressive processes (each variable driven by its own past plus lagged parents). For each pair it selects the minimum lag (by default `partial_dcor`: unbiased distance correlation on Y(t) residualised on Y(t-1), suppressing AR-mediated lag inflation), runs two CI tests for that candidate edge, and then prunes the retained edges with an MCI test (`prune=True`). Self-loops come from the estimated or assumed AR order (`include_autoreg`, `assume_ar1`). The C node is supported (`include_C`, `c_preset`).
 
 ```python
 from causalts.cedar import run_cedar
@@ -189,22 +187,27 @@ from causalts.ci_tests import ParCorrGPU
 ci_test = ParCorrGPU(df.values, device="cpu")
 result = run_cedar(
     df=df, ci_test=ci_test, max_lag=3,
-    lag_method="dcor", alpha_cond1=0.05, alpha_cond2=0.05,
+    alpha_cond1=0.01, alpha_cond2=0.01,   # the Python defaults
 )
 result.plot()
 ```
+
+:::{note}
+`causal-ts discover --algorithm cedar` uses different defaults from `run_cedar`: `alpha_cond1`/`alpha_cond2` 0.05 (Python 0.01), `filter_children` and the C node on (Python off), and the AR order estimated by BIC unless `--assume-ar1` is given (Python assumes AR(1)).
+:::
 
 **Lag selection methods** (`lag_method`):
 
 | Value | Method | Best when |
 |-------|--------|-----------|
-| `dcor` | Unbiased U-centered distance correlation | General nonlinear; **default** |
+| `partial_dcor` | Unbiased distance correlation on Y(t) residualised on Y(t-1) | General; suppresses lags inflated by autocorrelation; **default** |
+| `dcor` | Unbiased U-centered distance correlation | General nonlinear |
 | `dcor_biased` | Biased distance correlation | Marginal speed advantage |
 | `pearson` | Pearson correlation | Confirmed linear data; fastest |
 | `lasso` | LassoCV per pair (SyPI, Mastakouri et al. 2021) | Sparse linear; simultaneous lag fitting |
 
 :::{tip}
-**Best for:** Fast pairwise results at any dimensionality. O(d²) pairwise testing and `target_var` mode (O(d)) keep runtime manageable.
+**Best for:** Autoregressive systems, and single-target questions ("what drives Y?") via `target_var` mode (O(d)). It is not a generic replacement for CDNOTS: its pairwise tests assume the autoregressive design.
 
 **Contemporaneous effects:** Pass `include_lag0=True` to test for same-time (lag-0) dependencies. Off by default.
 
@@ -215,13 +218,27 @@ result.plot()
 **DoWhy integration:** `result.estimate_effect(...)`, `result.fit_scm()`, `result.counterfactual(...)` are available directly on the returned `CedarResult`.
 :::
 
----
+## {fas}`code-merge;1em;sd-text-primary` GRACE · REAP
 
-## {fas}`brain;1em;sd-text-primary` GRACE
+**Grow-shrink refinement of a candidate graph** {bdg-primary}`any candidate graph` {bdg-secondary}`gates | regression`
 
-**Gated Refinement After Constraint-based Estimation** {bdg-primary}`neural` {bdg-secondary}`high-dim`
+Both take a directed, lag-resolved candidate graph — CDNOTS by default (built with the CI test you pass as `ci_test_class`, or by name through `discover_df` / `causal-ts discover --ci-test`), or any method's graph as `candidate_graph` — and refine its **lagged** edges: a shrink step prunes the candidate parents, then grow rounds test the lagged pairs outside the graph, add the hits and shrink again. Lag-0 edges of the candidate graph are not carried over. They differ in the shrink step and in what they can find:
 
-Two-stage hybrid: a high-recall directed candidate graph (CDNOTS by default, or any `candidate_graph` you supply, e.g. a loose PCMCI+ run) + neural gated refinement with L0 (Hard Concrete) regularization (`run_grace`). The gates prune false positives; the grow round (`grow_rounds`, one by default) also adds edges the candidate graph missed, so GRACE is a refinement stage rather than a pure pruner. It helps most on loose, high-recall candidate graphs and can only lose on one that is already precise.
+| | GRACE (`run_grace`) | REAP (`run_reap`) |
+|---|---|---|
+| Shrink | Neural model with one Hard Concrete (L0) gate per candidate edge | Backward elimination by partial F-tests on additive spline regressions |
+| Training | Yes (slower; GPU helps) | None |
+| Parents that change only a target's noise scale | Proposed by the grow step (`grow_variance`) and kept by the gated model's likelihood | Not detected (mean effects only) |
+| Edge scores | `gate_values` | `edge_pvalue`, `edge_strength` (partial R²) |
+| Contemporaneous edges | Not refined (keep the candidate graph's lag-0 edges) | Optional, `contemporaneous=True` (CDNOTS+ with the lagged edges pinned) |
+
+Use REAP by default; use GRACE when some variables may act only on another's variance (`inspect_df` reports this as `facts["variance_dependence"]` and then recommends GRACE).
+
+### GRACE
+
+**Gated Refinement for Accurate Causal Edge discovery.** Two-stage hybrid: a high-recall directed candidate graph (CDNOTS by default, or any `candidate_graph` you supply, e.g. a loose PCMCI+ run) + neural gated refinement with L0 (Hard Concrete) regularization (`run_grace`). The gates prune false positives; the grow round (`grow_rounds`, one by default) also adds edges the candidate graph missed, so GRACE is a refinement stage rather than a pure pruner. It helps most on loose, high-recall candidate graphs and can only lose on one that is already precise.
+
+### REAP
 
 **REAP** (`run_reap`) swaps the neural stage for a regression-based one: each target's candidate parents enter an additive least-squares regression (one natural-spline block per lagged parent, plus the C basis on the CDNOTS candidate graph when `include_C=True`, or on a supplied one with `include_C_in_model=True`), and the least significant parent is dropped while its block's partial F-test p-value exceeds `prune_alpha` (Huber-clipped residuals, so heavy tails cannot decide a test). These are fixed-basis F-tests: their p-values are approximate and become liberal at large T when effects are strongly curved, so treat `edge_pvalue` as a ranking score rather than a calibrated test (use the `raft` CI test for that, or `rift` when conditioning effects interact or are wiggly). Nothing is trained and no cutoff is chosen; with `grow_rounds` (three by default) it alternates grow and shrink. It returns `edge_pvalue` and `edge_strength` (partial R², a continuous edge score) instead of `gate_values`. The shrink handles lagged edges; `contemporaneous=True` adds lag-0 edges afterwards by running CDNOTS+ with every lagged edge pinned to the shrink's selection, so CDNOTS+ only tests lag-0 adjacencies (conditioning on the selected lagged parents) and orients them by its collider and Meek rules, which use the selected lagged arrows, and by its nonstationarity rule when C is included. The lagged edges are unchanged; unoriented lag-0 edges are dropped from `cg_tig`, as in CDNOTS+, and kept in `to_marks()`. On long series (T in the thousands) the shrink's tests keep real but negligible dependencies; `effect_floor="adaptive"` prunes lagged edges whose unique effect is below 0.01 or below a fifth of the target's strongest edge.
 
@@ -258,10 +275,12 @@ from causalts.grace import run_stability_selection
 
 res = run_stability_selection(
     df=df, max_lag=3,
-    n_subsamples=20, stability_threshold=0.6,
+    n_subsamples=20, stability_threshold=0.6,   # n_subsamples defaults to 1
 )
 G_hat, scores = res.cg_tig, res.stability_scores
 ```
+
+`causal-ts discover --algorithm grace-ss` always uses a CI skeleton (`use_ci_skeleton=True`); in Python it is off by default, and `include_C` only has an effect with it.
 
 :::{warning}
 Stability selection runs GRACE on random subsamples without a pre-filtered skeleton. This is only practical for small, low-dimensional problems — at high d it becomes prohibitively slow and the subsampling instability dominates. For high-d use cases, pass a candidate graph to `run_grace` instead of using stability selection.
@@ -299,13 +318,16 @@ Stability selection runs GRACE on random subsamples without a pre-filtered skele
 | `batch_size` | auto | Auto-set based on T. Set manually if OOM. |
 | `include_C` | `True` | Include the C nonstationarity node in the skeleton. Set `False` for already-detrended data. |
 | `c_preset` | `linear` | C basis for that skeleton — same presets as CDNOTS. |
+| `effect_floor` | `1 - exp(-0.02)` ≈ 0.0198 (GRACE) | Cross edges whose adjusted partial R² is below this are removed after the gates. REAP's `effect_floor` is the `shrink_effect_floor` above (default `None`). |
+| `lambda_rule` | `'xcorr'` | Closed-form rule for the L0 strength λ (see the tip below); `lambda_cv=True` selects λ by cross-validation instead. |
+| `grow_q` | `0.1` | Benjamini-Hochberg level of the grow tests. |
 
 **Interpreting `gate_values`:** Values near 1.0 indicate high confidence edges; near 0.0 are pruned. Plot `gate_values` as a heatmap to visualize edge confidence. With `ar_path=True` (the default under `refine="gates"`) self-loops are not gated: their entries are 0 and the F-test decides them.
 
 :::{tip}
-**Best for:** When false positive control is critical. For high-dimensional problems, provide a precomputed skeleton (e.g. CDNOTS with `max_degree=1` and a fast CI test) to `run_cdnots_gated` to pre-filter edges before gated training.
+**Candidate graphs:** GRACE and REAP help most on a loose, high-recall candidate graph and can only lose on one that is already precise. Any method's directed graph can be passed as `candidate_graph`.
 
-**Lambda selection:** The regularization strength λ is set automatically by `lambda_rule="xcorr"` (default; described below). `lambda_rule="density"` is the earlier adaptive formula; `lambda_rule="dT"` uses λ = 300/(d·T), which keeps falling with d where the density formula levels off. Its constant was fitted on calibration sweeps (`ar_path=True`, rank data, Student-t likelihood; sparse and dense graphs; d 5–100, T 250–1000), where at d ≥ 50 it kept true nonlinear edges the density formula dropped and the skeleton density did not predict the optimal λ. It warns outside d 10–100, T 250–1000 (at d=5 it lost to the density formula); other settings are untested. When refining a loose supplied skeleton on a sparse graph, the optimal λ was about 1.3× larger. `lambda_rule="xcorr"` bounds λ to [0.3/d, 0.5] and scales it with the data's background lagged cross-correlation, so it does not vanish on long series and prunes more under strong autoregression or persistent latent drivers; it was fitted on d 5–100, T 250–10000 (it warns outside) and matches `"dT"` inside that rule's range. For data-driven selection, use `compute_lambda_cv()` from `causalts.grace` to run cross-validation before calling `run_cdnots_gated`.
+**Lambda selection:** The regularization strength λ is set automatically by `lambda_rule="xcorr"` (default; described below). `lambda_rule="density"` is the earlier adaptive formula; `lambda_rule="dT"` uses λ = 300/(d·T), which keeps falling with d where the density formula levels off. Its constant was fitted on calibration sweeps (`ar_path=True`, rank data, Student-t likelihood; sparse and dense graphs; d 5–100, T 250–1000), where at d ≥ 50 it kept true nonlinear edges the density formula dropped and the skeleton density did not predict the optimal λ. It warns outside d 10–100, T 250–1000 (at d=5 it lost to the density formula); other settings are untested. When refining a loose supplied skeleton on a sparse graph, the optimal λ was about 1.3× larger. `lambda_rule="xcorr"` bounds λ to [0.3/d, 0.5] and scales it with the data's background lagged cross-correlation, so it does not vanish on long series and prunes more under strong autoregression or persistent latent drivers; it was fitted on d 5–100, T 250–10000 (it warns outside) and matches `"dT"` inside that rule's range. For data-driven selection, pass `lambda_cv=True` to `run_grace` (or call `compute_lambda_cv()` from `causalts.grace` yourself).
 
-**DoWhy integration:** Use `wrap_graph()` from `causalts.effects` to attach effect estimation and counterfactual methods to GRACE's output graph.
+**DoWhy integration:** `run_grace` and `run_reap` return a `GraceResult`, so `res.estimate_effect(...)`, `res.fit_scm()` and `res.counterfactual(...)` are available directly.
 :::

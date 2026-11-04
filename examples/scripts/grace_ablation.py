@@ -21,7 +21,7 @@
 #
 # **Part B — Lorenz-96 (Non-Additive):** Lorenz-96 has multiplicative interactions, outside GRACE's additive model class.
 #
-# Lorenz-96 update rule: $x_i(t+1) = (x_{i-1} - x_{i-2}) \cdot x_{i+1} - x_i + F$
+# Lorenz-96 dynamics (indices cyclic): $\dfrac{dx_i}{dt} = (x_{i+1} - x_{i-2})\, x_{i-1} - x_i + F$
 
 # %%
 import time
@@ -142,7 +142,7 @@ print(df_res.to_string(index=False))
 # ---
 # ## Part B — Lorenz-96 (Non-Additive Dynamics)
 #
-# Lorenz-96 has multiplicative causal mechanisms. Ground truth: each node depends on exactly 4 neighbors at lag 1 (cyclic). Parameters: N=50, T=1000, F=10.0, dt=0.1, obs_noise=0.1, burn_in=1000.
+# Lorenz-96 has multiplicative causal mechanisms. Ground truth: each node $x_i$ has exactly 4 parents at lag 1: $x_{i-2}$, $x_{i-1}$, $x_{i+1}$ and its own past $x_i$ (cyclic indices). Parameters: N=50, T=1000, F=10.0, dt=0.1, obs_noise=0.1, burn_in=1000.
 
 # %%
 result_l96 = lorenz96(seed=0, T=1000, N=50, F=10.0, dt=0.1, obs_noise=0.1, burn_in=1000)
@@ -185,6 +185,3 @@ print(f"{'GRACE':<10} {m_g_l96['F1']:>6.3f} {m_g_l96['Precision']:>8.3f} "
 
 # %% [markdown]
 # **Takeaway:** On Lorenz-96, GRACE reaches F1 0.948 against CDNOTS's 0.751 despite the multiplicative interactions. CDNOTS's linear CI test misses 43 of the 200 true edges. GRACE's grow round tests the pairs outside the CDNOTS graph and adds 117 candidates; 68 of them survive retraining. The final graph has all 200 true edges and 22 false ones.
-
-# %% [markdown]
-#

@@ -2,8 +2,6 @@
 
 Hands-on notebooks covering algorithms, CI tests, and the full discovery-to-estimation pipeline.
 
----
-
 ## Tutorials
 
 <div class="ct-gallery">
@@ -28,27 +26,25 @@ Hands-on notebooks covering algorithms, CI tests, and the full discovery-to-esti
   <span class="ct-gallery-title">Agentic Discovery</span>
 </a>
 
-<a href="../tutorial.html" class="ct-gallery-item" data-tooltip="Full walkthrough of CDNOTS, CDNOTS+, CEDAR, and GRACE — data generation, discovery, evaluation, and visualization.">
-  <img src="../_static/img/thumbnails/tutorial_thumb.png" alt="Getting Started" />
-  <span class="ct-gallery-title">Getting Started</span>
+<a href="../tutorial.html" class="ct-gallery-item" data-tooltip="Full walkthrough of CDNOTS, CEDAR and GRACE (with CDNOTS+ as GRACE's candidate graph) — data generation, CI tests, discovery, evaluation, and visualization.">
+  <img src="../_static/img/thumbnails/tutorial_thumb.png" alt="Tutorial" />
+  <span class="ct-gallery-title">Tutorial</span>
 </a>
 
-<a href="api_reference.html" class="ct-gallery-item" data-tooltip="Interactive reference for all CI tests, discovery algorithms, and plotting utilities with worked examples.">
+<a href="api_reference.html" class="ct-gallery-item" data-tooltip="Worked examples of the CI tests, discovery algorithms, inspection, effects and plotting utilities; the API reference pages document every function.">
   <img src="../_static/img/thumbnails/api_reference_thumb.png" alt="API Reference Notebook" />
   <span class="ct-gallery-title">API Reference Notebook</span>
 </a>
 
 </div>
 
----
-
 ## CEDAR Deep Dives
 
-CEDAR (Causal Edge Discovery for Autoregressive processes) is a scalable pairwise causal discovery algorithm for autoregressive time series. It uses minimum-lag selection to reduce the search to two CI tests per candidate edge — O(d²) overall — and supports single-target discovery at O(d). See [arXiv:2607.20696](https://arxiv.org/abs/2607.20696).
+CEDAR (Causal Edge Discovery for Autoregressive processes) is a pairwise causal discovery algorithm for autoregressive time series. It selects a minimum lag per pair, runs two CI tests per candidate edge (O(d²) pairs overall) and prunes with MCI tests, and supports single-target discovery at O(d). See [arXiv:2607.20696](https://arxiv.org/abs/2607.20696).
 
 <div class="ct-gallery">
 
-<a href="cedar_benchmark.html" class="ct-gallery-item" data-tooltip="CDNOTS+ and CEDAR benchmarked at d=5,10,20,30 — F1, precision, recall, SHD, and wall-clock runtime compared on random sparse SCPs with T=300.">
+<a href="cedar_benchmark.html" class="ct-gallery-item" data-tooltip="CDNOTS+ and CEDAR benchmarked at d=5 to 40 (4 seeds) — F1, precision, recall, SHD, and wall-clock runtime on random sparse SCPs with T=300.">
   <img src="../_static/img/thumbnails/cedar_benchmark_thumb.png" alt="CEDAR Scaling Benchmark" />
   <span class="ct-gallery-title">Scaling Benchmark</span>
 </a>
@@ -58,22 +54,20 @@ CEDAR (Causal Edge Discovery for Autoregressive processes) is a scalable pairwis
   <span class="ct-gallery-title">CEDAR Deep Dive</span>
 </a>
 
-<a href="cedar_lag_selection.html" class="ct-gallery-item" data-tooltip="Compare lag selection methods (dcor, dcor_biased, pearson) and p-value methods (t_test, circular_shift) — F1, precision, runtime, and the Ramsey RESET linearity guide.">
+<a href="cedar_lag_selection.html" class="ct-gallery-item" data-tooltip="Compare lag selection methods (partial_dcor, the default; dcor, dcor_biased, pearson) and p-value methods (t_test, circular_shift) — F1, precision, runtime, and the Ramsey RESET linearity guide.">
   <img src="../_static/img/thumbnails/cedar_lag_selection_thumb.png" alt="CEDAR Lag Selection Guide" />
   <span class="ct-gallery-title">Lag Selection Guide</span>
 </a>
 
 </div>
 
----
-
 ## GRACE Deep Dives
 
-Notebooks reproducing experiments from the GRACE paper (preprint forthcoming) with exact data generation settings.
+Experiments in the settings of the GRACE paper ([arXiv:2606.23880](https://arxiv.org/abs/2606.23880)). REAP, the regression-based refinement, is covered on the [Algorithms](../algorithms.md) page.
 
 <div class="ct-gallery">
 
-<a href="grace_high_dim.html" class="ct-gallery-item" data-tooltip="GRACE vs CDNOTS at d=30 — paper data settings, gate value heatmaps, and the bimodal gate distribution that makes the 0.5 threshold reliable.">
+<a href="grace_high_dim.html" class="ct-gallery-item" data-tooltip="GRACE vs CDNOTS at d=30 — paper data settings, gate value heatmaps, and how the automatic (Li) gate cutoff separates kept from pruned edges.">
   <img src="../_static/img/thumbnails/grace_high_dim_thumb.png" alt="High-Dimensional Discovery" />
   <span class="ct-gallery-title">High-Dimensional (d=30)</span>
 </a>
@@ -85,18 +79,16 @@ Notebooks reproducing experiments from the GRACE paper (preprint forthcoming) wi
 
 </div>
 
----
-
 ## Benchmarks & Case Studies
 
 <div class="ct-gallery">
 
-<a href="baseline_comparison.html" class="ct-gallery-item" data-tooltip="CDNOTS and CEDAR vs. GES, VARLiNGAM, and Granger on three datasets — constraint-based methods against standard baselines.">
+<a href="baseline_comparison.html" class="ct-gallery-item" data-tooltip="CDNOTS, CDNOTS+ and CEDAR vs. GES, LGES, TGES, VARLiNGAM, LASSO-VAR and Granger on four datasets (ex1, ex2, ex3, Hénon).">
   <img src="../_static/img/thumbnails/baseline_comparison_thumb.png" alt="Baseline Comparison" />
   <span class="ct-gallery-title">Baseline Comparison</span>
 </a>
 
-<a href="cdnots_or_cdnots_plus.html" class="ct-gallery-item" data-tooltip="When does the PCMCI+-style two-phase skeleton help vs hurt? Systematic comparison across scale-free, Erdos-Renyi, and small-world topologies.">
+<a href="cdnots_or_cdnots_plus.html" class="ct-gallery-item" data-tooltip="When does the PCMCI+-style two-phase skeleton help? Systematic comparison across scale-free, Erdos-Renyi, and small-world topologies and sample sizes.">
   <img src="../_static/img/thumbnails/cdnots_or_cdnots_plus_thumb.png" alt="CDNOTS or CDNOTS+?" />
   <span class="ct-gallery-title">CDNOTS or CDNOTS+?</span>
 </a>
@@ -112,8 +104,6 @@ Notebooks reproducing experiments from the GRACE paper (preprint forthcoming) wi
 </a>
 
 </div>
-
----
 
 ## Discovery Features
 
@@ -134,7 +124,7 @@ Notebooks reproducing experiments from the GRACE paper (preprint forthcoming) wi
   <span class="ct-gallery-title">Background Knowledge</span>
 </a>
 
-<a href="feature_selection.html" class="ct-gallery-item" data-tooltip="Select one target's causal features (parents / Markov blanket) in O(d) — three backends (cedar, fastpc, cdnots). Covers interventional validity via backdoor adjustment and a predictor payoff (parsimony, robustness to distribution shift, nuisance rejection) vs Lasso.">
+<a href="feature_selection.html" class="ct-gallery-item" data-tooltip="Select one target's causal features (parents / Markov blanket) — O(d) tests with the parent-only cedar and fastpc backends; three backends (cedar, fastpc, cdnots). Covers interventional validity via backdoor adjustment and a predictor payoff (parsimony, robustness to distribution shift, nuisance rejection) vs Lasso.">
   <img src="../_static/img/thumbnails/feature_selection_thumb.png" alt="Causal Feature Selection" />
   <span class="ct-gallery-title">Causal Feature Selection</span>
 </a>
@@ -146,13 +136,11 @@ Notebooks reproducing experiments from the GRACE paper (preprint forthcoming) wi
 
 </div>
 
----
-
 ## CI Tests
 
 <div class="ct-gallery">
 
-<a href="ci_test_comparison.html" class="ct-gallery-item" data-tooltip="All CI tests benchmarked on ex1/ex2/ex3 and a nonstationary dataset — F1, Precision, SHD and runtime across multiple sample sizes.">
+<a href="ci_test_comparison.html" class="ct-gallery-item" data-tooltip="Selected CI tests (linear, kernel, RFF, distribution-free, random-feature and signature) benchmarked on ex1/ex2/ex3 and a nonstationary dataset — F1, Precision, SHD and runtime at two sample sizes.">
   <img src="../_static/img/thumbnails/ci_test_comparison_thumb.png" alt="CI Test Comparison" />
   <span class="ct-gallery-title">CI Test Comparison</span>
 </a>
@@ -163,8 +151,6 @@ Notebooks reproducing experiments from the GRACE paper (preprint forthcoming) wi
 </a>
 
 </div>
-
----
 
 ## Effects, Queries & Forecasting
 
@@ -187,8 +173,6 @@ Notebooks reproducing experiments from the GRACE paper (preprint forthcoming) wi
 
 </div>
 
----
-
 ## Data Handling & Visualization
 
 <div class="ct-gallery">
@@ -209,8 +193,6 @@ Notebooks reproducing experiments from the GRACE paper (preprint forthcoming) wi
 </a>
 
 </div>
-
----
 
 ## Integrations & Extending Causal-TS
 

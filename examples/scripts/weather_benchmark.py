@@ -307,15 +307,8 @@ plt.show()
 # > second line printed below, and all of §8b, score those in isolation with
 # > `exclude_self_loops=True`. The gap between the two numbers is the point.
 #
-# > **On background knowledge.** An earlier version of this notebook added a
-# > constraint forbidding all contemporaneous (lag-0) wind→wind links, on the
-# > physical argument that propagation between stations takes at least one
-# > 6-hour step. That is no longer useful here: CDNOTS+ drops unresolved
-# > contemporaneous edges anyway, so the constraint buys no precision, and
-# > restricting the search measurably *cost* recall on the true lagged edges.
-# > Background knowledge still earns its keep where a direction is genuinely
-# > ambiguous — see §10, where it forbids the physically impossible
-# > cloud→wind direction.
+# No background knowledge is used in this section; §10 adds physical constraints
+# on the full wind + cloud system.
 
 # %%
 import time
@@ -372,7 +365,7 @@ axes[1].set_title(f"CDNOTS+: F1={m_base['F1']:.3f}", fontsize=9);
 # suppress some seasonal cross-station signal, so we test both `partial_dcor`
 # (default) and plain `dcor`.
 #
-# The important change here is the **metric**, not just the method. Everything
+# The key point here is the **metric**, not just the method. Everything
 # below is scored with `exclude_self_loops=True`, i.e. on the 6 cross-station
 # spatial edges only. Dropping the 16 free self-AR edges from the score is what
 # makes the comparison informative: it separates "recovers autoregression" from
@@ -382,9 +375,8 @@ axes[1].set_title(f"CDNOTS+: F1={m_base['F1']:.3f}", fontsize=9);
 # > while CEDAR is run at `alpha_cond1 = alpha_cond2 = 0.01`, so the two methods
 # > are held to different significance thresholds and CDNOTS+ has the more
 # > permissive one. The ranking below is therefore *not* evidence that one
-# > algorithm dominates the other — at a matched `alpha=0.01` the ordering
-# > reverses. Treat these as two configurations that happen to be shown side by
-# > side, and tune `alpha` per method on your own data before drawing a
+# > algorithm dominates the other. Treat these as two configurations shown side
+# > by side, and tune `alpha` per method on your own data before drawing a
 # > conclusion.
 #
 # What is worth reading regardless of the ranking is the **per-edge breakdown**:
@@ -605,6 +597,11 @@ plt.tight_layout()
 plt.show()
 
 # %% [markdown]
+# Keeping only edges found in at least half of the windows removes most of the
+# single run's contemporaneous false positives (precision 0.73 → 0.95, F1 0.79 →
+# 0.88) at the cost of one true edge.
+
+# %% [markdown]
 # ## 10. Full System: Wind + Cloud Cover (Solar Proxy)
 #
 # The complete dataset has 16 variables: 8 wind speed + 8 cloud cover.
@@ -612,20 +609,23 @@ plt.show()
 # determines local cloud cover at the same 6-hour timestep) in addition to
 # the lagged wind spatial propagation and cloud AR edges.
 #
-# This is the physically meaningful solar story: wind drives cloud cover, cloud
-# cover attenuates solar irradiance → solar generation. Recovering the wind→cloud
-# causal edges is essential for understanding solar variability.
+# In the simulator, wind drives cloud cover and cloud cover attenuates solar
+# irradiance, so the wind→cloud edges link the wind and solar sides of the system.
 #
-# **Challenge:** lag-0 (contemporaneous) edges require the algorithm to orient
-# undirected correlations. CDNOTS+ Phase 3 uses nonstationarity to orient edges,
-# but for contemporaneous wind→cloud the seasonal variation must be sufficient
-# to trigger Phase 3 orientation. We add **physics background knowledge** to
-# forbid the impossible cloud→wind direction.
+# **Challenge:** the wind→cloud edges are contemporaneous (lag 0) and the coupling
+# is weak (windier → marginally clearer). A lag-0 edge has to be found as an
+# adjacency first and then oriented; time order cannot orient it. `include_C=False`
+# here, so CDNOTS+'s nonstationarity-based orientation (which needs the C node) is
+# not used.
 #
-# Note this is a different use of background knowledge from the one dropped in
-# §8: there the constraint ruled out a lag that the algorithm already handled,
-# whereas here it resolves a genuine orientation ambiguity that the data alone
-# cannot settle.
+# We compare three runs:
+#
+# - CDNOTS+ with no constraints;
+# - CDNOTS+ with **physics background knowledge** that forbids cloud→wind at every
+#   lag and cloud→cloud between stations at lags 1–2. Background knowledge only
+#   removes candidate edges; it cannot add an edge the CI tests reject;
+# - CDNOTS+ with `lag0_orient="lingam"`, which orients contemporaneous edges that
+#   the CI search leaves undirected using DirectLiNGAM.
 
 # %%
 # Full 16-variable system: wind + cloud
@@ -673,20 +673,66 @@ res_full_bk = run_cdnots_plus(df, ci_bk_full, num_lags=2, include_C=False, alpha
 t_bk = time.time() - t0
 m_bk_full = evaluate_graph(res_full_bk.cg_tig[:d_full, :d_full, :], gt_full)
 
+# Opt-in LiNGAM orientation of contemporaneous edges
+ci_lg_full = PartialCorr(data=np.zeros((2, 2)))
+t0 = time.time()
+res_full_lg = run_cdnots_plus(df, ci_lg_full, num_lags=2, include_C=False, alpha=0.01,
+                              lag0_orient="lingam")
+t_lg = time.time() - t0
+m_lg_full = evaluate_graph(res_full_lg.cg_tig[:d_full, :d_full, :], gt_full)
+
 est_nc = res_full_nc.cg_tig[:d_full, :d_full, :]
 est_bk = res_full_bk.cg_tig[:d_full, :d_full, :]
+est_lg = res_full_lg.cg_tig[:d_full, :d_full, :]
 
-wc_found_nc = sum(1 for s in STATIONS
-                  if est_nc[var_names_full.index(f'{s}_wind'), var_names_full.index(f'{s}_cloud'), 0])
-wc_found_bk = sum(1 for s in STATIONS
-                  if est_bk[var_names_full.index(f'{s}_wind'), var_names_full.index(f'{s}_cloud'), 0])
+
+def n_wind_cloud(est):
+    """Number of same-station wind(t) -> cloud(t) edges found."""
+    return sum(1 for s in STATIONS
+               if est[var_names_full.index(f'{s}_wind'), var_names_full.index(f'{s}_cloud'), 0])
+
+
+def n_wind_cloud_adj(est):
+    """Same-station wind-cloud lag-0 adjacencies in either direction."""
+    return sum(1 for s in STATIONS
+               if est[var_names_full.index(f'{s}_wind'), var_names_full.index(f'{s}_cloud'), 0]
+               or est[var_names_full.index(f'{s}_cloud'), var_names_full.index(f'{s}_wind'), 0])
+
+
+wc_found_nc, wc_found_bk, wc_found_lg = n_wind_cloud(est_nc), n_wind_cloud(est_bk), n_wind_cloud(est_lg)
 
 sep = "-" * 60
 hdr = f"  {'Algorithm':<25} {'F1':>6} {'Prec':>6} {'Rec':>6} {'SHD':>5}  {'Wind→Cloud':>11}"
 print(sep); print(hdr); print(sep)
 print(f"  {'CDNOTS+ (no BK)':<25} {m_nc['F1']:>6.3f} {m_nc['Precision']:>6.3f} {m_nc['TPR']:>6.3f} {m_nc['SHD']:>5}  {wc_found_nc}/8 ({t_nc:.1f}s)")
 print(f"  {'CDNOTS+ & physics BK':<25} {m_bk_full['F1']:>6.3f} {m_bk_full['Precision']:>6.3f} {m_bk_full['TPR']:>6.3f} {m_bk_full['SHD']:>5}  {wc_found_bk}/8 ({t_bk:.1f}s)")
+print(f"  {'CDNOTS+ & lag0 LiNGAM':<25} {m_lg_full['F1']:>6.3f} {m_lg_full['Precision']:>6.3f} {m_lg_full['TPR']:>6.3f} {m_lg_full['SHD']:>5}  {wc_found_lg}/8 ({t_lg:.1f}s)")
 print(sep)
+print("Wind-cloud lag-0 adjacencies (either direction): "
+      f"{n_wind_cloud_adj(est_nc)}/8, {n_wind_cloud_adj(est_bk)}/8, {n_wind_cloud_adj(est_lg)}/8")
+
+
+def lag0_edges(est):
+    return [f"{var_names_full[i]}->{var_names_full[j]}"
+            for i, j in zip(*np.nonzero(est[:, :, 0]))]
+
+
+print("\nLag-0 edges, no BK      :", lag0_edges(est_nc))
+print("Lag-0 edges, lag0 LiNGAM:", lag0_edges(est_lg))
+
+# %% [markdown]
+# None of the three runs recovers a wind→cloud edge: the same-station wind–cloud
+# adjacency is not found at lag 0 in either direction, so no orientation step can
+# help. The weak coupling is not detectable with partial correlation at
+# `alpha=0.01` on this sample.
+#
+# The physics background knowledge improves precision (0.833 → 0.893) and SHD
+# (18 → 16) at unchanged recall, by removing edges that point in a forbidden
+# direction. `lag0_orient="lingam"` orients four more contemporaneous edges
+# (two cloud→cloud and two wind→wind links), none of them in the ground truth, so
+# precision drops to 0.735. LiNGAM orientation relies on non-Gaussian noise and is
+# worth trying when contemporaneous adjacencies are known to be real; here the
+# extra edges are false positives.
 
 # %% [markdown]
 # ## Summary
@@ -714,6 +760,3 @@ print(sep)
 # wind_mwh = result['generation']['wind_mwh']
 # solar_mwh = result['generation']['solar_mwh']
 # ```
-
-# %% [markdown]
-#

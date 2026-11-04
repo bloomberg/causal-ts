@@ -1,24 +1,32 @@
 # Getting Started
 
----
-
 ## Installation
+
+Causal-TS needs Python 3.10 or newer.
 
 ::::{tab-set}
 
-:::{tab-item} Standard
+:::{tab-item} PyPI
 ```bash
-git clone https://github.com/bloomberg/causal-ts.git
-cd causal-ts
-pip install -e .
+pip install causalts
+# or, with uv
+uv pip install causalts
 ```
 :::
 
-:::{tab-item} With Effect Estimation
+:::{tab-item} With extras
+```bash
+pip install "causalts[dowhy]"      # effect estimation (DoWhy)
+pip install "causalts[tigramite]"  # PCMCI / PCMCI+ / LPCMCI wrappers
+pip install "causalts[parquet]"    # read Parquet files
+```
+:::
+
+:::{tab-item} From source
 ```bash
 git clone https://github.com/bloomberg/causal-ts.git
 cd causal-ts
-pip install -e ".[dowhy]"
+pip install -e ".[dev,dowhy,tigramite]"
 ```
 :::
 
@@ -26,9 +34,9 @@ pip install -e ".[dowhy]"
 
 :::{note}
 PyTorch is installed automatically. **CUDA** and **Apple MPS** are auto-detected at runtime — CPU is the fallback.
+The [stable](https://causal-ts.readthedocs.io/en/stable/) docs match the latest PyPI release; the
+[latest](https://causal-ts.readthedocs.io/en/latest/) docs follow the `main` branch and can describe features not yet released.
 :::
-
----
 
 ## Quick Start
 
@@ -92,64 +100,64 @@ compare_graphs(ground_truth, res.cg_tig[:d, :d, :],
 
 ::::
 
----
+## Choosing a Configuration
 
-## Choosing a CI Test
-
-::::{tab-set}
-
-:::{tab-item} {fas}`bolt` Linear data
-Use `ParCorrGPU` — analytic p-value, near-instant, works at any sample size.
+Let the library measure the data and recommend a configuration:
 
 ```python
-from causalts.ci_tests import ParCorrGPU
-ci_test = ParCorrGPU(df.values, device="cpu")
-```
-:::
+from causalts import inspect_df, discover_df
 
-:::{tab-item} {fas}`wave-square` Nonlinear data
-Use `SplitKCIGPU` — best speed/F1 tradeoff on nonlinear data.
+report = inspect_df(df)
+rec = report["recommendation"]
+print(rec["rationale"])
 
-```python
-from causalts.ci_tests import SplitKCIGPU
-ci_test = SplitKCIGPU(df.values, device="cpu")
-```
-:::
-
-:::{tab-item} {fas}`question` Not sure?
-Run the Ramsey RESET test first to detect nonlinearity.
-
-```python
-from causalts.utils.linearity import check_linearity
-report = check_linearity(df)
+res = discover_df(df, algorithm=rec["algorithm"], ci_test=rec["ci_test"],
+                  max_lag=rec["max_lag"], include_C=rec["include_C"],
+                  c_preset=rec["c_preset"])
+# Optional refinement of that CDNOTS graph's lagged edges (REAP or GRACE;
+# rec["refine"] is None when max_lag is 0):
+if rec["refine"]:
+    refined = discover_df(df, algorithm=rec["refine"], ci_test=rec["ci_test"],
+                          max_lag=rec["max_lag"], include_C=rec["include_C"],
+                          c_preset=rec["c_preset"], **rec["refine_params"])
 ```
 
-If no significant nonlinearity is detected, `parcorr-gpu` is optimal.
-:::
+The same report is available from the terminal with `causal-ts inspect data.csv`. The rule it applies:
 
-::::
+| Data | CI test | Refinement |
+|---|---|---|
+| Discrete or mixed discrete-continuous columns | `cmiknn-mixed-gpu` | REAP |
+| Some lagged variable changes another's noise scale only (`facts["variance_dependence"]`) | `rcot` (full conditional independence) | GRACE (keeps variance-only parents) |
+| Nonlinear mean effects | `raft` (fast, conditional mean only) | REAP |
+| Approximately linear | `parcorr-gpu` | REAP |
 
-See the full [CI Test Selection Guide](../ci_tests.md) for benchmarks across all available tests.
-
----
+Both refinements refine **lagged** edges: REAP re-adds lag-0 edges with `contemporaneous=True` (in
+`rec["refine_params"]`); with GRACE, keep the CDNOTS graph's lag-0 edges. Discovery itself is CDNOTS at any dimension: its cost in the number of variables is set by the CI test,
+not by the algorithm. Nonstationary series get the C node with a preset matched to the detected trend
+form. See the [CI Test Selection Guide](../ci_tests.md) for every test and the
+[Algorithms](../algorithms.md) page for CDNOTS+, CEDAR, GRACE and REAP.
 
 ## CLI Usage
 
 ```bash
-# Generate synthetic data
-causal-ts generate --dataset ex1 -T 500
+# Generate synthetic data -> out/generate_<timestamp>/{data.csv, ground_truth.npy}
+causal-ts -o out generate --dataset ex1 -T 500
 
-# Run discovery
-causal-ts discover data.csv --algorithm cdnots --ci-test parcorr-gpu --max-lag 3
+# Measure the data and get a recommended configuration (JSON)
+causal-ts inspect out/generate_*/data.csv
 
-# Evaluate results
-causal-ts evaluate ground_truth.npy estimated_graph.npy
+# Run discovery -> out/discover_cdnots_<timestamp>/estimated_graph.npy
+causal-ts -o out discover out/generate_*/data.csv --algorithm cdnots --ci-test parcorr-gpu --max-lag 3
 
-# Get CI test recommendations
+# Evaluate against the ground truth
+causal-ts -o out evaluate out/generate_*/ground_truth.npy out/discover_cdnots_*/estimated_graph.npy
+
+# CI test selection guide
 causal-ts ci-test-info
 ```
 
----
+`-o/--output-dir` is a global option and goes before the subcommand. Each command writes a new
+timestamped folder under it (default `./causal_ts_output`). See the [CLI reference](../cli.md).
 
 ## Next Steps
 
@@ -162,7 +170,7 @@ causal-ts ci-test-info
 :shadow: sm
 :text-align: center
 
-Understand CDNOTS, CDNOTS+, CEDAR, and GRACE in depth — when to use each and how they work.
+CDNOTS, CDNOTS+, CEDAR, and the GRACE / REAP refinements — how they work and when to use each.
 :::
 
 :::{grid-item-card} {fas}`vials` CI Test Guide
@@ -171,7 +179,7 @@ Understand CDNOTS, CDNOTS+, CEDAR, and GRACE in depth — when to use each and h
 :shadow: sm
 :text-align: center
 
-Strengths, limitations, and tradeoff analysis across all GPU-accelerated CI tests, linear and nonlinear.
+Strengths, limitations, and tradeoffs of every CI test, linear and nonlinear.
 :::
 
 :::{grid-item-card} {fas}`book-open` Examples

@@ -268,7 +268,8 @@ class TigramiteEffects:
 
         Parameters
         ----------
-        through : list of (var, lag) tuples, optional
+        through : list of tuple, optional
+            ``(var, lag)`` pairs.
             Mediator variables. Each element is ``(variable, lag)`` where
             lag ≥ 0. If *None*, uses all mediators identified by
             :meth:`get_mediators`.

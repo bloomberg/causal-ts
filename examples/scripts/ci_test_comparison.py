@@ -15,7 +15,8 @@
 # %% [markdown]
 # # CI Test Comparison
 #
-# Systematic benchmark of all built-in CI tests across four datasets and three sample sizes.
+# Benchmark of the built-in continuous-data CI tests across four datasets and two sample
+# sizes (T=200 and T=500).
 # For each combination we run **CDNOTS** and **CDNOTS+** and record **F1, Precision, Recall, SHD and wall-clock time**.
 #
 # CDNOTS uses the standard PC skeleton; CDNOTS+ uses a PCMCI+-style two-phase skeleton
@@ -31,7 +32,7 @@
 # | `ex1_nonstationary` | 5+C | 2 | Nonlinear + trend | Quadratic & periodic trends; C=time node |
 #
 # > **See also:** `tutorial.ipynb` for a narrative walkthrough of CDNOTS/CEDAR/GRACE with a subset of these tests.
-# > For mixed discrete-continuous data see `mixed_data.ipynb`; for SDE/stochastic-process data use `SigKCIGPU` (covered below).
+# > For mixed discrete-continuous data see `mixed_data.ipynb`. `LinSigCIGPU` (covered below) is designed for SDE/stochastic-process data.
 
 # %%
 import time
@@ -104,45 +105,46 @@ plt.show()
 # %% [markdown]
 # ## CI Tests
 #
-# All tests share a common interface. Slow tests (`KCIGPU`, `CMIknnGPU`) are included but may be skipped at large T.
+# All tests share a common interface. `CMIknnGPU` is left out of this grid: it took
+# more than an hour on its own here, far longer than all other tests combined.
 #
-# | Test | Type | Mixed data | Notes |
-# |------|------|-----------|-------|
-# | `PartialCorr` | Linear (CPU) | No | Analytic p-value, instant |
-# | `ParCorrGPU` | Linear (GPU) | No | Same as above, GPU path |
-# | `GCMIGPU` | Gaussian copula | No | Rank-normalised ParCorr — NOT a true MI estimator |
-# | `SplitKCIGPU` | Kernel (nonlinear) | No | 10–20× faster than KCI, best speed/F1 tradeoff |
-# | `DFCITGPU` | Distribution-free | **Yes** | Highest recall at small T; supports mixed discrete-continuous |
-# | `RCOTGPU` | Random Fourier | No | Fast at large T (> 2000) |
-# | `SigKCIGPU` | Signature kernel | No | Designed for stochastic processes / SDEs |
-# | `KCIGPU` | Kernel (full) | No | Most accurate under high collinearity — slow |
-# | `CMIknnGPU` | k-NN MI | No | Nonparametric baseline — slow |
+# | Test | Registry name | What it tests | Notes |
+# |------|---------------|---------------|-------|
+# | `PartialCorr` | `parcorr` | Linear partial correlation (CPU) | Analytic p-value |
+# | `ParCorrGPU` | `parcorr-gpu` | Linear partial correlation | Torch implementation |
+# | `GCMIGPU` | `gcmi` | Gaussian-copula partial correlation | Rank-normalised ParCorr, not a general MI estimator |
+# | `RAFTCI` | `raft` | Conditional mean only | Random-feature F-test; fast |
+# | `GCM` | `gcm` | Residual moment | Generalised covariance measure |
+# | `PCM` | `pcm` | Conditional mean only | Projected covariance measure |
+# | `SplitKCIGPU` | `splitkci` | Full CI (kernel) | Faster than KCI |
+# | `DFCITGPU` | `dfcit` | Full CI (distribution-free) | Assumes continuous data |
+# | `RCOTGPU` | `rcot` | Full CI (random Fourier features) | Also detects variance-only dependence |
+# | `LinSigCIGPU` | `linsig` | Linear signature kernel on increments | Designed for stochastic processes / SDEs |
+# | `KCIGPU` | `kci` | Full CI (kernel) | Slow at large T |
 #
-# > **Mixed data:** `DFCITGPU` is the only test that handles mixed discrete-continuous columns natively.
-# > See `mixed_data.ipynb` for a worked example.
+# > **Mixed data:** none of the tests above is discrete-aware. The discrete-aware tests are
+# > `CMIknnMixedGPU` and `StratifiedCIT`; CDNOTS wraps other tests in `StratifiedCIT`
+# > automatically when it detects discrete columns. See `mixed_data.ipynb` for a worked example.
 
 # %%
-from causalts.ci_tests.parcorr    import PartialCorr
-from causalts.ci_tests import ParCorrGPU
-from causalts.ci_tests.gcmi_gpu   import GCMIGPU
-from causalts.ci_tests import SplitKCIGPU
-from causalts.ci_tests.dfcit_gpu  import DFCITGPU
-from causalts.ci_tests import RCOTGPU
-from causalts.ci_tests import SigKCIGPU
-from causalts.ci_tests.kci_gpu    import KCIGPU
-from causalts.ci_tests import CMIknnGPU
+from causalts.ci_tests import (
+    DFCITGPU, GCM, GCMIGPU, KCIGPU, PCM, RAFTCI, RCOTGPU,
+    LinSigCIGPU, ParCorrGPU, PartialCorr, SplitKCIGPU,
+)
 
 # (test_name, constructor, kwargs, skip_at_T)
 CI_TESTS = [
     ("PartialCorr",  PartialCorr,  {}, None),
     ("ParCorrGPU",   ParCorrGPU,   {}, None),
     ("GCMIGPU",      GCMIGPU,      {}, None),
+    ("RAFTCI",       RAFTCI,       {}, None),
+    ("GCM",          GCM,          {}, None),
+    ("PCM",          PCM,          {}, None),
     ("SplitKCIGPU",  SplitKCIGPU, {}, None),
     ("DFCITGPU",     DFCITGPU,    {}, None),
     ("RCOTGPU",      RCOTGPU,     {"num_f": 100, "num_f2": 10}, None),
-    ("SigKCIGPU",    SigKCIGPU,   {}, None),
+    ("LinSigCIGPU",  LinSigCIGPU, {}, None),
     ("KCIGPU",       KCIGPU,      {"approx": "hbe"}, None),
-    ("CMIknnGPU",    CMIknnGPU,   {"k": 0.2, "early_stop": True}, 1000), # skip at T>=1000
 ]
 
 # %% [markdown]
@@ -274,22 +276,30 @@ plt.show()
 # %% [markdown]
 # ## Key Takeaways
 #
-# - **Linear CI tests remain the best default.** `PartialCorr`/`ParCorrGPU` are essentially free
-#   and competitive with or better than far slower kernel/nonparametric tests on every dataset here,
-#   including the nonlinear one — reach for a nonlinear test only when a linear one clearly underfits.
+# These are single-seed results on four small benchmarks, so read them as examples of
+# behaviour rather than a general ranking.
 #
-# - **CDNOTS+'s benefit is test-dependent, not universal.** Its MCI phase conditions each edge on
-#   the *whole* phase-1 parent superset rather than PC's small, adaptively-chosen sets. Tests that
-#   tolerate larger conditioning sets well (e.g. `RCOTGPU`, `SplitKCIGPU`) benefit from CDNOTS+;
-#   nonparametric tests that lose power as the conditioning set grows (notably `DFCITGPU`) can do
-#   markedly worse under CDNOTS+ than under plain CDNOTS. Algorithm choice and CI-test choice aren't
-#   independent decisions.
+# - **On the linear datasets, partial correlation is competitive.** On `ex3` with CDNOTS,
+#   `PartialCorr`/`ParCorrGPU` have the best F1 at both sample sizes (0.840 and 0.964); on
+#   `ex2` they are within 0.12 of the best test in every column. They run in well under a
+#   second.
 #
-# - **`SigKCIGPU` and `CMIknnGPU` are impractical for routine use.** `SigKCIGPU` underperforms
-#   consistently outside genuine SDE/path-space data; `CMIknnGPU` is 50-500× slower than the
-#   alternatives here for no consistent accuracy gain. Reserve both for cases with no faster
-#   option that works.
+# - **On the nonlinear dataset (`ex1`), the linear tests fall behind.** With CDNOTS, partial
+#   correlation reaches F1 0.35–0.38, while `DFCITGPU` (0.71/0.70) and `RAFTCI` (0.67/0.78)
+#   do much better. With CDNOTS+, `PCM` (0.75/0.94) and `RAFTCI` (0.71/0.89) lead at
+#   T=200/500. `RAFTCI` gets there at close to partial-correlation cost.
 #
+# - **CDNOTS+'s effect depends on the test.** Its MCI phase conditions each edge on the
+#   whole phase-1 parent set rather than PC's small, adaptively chosen sets. Several tests
+#   gain from it (e.g. `PCM` and `RAFTCI` on `ex1`, `RCOTGPU` on `ex3` at T=500: 0.902 →
+#   0.963), while `DFCITGPU` loses accuracy under CDNOTS+ on every dataset (e.g. `ex2` at
+#   T=500: 0.737 → 0.200). Algorithm choice and CI-test choice are not independent.
+#
+# - **The kernel and signature tests are the slowest here without a consistent accuracy
+#   gain.** `KCIGPU`, `SplitKCIGPU` and `LinSigCIGPU` take about 95–145 s on `ex3` at T=500
+#   with CDNOTS, against 0.2–38 s for the other tests, and none of them is the best on
+#   that dataset. `LinSigCIGPU` is designed for path-valued SDE data, not these
+#   lag-embedded benchmarks.
 
 # %% [markdown]
 #

@@ -176,7 +176,7 @@ print(f"Full-sample correlation: {r_full:.2f}")
 print("Both series share a common hidden driver — neither causes the other.")
 
 # %% [markdown]
-# This is not a pathological case — it is the norm in financial and economic data, where multiple variables respond to the same macro environment. A causal discovery algorithm would find the *common driver*, not a spurious direct link between A and B.
+# This is not a pathological case — it is the norm in financial and economic data, where multiple variables respond to the same macro environment. Because the driver is hidden, a causal discovery algorithm given only A and B would draw a spurious edge between them unless it accounts for latent confounding. [`latent_confounder_detection.ipynb`](latent_confounder_detection.ipynb) shows how LUCID detects and adjusts for hidden common drivers.
 #
 # ### 1.2 The Four Sources of Statistical Dependence
 #
@@ -219,7 +219,7 @@ plt.tight_layout()
 plt.show()
 
 # %% [markdown]
-# **What just happened?** Exercise and Diet are completely independent. But among sick people (conditioning on Health), poor diet and lack of exercise artificially co-occur — because either one alone is enough to make you sick. This is **collider bias** (Berkson's paradox).
+# **What just happened?** Exercise and Diet are independent in the full population. Among sick people (conditioning on Health) they become negatively correlated: if a sick person exercises a lot, their diet is probably what made them sick, and vice versa. One cause "explains away" the other. This is **collider bias** (Berkson's paradox).
 #
 # ### 1.3 Causal Graphs (DAGs)
 #
@@ -238,14 +238,14 @@ configs = [
      [("X", "Y"), ("Y", "Z")],
      {"X": (0, 0), "Y": (1, 0), "Z": (2, 0)},
      "X affects Z only through Y.\nControl for Y → X⊥Z"),
-    ("Fork  (Confounder)\nX ← Z → Y",
-     [("Z", "X"), ("Z", "Y")],
-     {"X": (0, 0), "Z": (1, 1), "Y": (2, 0)},
-     "Z causes both X and Y.\nX and Y are correlated, not causal."),
-    ("Collider\nX → Z ← Y",
-     [("X", "Z"), ("Y", "Z")],
-     {"X": (0, 1), "Y": (2, 1), "Z": (1, 0)},
-     "X and Y are independent.\nCondition on Z → spurious correlation."),
+    ("Fork  (Confounder)\nX ← Y → Z",
+     [("Y", "X"), ("Y", "Z")],
+     {"X": (0, 0), "Y": (1, 1), "Z": (2, 0)},
+     "Y causes both X and Z.\nX and Z are correlated, not causal.\nControl for Y → X⊥Z"),
+    ("Collider\nX → Y ← Z",
+     [("X", "Y"), ("Z", "Y")],
+     {"X": (0, 1), "Z": (2, 1), "Y": (1, 0)},
+     "X and Z are independent.\nCondition on Y → spurious correlation."),
 ]
 
 for ax, (title, edges, pos, note) in zip(axes, configs):
@@ -279,7 +279,7 @@ plt.show()
 # The **unrolled graph** below shows the full picture: each column is a time step, each row is a variable, and arrows cross columns to show lagged effects. On the right is the compact **summary graph** that `causal-ts` produces — collapsing the time axis and labelling each arrow with its lag.
 
 # %%
-# Unrolled time series DAG  (inspired by slide 15 of the BBQ seminar)
+# Unrolled time series DAG
 # Three variables X, Y, Z over three time steps t-2, t-1, t
 # True links: X(t-1)->X(t), Y(t-2)->X(t), Z(t-1)->Y(t), Z(t-1)->Z(t)
 
@@ -643,8 +643,9 @@ plt.show()
 # | Situation | Recommended |
 # |---|---|
 # | Linear, Gaussian, small graphs | Either (GES is often faster) |
-# | Nonlinear dependencies | Constraint-based + kernel CI test (SplitKCI) |
-# | Large graphs (d > 20) | CEDAR (constraint-based, O(d²) pairwise) |
+# | Time series, any number of variables | CDNOTS, with the CI test `causal-ts inspect` / `inspect_df` recommends: `parcorr-gpu` for linear data, `raft` for nonlinear mean effects, `rcot` when parents act only through the variance, `cmiknn-mixed-gpu` for discrete or mixed data |
+# | Refining a discovered graph | REAP by default; GRACE when some parents act only through the variance |
+# | Every variable autoregressive, lagged links of interest | CEDAR (O(d²) pairwise tests; assumes an autoregressive design) |
 # | Need p-values | Constraint-based |
 # | Avoid multiple testing | Score-based |
 
@@ -683,7 +684,7 @@ df_resid = pd.DataFrame(df_ct.values - design @ coef, columns=df_ct.columns)
 fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 corrplot(df_ct, method="color", is_corr=True, add_coef=True, number_cex=1.2,
          tl_cex=0.9, cl_pos="n", fig_ax=(fig, axes[0]),
-         title="Raw levels — nearly every pair correlates")
+         title="Raw levels — the five trend-driven variables correlate at about 0.99")
 corrplot(df_resid, method="color", is_corr=True, add_coef=True, number_cex=1.2,
          tl_cex=0.9, fig_ax=(fig, axes[1]),
          title="Residuals after conditioning on C — the spurious block collapses")
@@ -729,14 +730,28 @@ fig.suptitle("Nonstationary Time Series — X0, X1, X2 are trend-driven", fontsi
 plt.tight_layout()
 plt.show()
 
+# %% [markdown]
+# The C node only absorbs a trend whose shape its columns can represent. In `ex1_nonstationary`, X0 and X1 drift quadratically and X2 oscillates as sin(t/20), so instead of the default linear C we pass a custom `c_array` with one quadratic and one sinusoidal column. [`multi_c_nonstationarity.ipynb`](multi_c_nonstationarity.ipynb) covers choosing the basis.
+
 # %%
+T_ns = len(df_ns)
+t_ns = np.arange(T_ns, dtype=float)
+c_ns = np.column_stack([t_ns ** 2 / T_ns, np.sin(t_ns / 20)])  # quadratic + sinusoidal
+
 ci_ns = PartialCorr(data=df_ns.values)
 result_cdnots = run_cdnots(
     df_ns, indep_test=ci_ns,
-    num_lags=max_lag_ns, include_C=True, c_preset="linear",
+    num_lags=max_lag_ns, include_C=True, c_array=c_ns,
     alpha=0.05, verbose=False, show_progress=False,
 )
-G_cdnots = result_cdnots.cg_tig
+
+# The ground truth has a single C node; merge the C columns into one for scoring.
+d_ns = df_ns.shape[1]
+G_full = result_cdnots.cg_tig
+G_cdnots = np.zeros(gt_ns.shape, dtype=int)
+G_cdnots[:d_ns, :d_ns] = G_full[:d_ns, :d_ns]
+G_cdnots[d_ns, :d_ns] = G_full[d_ns:, :d_ns].max(axis=0)
+G_cdnots[:d_ns, d_ns] = G_full[:d_ns, d_ns:].max(axis=1)
 m_cdnots = evaluate_graph(G_cdnots, gt_ns)
 print(f"CDNOTS (with C):  F1={m_cdnots['F1']:.3f}  TPR={m_cdnots['TPR']:.3f}  "
       f"Precision={m_cdnots['Precision']:.3f}  SHD={m_cdnots['SHD']}")
@@ -747,13 +762,18 @@ plot_graph(gt_ns, var_names=names_ns, fig_ax=(fig, axes[0]), target_node='C',
            title="Ground Truth (with C node)", show_colorbar=False)
 compare_graphs(gt_ns, G_cdnots, var_names=names_ns, fig_ax=(fig, axes[1]),legend_loc=None,
                title=f"CDNOTS Discovered\nF1={m_cdnots['F1']:.2f}  SHD={m_cdnots['SHD']}")
-plt.suptitle("C→X0, C→X1, C→X2 reveal which variables are trend-driven",
+plt.suptitle("Edges from C mark the variables CDNOTS finds to be trend-driven",
              fontsize=11, y=1.02)
 plt.tight_layout()
 plt.show()
 
 # %% [markdown]
-# The edges `C → X0`, `C → X1`, `C → X2` tell us these variables are driven by a time trend — exactly matching the true generating equations. Without the C node, a standard algorithm would place spurious edges between them.
+# CDNOTS finds `C → X0` and `C → X2`, correctly flagging those two variables as trend-driven, and recovers all the lagged links between the X variables. It is not perfect:
+#
+# - **`C → X1` is missed.** X1's drift is not absorbed, and because X0 and X1 share the same quadratic drift, an extra contemporaneous X0–X1 edge appears (drawn as the orange lag-0 arrow X0 → X1 next to the correct lag-2 arrow X1 → X0).
+# - **`X3 → X4` is also found at lag 2** in addition to the true lag 1.
+#
+# With the default linear C, `C → X2` is missed as well and the score drops (F1 0.75 instead of 0.83), which is why the basis has to match the shape of the drift. Without any C node, CDNOTS adds two more false positives on this dataset, `X0(t-2) → X0` and `X4(t-2) → X2`, on top of the three above.
 
 # %% [markdown]
 # ---
@@ -768,7 +788,7 @@ plt.show()
 #
 # 3. **Discovery requires three assumptions:** Causal Markov, Faithfulness, and Causal Sufficiency. Violations lead to silent errors.
 #
-# 4. **Constraint-based methods** test conditional independences to prune edges; **score-based methods** search for the best-fitting DAG. Both are identifiable from data under the same assumptions.
+# 4. **Constraint-based methods** test conditional independences to prune edges; **score-based methods** search for the best-scoring graph. Under the same assumptions, both recover the graph only up to directions the data can distinguish (colliders, time order, nonstationarity); neither is uniformly better.
 #
 # 5. **Nonstationarity creates spurious correlations.** `causal-ts` absorbs trends into a C node, turning a problem into a signal.
 #

@@ -2,7 +2,6 @@
 
 Full API documentation auto-generated from source docstrings (NumPy format).
 
----
 
 ::::{grid} 3
 :gutter: 3
@@ -12,15 +11,15 @@ Full API documentation auto-generated from source docstrings (NumPy format).
 :link-type: doc
 :shadow: md
 
-`inspect_df` · `recommend_config` · `discover_df` · `select_features` · `run_cdnots` · `run_cdnots_plus` · `run_cedar` · `Cedar` · `run_grace` · `run_reap` · `temporal_bootstrap` · `evaluate_graph`
+`inspect_df` · `recommend_config` · `discover_df` · `select_features` · `run_cdnots` · `run_cdnots_plus` · `run_cedar` · `Cedar` · `run_grace` · `run_reap` · `run_regime_discovery` · `run_pcmciplus` · `temporal_bootstrap` · `evaluate_graph`
 :::
 
 :::{grid-item-card} {fas}`vials;1.2em;sd-text-primary` &nbsp; CI Tests
-:link: ../ci_tests
+:link: ci-tests
 :link-type: doc
 :shadow: md
 
-`ParCorrGPU` · `SplitKCIGPU` · `DFCITGPU` · `KCIGPU` · `LinSigCIGPU` · `RCOTGPU` · `CMIknnGPU` · `GCMIGPU` · `GCM` · `WGCM` · `PCM` · `RAFTCI` · `RIFTCI` · `StratifiedCIT` · `CMIknnMixedGPU`
+`ParCorrGPU` · `SplitKCIGPU` · `DFCITGPU` · `KCIGPU` · `LinSigCIGPU` · `RCOTGPU` · `CMIknnGPU` · `GCMIGPU` · `GCM` · `WGCM` · `PCM` · `RAFTCI` · `RIFTCI` · `CMIknnMixedGPU` · `StratifiedCIT` · `PartialCorr` · `CMIKNN` · causal-learn adapters · `create_ci_test`
 :::
 
 :::{grid-item-card} {fas}`chart-line;1.2em;sd-text-primary` &nbsp; Effect Estimation
@@ -28,7 +27,7 @@ Full API documentation auto-generated from source docstrings (NumPy format).
 :link-type: doc
 :shadow: md
 
-`wrap_graph` · `estimate_effect` · `fit_scm` · `counterfactual` · `attribute_anomaly` · `falsify_graph` · `causal_influence` · `distribution_change`
+`wrap_graph` · `estimate_effect` · `fit_scm` · `counterfactual` · `attribute_anomaly` · `validate_transition_graph` · `refute_effect` · `causal_influence` · `distribution_change` · `CausalForecaster`
 
 {bdg-warning-line}`requires dowhy`
 :::
@@ -46,7 +45,7 @@ Full API documentation auto-generated from source docstrings (NumPy format).
 :link-type: doc
 :shadow: md
 
-`load_dataset` · `SCPGraphGenerator` · `topology_scp` · `lorenz96` · `ex1_nl` · `ex2` · `ex3` · `ex1_nonstationary` · `check_linearity`
+`load_dataset` · `SCPGraphGenerator` · `ex1_nl` · `ex2` · `ex3` · `henon_chain` · `lorenz96` · `topology_scp` · `ex1_nonstationary` · `mixed_a` · `ercot_weather` · `check_linearity` · `var_em_impute`
 :::
 
 :::{grid-item-card} {fas}`chart-bar;1.2em;sd-text-primary` &nbsp; Plotting
@@ -54,7 +53,7 @@ Full API documentation auto-generated from source docstrings (NumPy format).
 :link-type: doc
 :shadow: md
 
-`plot_graph` · `plot_time_series_graph` · `compare_graphs` · `plot_metrics_summary` · `plot_lag_metrics` · `plot_pvalue_distribution` · `corrplot`
+`plot_graph` · `plot_time_series_graph` · `compare_graphs` · `plot_metrics_summary` · `plot_lag_metrics` · `plot_pvalue_distribution` · `corrplot` · `corr_table` · `pairs_panel` · `extract_subgraph`
 :::
 
 :::{grid-item-card} {fas}`terminal;1.2em;sd-text-primary` &nbsp; CLI Reference
@@ -62,12 +61,11 @@ Full API documentation auto-generated from source docstrings (NumPy format).
 :link-type: doc
 :shadow: md
 
-`inspect` · `discover` · `generate` · `evaluate` · `ci-test-info` · `plot` · `install-skill` · `dowhy` — all flags and options documented.
+`inspect` · `discover` · `deconfound` · `generate` · `evaluate` · `ci-test-info` · `plot` · `install-skill` · `dowhy`
 :::
 
 ::::
 
----
 
 ## Full Auto-Generated Reference
 
@@ -75,7 +73,7 @@ Full API documentation auto-generated from source docstrings (NumPy format).
 :maxdepth: 1
 
 discovery
-../ci_tests
+ci-tests
 effects
 confounders
 data

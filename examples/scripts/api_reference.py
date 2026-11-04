@@ -19,16 +19,20 @@
 #
 # | # | Module | Description |
 # |---|--------|-------------|
-# | 1 | [CI Tests](#1-conditional-independence-tests) | KCIGPU, RCOTGPU, PartialCorr, ParCorrGPU, CMIKNN, CMIknnGPU, GCMIGPU, **SplitKCIGPU**, **DFCITGPU**, **SigKCIGPU**, **StratifiedCIT**, **CMIknnMixedGPU** |
+# | 1 | [CI Tests](#1-conditional-independence-tests) | KCIGPU, RCOTGPU, PartialCorr, ParCorrGPU, CMIKNN, CMIknnGPU, GCMIGPU, SplitKCIGPU, DFCITGPU, LinSigCIGPU, GCM, WGCM, PCM, RAFTCI, RIFTCI, StratifiedCIT, CMIknnMixedGPU, causal-learn adapters |
 # | 2 | [CDNOTS](#2-cdnots) | Constraint-based causal discovery for nonstationary time series |
-# | 3 | [CEDAR](#3-cedar) | Scalable discovery via minimum-lag selection |
-# | 4 | [GRACE and REAP](#4-grace) | Refine a candidate graph: neural gates with L0 regularization (GRACE) or a regression-based grow-shrink (REAP) |
+# | 3 | [CEDAR](#3-cedar) | Scalable discovery for autoregressive time series via minimum-lag selection |
+# | 4 | [GRACE and REAP](#4-grace-and-reap) | Refine a candidate graph: neural gates with L0 regularization (GRACE) or a regression-based grow-shrink (REAP) |
 # | 5 | [LUCID](#5-lucid) | Latent-confounder correction: regime-adaptive deconfounding of a discovered graph |
 # | 6 | [Plotting](#6-plotting) | Graph visualization, comparison, metrics, p-values |
-# | 7 | [Synthetic Data](#7-synthetic-data) | Random SCP graph generation for benchmarking |
+# | 7 | [Synthetic Data](#7-synthetic-data) | Named datasets and random SCP graph generation for benchmarking |
 # | 8 | [Evaluation](#8-evaluation) | `evaluate_graph` metrics |
-# | 9 | [Effect Estimation (DoWhy)](#9-effect-estimation) | Effect estimation, counterfactuals, root cause analysis (optional) |
-# | 10 | [Tigramite Effects](#10-tigramite-effects) | TigramiteEffects, pathwise_effects |
+# | 9 | [Effect Estimation (DoWhy)](#9-effect-estimation-dowhy) | Effect estimation, counterfactuals, root cause analysis (optional) |
+# | 10 | [Tigramite Effects](#10-effect-estimation-tigramite) | TigramiteEffects, pathwise_effects |
+# | 11 | [Inspection and Recommendation](#11-inspection-and-recommendation) | `inspect_df`, `recommend_config`, `discover_df` |
+# | 12 | [Feature Selection and Regimes](#12-feature-selection-and-regimes) | `select_features`, `run_regime_discovery` |
+#
+# This notebook covers the main entry points and their most-used parameters. Each function's docstring lists every parameter; the [API reference](../api/index.md) in the documentation is generated from those docstrings.
 
 # %%
 import warnings
@@ -49,12 +53,12 @@ from causalts.ci_tests import CMIknnGPU
 from causalts.ci_tests import GCMIGPU
 from causalts.ci_tests import SplitKCIGPU
 from causalts.ci_tests import DFCITGPU
-from causalts.ci_tests import SigKCIGPU
-from causalts import run_cdnots, run_cdnots_plus, make_c_array
+from causalts.ci_tests import LinSigCIGPU
+from causalts.ci_tests import GCM, WGCM, PCM, RAFTCI, RIFTCI
+from causalts import run_cdnots
 
-from causalts.cedar import run_cedar, Cedar
+from causalts.cedar import run_cedar
 from causalts import run_grace, run_reap
-from causalts.effects.tigramite_effects import TigramiteEffects, pathwise_effects
 from causalts.utils import evaluate_graph
 from causalts.synthetic_data.synthetic_datasets import SCPGraphGenerator
 
@@ -133,33 +137,40 @@ print(f"Dataset B: {df_b.shape}, {len(names_b)} vars, max_lag={maxlag_b}")
 # All CI tests share a common interface: `test(X, Y, condition_set)` returning `(p_value, statistic)`.  
 # Run `causal-ts ci-test-info` in the CLI for an interactive selection guide with benchmark numbers.
 #
-# | Test | Class | Type | Speed | Best for |
-# |------|-------|------|-------|----------|
-# | Partial Correlation | `PartialCorr` | Linear | ⚡⚡⚡ | Linear, CPU-only |
-# | Partial Correlation GPU | `ParCorrGPU` | Linear | ⚡⚡⚡ | Linear, GPU-batched |
-# | Gaussian Copula | `GCMIGPU` | Monotone nonlinear | ⚡⚡⚡ | Fast analytic, mild nonlinearity |
-# | Randomized CoT | `RCOTGPU` | Nonlinear | ⚡⚡ | Large T (>2000), fast |
-# | **Split KCI** | **`SplitKCIGPU`** | **Nonlinear** | **⚡⚡** | **Nonlinear, bias-controlled** |
-# | Kernel CI | `KCIGPU` | Nonlinear | ⚡ | General nonlinear, high collinearity |
-# | **DFCIT** | **`DFCITGPU`** | **Distribution-free** | **⚡** | **Highest recall, T<500** |
-# | CMI k-NN GPU | `CMIknnGPU` | Nonlinear | ⚡ | Accurate nonlinear, T<400 |
-# | CMI k-NN CPU | `CMIKNN` | Nonlinear | 🐌 | Reference / no GPU |
-# | **Signature Kernel** | **`SigKCIGPU`** | **Path-space** | **⚡⚡** | **Stochastic processes / SDEs** |
+# | Test | Class | Registry name | What it tests | Best for |
+# |------|-------|---------------|---------------|----------|
+# | Partial Correlation | `PartialCorr` | `parcorr` | Linear | Linear, CPU-only |
+# | Partial Correlation GPU | `ParCorrGPU` | `parcorr-gpu` | Linear | Linear, batched on GPU |
+# | Gaussian Copula | `GCMIGPU` | `gcmi` | Monotone dependence | Fast analytic, mild monotone nonlinearity |
+# | Random-feature F-test | `RAFTCI` | `raft` | Conditional mean | Fast nonlinear default |
+# | Random-feature F-test, interaction-adjusted | `RIFTCI` | `rift` | Conditional mean | Interactions among conditioning variables |
+# | Projected covariance measure | `PCM` | `pcm` | Conditional mean | Nonlinear mean dependence |
+# | Generalised covariance measure | `GCM` | `gcm` | Residual moment | Fast residual-covariance test |
+# | Weighted GCM | `WGCM` | `wgcm` | Residual moment | Dependence that changes sign with Z |
+# | Randomized CoT | `RCOTGPU` | `rcot` | Full conditional independence | Variance-only parents, large T |
+# | Kernel CI | `KCIGPU` | `kci` | Full conditional independence | General nonlinear, small to moderate T |
+# | Split KCI | `SplitKCIGPU` | `splitkci` | Full conditional independence | Kernel test with bias control, larger T |
+# | DFCIT | `DFCITGPU` | `dfcit` | Full conditional independence | Distribution-free, continuous data |
+# | CMI k-NN GPU | `CMIknnGPU` | `cmiknn-gpu` | Full conditional independence | Nonparametric CMI |
+# | CMI k-NN CPU | `CMIKNN` | `cmiknn` | Full conditional independence | Reference implementation / no GPU |
+# | CMI k-NN mixed | `CMIknnMixedGPU` | `cmiknn-mixed-gpu` | Full conditional independence | Discrete or mixed data |
+# | Linear signature kernel | `LinSigCIGPU` | `linsig` | Path increments | Path-structured (SDE-like) data |
+# | causal-learn Fisher-Z / Chi-squared / G-squared | `CausalLearnFisherZ`, `CausalLearnChisq`, `CausalLearnGsq` | `fisherz`, `chisq`, `gsquared` | Gaussian / categorical | Comparison with causal-learn |
 #
-# **Empirical benchmarks:** See the [CI Test Comparison](examples/ci_test_comparison.html) notebook for full benchmarks across datasets and sample sizes. Key findings:
-# - **Linear data:** `ParCorrGPU` achieves near-optimal F1 at essentially zero runtime.
-# - **Nonlinear data:** `DFCITGPU` is strongest with CDNOTS; `SplitKCIGPU` is best with CDNOTS+ and 5–8× faster.
-# - **Speed:** `ParCorrGPU` and `GCMIGPU` are instant; `SplitKCIGPU` and `RCOTGPU` are fast; `KCIGPU` and `CMIknnGPU` are slow.
+# "Conditional mean" tests detect a parent that shifts the mean of the child; they miss a parent that changes only its variance. "Residual moment" tests check a moment of the out-of-fold residuals and share that blind spot. Use a full conditional-independence test (`rcot`, `kci`) when variance-only parents are possible. `SigKCIGPU` (`sigkci`) is a deprecated alias of `LinSigCIGPU`.
+#
+# **Choosing a test.** `causalts.inspect_df` (section 11) recommends one from the data: discrete or mixed data → `cmiknn-mixed-gpu`; variance-only parents → `rcot`; nonlinear → `raft`; linear → `parcorr-gpu`. The [CI Test Comparison](ci_test_comparison.ipynb) notebook benchmarks several tests with CDNOTS on synthetic datasets.
+#
 
 # %% [markdown]
 # <a id="kcigpu"></a>
 # ## KCIGPU
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# <em>class</em> causalts.ci_tests.<strong>KCIGPU</strong>(<em>data, device=None, approx='hbe', cache_dir=None, data_hash=None</em>)
+# <em>class</em> causalts.ci_tests.<strong>KCIGPU</strong>(<em>data, device=None, **kwargs</em>)
 # </div>
 #
-# GPU-accelerated Kernel-based Conditional Independence Test.
+# GPU-accelerated Kernel-based Conditional Independence Test. Test options are passed as keyword arguments.
 #
 # <div style="border-left: 3px solid #ddd; padding-left: 16px; margin: 12px 0;">
 #
@@ -171,7 +182,11 @@ print(f"Dataset B: {df_b.shape}, {len(names_b)} vars, max_lag={maxlag_b}")
 # <dt><strong>device</strong> : <em>str, default=None</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;"><code>'cuda'</code>, <code>'cpu'</code>, or <code>None</code> (auto-detect).</dd>
 # <dt><strong>approx</strong> : <em>str, default='hbe'</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">P-value approximation: <code>'hbe'</code> (Hall-Buckley-Eagleson, 3-moment), <code>'gamma'</code> (Satterthwaite-Welch, 2-moment).</dd>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Null approximation. Conditional tests: <code>'hbe'</code> (Hall-Buckley-Eagleson, 3-moment), <code>'sw'</code> (Satterthwaite-Welch gamma, 2-moment) or <code>'bootstrap'</code>. Unconditional tests use the gamma approximation unless <code>approx='perm'</code>.</dd>
+# <dt><strong>nperms</strong> : <em>int, default=200</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Draws for <code>'perm'</code> / <code>'bootstrap'</code>.</dd>
+# <dt><strong>width_x, width_y, width_xz, width_z</strong> : <em>str or float</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">RBF kernel bandwidths for the unconditional (<code>width_x</code>, <code>width_y</code>) and conditional (<code>width_xz</code>, <code>width_y</code>, <code>width_z</code>) tests; default is a data-driven heuristic.</dd>
 # <dt><strong>cache_dir</strong> : <em>str, default=None</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Directory for caching p-values.</dd>
 # <dt><strong>data_hash</strong> : <em>str, default=None</em></dt>
@@ -185,7 +200,7 @@ print(f"Dataset B: {df_b.shape}, {len(names_b)} vars, max_lag={maxlag_b}")
 # ## RCOTGPU
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# <em>class</em> causalts.ci_tests.<strong>RCOTGPU</strong>(<em>data, num_f=25, num_f2=25, approx='hbe', nperm=200, n_avg=5, device=None, seed=None</em>)
+# <em>class</em> causalts.ci_tests.<strong>RCOTGPU</strong>(<em>data=None, num_f=25, num_f2=None, approx='hbe', nperm=200, max_sample_4_std_es=500, seed=42, n_avg=1, device=None, **kwargs</em>)
 # </div>
 #
 # GPU-accelerated Randomized Conditional Correlation Test using Random Fourier Features.
@@ -199,12 +214,16 @@ print(f"Dataset B: {df_b.shape}, {len(names_b)} vars, max_lag={maxlag_b}")
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Input data matrix (T, d).</dd>
 # <dt><strong>num_f</strong> : <em>int, default=25</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Random Fourier features for the conditioning set Z.</dd>
-# <dt><strong>num_f2</strong> : <em>int, default=25</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Random Fourier features for X and Y. Higher values reduce per-draw variance.</dd>
+# <dt><strong>num_f2</strong> : <em>int or None, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Random Fourier features for X and Y. <code>None</code> uses <code>min(25, floor(sqrt(T)))</code> (at least 2), resolved from the rows actually tested.</dd>
+# <dt><strong>approx</strong> : <em>str, default='hbe'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Null approximation: <code>'hbe'</code>, <code>'sw'</code> or <code>'perm'</code>.</dd>
 # <dt><strong>nperm</strong> : <em>int, default=200</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Permutations for null distribution (only when <code>approx='perm'</code>).</dd>
-# <dt><strong>n_avg</strong> : <em>int, default=5</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Independent RFF draws whose p-values are combined via harmonic mean (Wilson 2019). Reduces RFF randomness variance at small T. Set to 1 for original single-draw behaviour.</dd>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Permutations for the null distribution (only when <code>approx='perm'</code>).</dd>
+# <dt><strong>seed</strong> : <em>int or None, default=42</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Seed for the Fourier features (and permutations). Each test derives its own seed from this value and its data, so the same data gives the same p-value on every run. <code>None</code> draws fresh features on every call.</dd>
+# <dt><strong>n_avg</strong> : <em>int, default=1</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Independent RFF draws whose p-values are combined by harmonic mean, applied only when T ≤ 300. Averaging costs <code>n_avg</code> times the runtime.</dd>
 # <dt><strong>device</strong> : <em>str, default=None</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;"><code>'cuda'</code>, <code>'cpu'</code>, or <code>None</code> (auto-detect).</dd>
 # </dl>
@@ -216,10 +235,10 @@ print(f"Dataset B: {df_b.shape}, {len(names_b)} vars, max_lag={maxlag_b}")
 # ## PartialCorr
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# <em>class</em> causalts.ci_tests.<strong>PartialCorr</strong>(<em>data, cache_dir=None, data_hash=None</em>)
+# <em>class</em> causalts.ci_tests.<strong>PartialCorr</strong>(<em>data=None, param_hash=None, workers=1, sig_samples=200, cache_dir=None, data_hash=None, **kwargs</em>)
 # </div>
 #
-# Linear partial correlation test. Fastest CPU option, appropriate when dependencies are linear.
+# Linear partial correlation test (tigramite-based) with an analytic p-value. CPU-only; appropriate when dependencies are linear.
 #
 # ---
 #
@@ -227,7 +246,7 @@ print(f"Dataset B: {df_b.shape}, {len(names_b)} vars, max_lag={maxlag_b}")
 # ## ParCorrGPU
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# <em>class</em> causalts.ci_tests.<strong>ParCorrGPU</strong>(<em>data, device=None, enable_batching=True, cache_dir=None, data_hash=None</em>)
+# <em>class</em> causalts.ci_tests.<strong>ParCorrGPU</strong>(<em>data, device=None, enable_batching=True, method='precision', enable_caching=True, **kwargs</em>)
 # </div>
 #
 # GPU-accelerated partial correlation test with batched evaluation. Computes partial correlation via precision matrix inversion on GPU. The `batch_test()` method evaluates thousands of CI tests in a single GPU kernel launch.
@@ -243,6 +262,10 @@ print(f"Dataset B: {df_b.shape}, {len(names_b)} vars, max_lag={maxlag_b}")
 # <dd style="margin-left: 24px; margin-bottom: 8px;"><code>'cuda'</code>, <code>'mps'</code>, <code>'cpu'</code>, or <code>None</code> (auto-detect).</dd>
 # <dt><strong>enable_batching</strong> : <em>bool, default=True</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Enable batched GPU evaluation.</dd>
+# <dt><strong>method</strong> : <em>str, default='precision'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;"><code>'precision'</code> inverts the sub-covariance matrix for each test; <code>'ols'</code> regresses out the conditioning set and correlates the residuals.</dd>
+# <dt><strong>enable_caching</strong> : <em>bool, default=True</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Cache p-values in memory.</dd>
 # <dt><strong>cache_dir</strong> : <em>str, default=None</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Directory for caching p-values.</dd>
 # <dt><strong>data_hash</strong> : <em>str, default=None</em></dt>
@@ -352,6 +375,142 @@ print(f"Dataset B: {df_b.shape}, {len(names_b)} vars, max_lag={maxlag_b}")
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Small noise added before ranking to break ties in degenerate data.</dd>
 # </dl>
 # </div>
+#
+# ---
+#
+# <a id="raftci"></a>
+# ## RAFTCI and RIFTCI
+#
+# <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
+# <em>class</em> causalts.ci_tests.<strong>RAFTCI</strong>(<em>data, adjust='additive', n_rff=8, bandwidth=1.0, variance='dwb', rff_seed=None, n_boot=199, ..., robust=None, ...</em>)<br>
+# <em>class</em> causalts.ci_tests.<strong>RIFTCI</strong>(<em>data, adjust='interaction', **kwargs</em>)
+# </div>
+#
+# Random-feature F-tests (`raft`, `rift`). Each tested variable is expanded into its standardized value plus random Fourier features; `X ⫫ Y | Z` is tested by asking whether `X`'s features improve a least-squares fit of `Y` on `Z` (partial F statistic), and symmetrically for `Y`. `raft` adjusts for `Z` additively; `rift` adds a penalized dictionary of splines, tensor products and sinusoids that absorbs smooth interactions among the conditioning variables, at about twice the runtime.
+#
+# Both test the **conditional mean**: they have no power against dependence that lives only in the conditional variance, or only in an interaction of `X` with `Z` without a main effect. Use `rcot` or `kci` there.
+#
+# <div style="border-left: 3px solid #ddd; padding-left: 16px; margin: 12px 0;">
+#
+# **Parameters:**
+#
+# <dl style="margin-left: 8px;">
+# <dt><strong>data</strong> : <em>ndarray</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Observations (T, d), rows in time order when <code>variance='dwb'</code>.</dd>
+# <dt><strong>adjust</strong> : <em>{'additive', 'interaction'}</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;"><code>'additive'</code> (RAFT) or <code>'interaction'</code> (RIFT).</dd>
+# <dt><strong>n_rff</strong> : <em>int, default=8</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Random Fourier features per tested variable (even).</dd>
+# <dt><strong>bandwidth</strong> : <em>float, default=1.0</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">RBF bandwidth on the standardized scale.</dd>
+# <dt><strong>variance</strong> : <em>{'dwb', 'f'}, default='dwb'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;"><code>'dwb'</code>: dependent wild bootstrap of the F statistic (holds level under heteroscedastic, heavy-tailed and serially correlated errors). <code>'f'</code>: analytic partial-F p-value, about twice as fast, exact only for i.i.d. homoscedastic Gaussian errors.</dd>
+# <dt><strong>rff_seed</strong> : <em>int or None, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Seed for the feature draws and bootstrap multipliers; falls back to <code>seed</code>, else 12345.</dd>
+# <dt><strong>n_boot</strong> : <em>int, default=199</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Bootstrap draws for <code>'dwb'</code>.</dd>
+# <dt><strong>robust</strong> : <em>{None, False, 'huber'}, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Test Huber-clipped residuals; <code>None</code> means <code>'huber'</code> with the bootstrap null.</dd>
+# </dl>
+# </div>
+#
+# The remaining parameters (`n_knots`, `max_pair`, `n_triple`, `freqs`, `z_ridge`, `combine`, ...) are described in the class docstring.
+#
+# ---
+#
+# <a id="pcm"></a>
+# ## PCM
+#
+# <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
+# <em>class</em> causalts.ci_tests.<strong>PCM</strong>(<em>data, projection='spline_select', variance='hac', one_sided=True, **kwargs</em>)
+# </div>
+#
+# Projected covariance measure. Learns a projection `f(X, Z) ≈ E[Y | X, Z]` on one part of the sample, then tests on held-out rows whether the residual of that projection given `Z` covaries with the residual of `Y` given `Z`. Tests **conditional-mean** independence, not full conditional independence.
+#
+# <div style="border-left: 3px solid #ddd; padding-left: 16px; margin: 12px 0;">
+#
+# **Parameters:**
+#
+# <dl style="margin-left: 8px;">
+# <dt><strong>projection</strong> : <em>str, default='spline_select'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Nuisance learner for E[Y | X, Z]: an additive cubic-spline ridge with a leave-one-out penalty (falling back to linear ridge); <code>'tree'</code> is more robust to non-smooth mean functions.</dd>
+# <dt><strong>variance</strong> : <em>{'hac', 'iid'}, default='hac'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Newey-West long-run or i.i.d. standard error for the score.</dd>
+# <dt><strong>one_sided</strong> : <em>bool, default=True</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">One-sided test, as published.</dd>
+# <dt><strong>n_splits, gap, crossfit</strong> : <em></em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Cross-fitting folds (contiguous, embargoed by <code>gap</code> rows; PCM only supports <code>crossfit='blocked'</code>).</dd>
+# </dl>
+# </div>
+#
+# ---
+#
+# <a id="gcm"></a>
+# ## GCM
+#
+# <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
+# <em>class</em> causalts.ci_tests.<strong>GCM</strong>(<em>data, variance='hac', n_splits=5, gap=None, regressors=('spline_select',), crossfit='blocked', **kwargs</em>)
+# </div>
+#
+# Generalised covariance measure: tests whether the out-of-fold residuals of `X` given `Z` and of `Y` given `Z` are uncorrelated. A **residual-moment** test: a parent that changes only the conditional variance of `Y` leaves the residual product mean-zero and is missed.
+#
+# <div style="border-left: 3px solid #ddd; padding-left: 16px; margin: 12px 0;">
+#
+# **Parameters:**
+#
+# <dl style="margin-left: 8px;">
+# <dt><strong>variance</strong> : <em>{'hac', 'iid'}, default='hac'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;"><code>'hac'</code> uses a Newey-West long-run standard error (for serially correlated residual products); <code>'iid'</code> is the published normalisation and over-rejects on autocorrelated data.</dd>
+# <dt><strong>n_splits</strong> : <em>int, default=5</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Cross-fitting folds.</dd>
+# <dt><strong>gap</strong> : <em>int or None, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Embargo between folds; <code>None</code> uses the maximum embedded lag supplied by the discovery algorithm, else 1.</dd>
+# <dt><strong>regressors</strong> : <em>tuple of str, default=('spline_select',)</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Candidate nuisance learners.</dd>
+# <dt><strong>crossfit</strong> : <em>{'blocked', 'random', 'full'}, default='blocked'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Contiguous embargoed folds (time series), shuffled folds, or fit on all rows (the original GCM).</dd>
+# </dl>
+# </div>
+#
+# ---
+#
+# <a id="wgcm"></a>
+# ## WGCM
+#
+# <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
+# <em>class</em> causalts.ci_tests.<strong>WGCM</strong>(<em>data, weights=('constant', 'sign', 'rank', 'quantile_bins'), calibration='iid', n_boot=499, max_dirs=2, max_weights=8, block_length=None, **kwargs</em>)
+# </div>
+#
+# Weighted GCM: tests the residual product against a bank of weight functions of `Z`, so it also detects a conditional covariance that changes sign with `Z` (which plain GCM misses). Still a **residual-moment** test, not an omnibus one.
+#
+# <div style="border-left: 3px solid #ddd; padding-left: 16px; margin: 12px 0;">
+#
+# **Parameters:**
+#
+# <dl style="margin-left: 8px;">
+# <dt><strong>weights</strong> : <em>tuple of str</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Weight families of the bank.</dd>
+# <dt><strong>calibration</strong> : <em>{'iid', 'dependent'}, default='iid'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Multiplier bootstrap. <code>'iid'</code> is the published choice; <code>'dependent'</code> preserves serial correlation (block length <code>block_length</code>).</dd>
+# <dt><strong>n_boot</strong> : <em>int, default=499</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Bootstrap replicates.</dd>
+# <dt><strong>max_dirs, max_weights</strong> : <em>int, default=2, 8</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Bank size. Larger banks cover more alternatives but cost power at small T.</dd>
+# </dl>
+# </div>
+#
+# GCM, WGCM and PCM share the cross-fitting options of their base class (`n_splits`, `gap`, `regressors`, `crossfit`).
+#
+# ---
+#
+# <a id="causal-learn-adapters"></a>
+# ## causal-learn adapters
+#
+# <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
+# causalts.ci_tests.create_ci_test(<em>'fisherz' | 'chisq' | 'gsquared', data</em>)
+# </div>
+#
+# `CausalLearnFisherZ`, `CausalLearnChisq` and `CausalLearnGsq` (module `causalts.ci_tests.causallearn_tests`) wrap causal-learn's Fisher-Z, Chi-squared and G-squared tests so they return `(p_value, statistic)` like every causal-ts test. Fisher-Z assumes Gaussian data; Chi-squared and G-squared are for categorical data. They are registered under `fisherz`, `chisq` and `gsquared` and are mainly useful for comparison with causal-learn.
 
 # %%
 # Collider bias demo: X3 -> X5 <- X4
@@ -374,7 +533,12 @@ tests = {
     "GCMIGPU":     GCMIGPU(demo_data, device="cpu"),
     "SplitKCIGPU": SplitKCIGPU(demo_data, device="cpu"),
     "DFCITGPU":    DFCITGPU(demo_data, device="cpu", n_perm=200),
-    "SigKCIGPU":   SigKCIGPU(demo_data, device="cpu", time_delay_dim=2),
+    "LinSigCIGPU": LinSigCIGPU(demo_data, device="cpu", time_delay_dim=2),
+    "RAFTCI":      RAFTCI(demo_data),
+    "RIFTCI":      RIFTCI(demo_data),
+    "PCM":         PCM(demo_data),
+    "GCM":         GCM(demo_data),
+    "WGCM":        WGCM(demo_data),
     "CMIKNN":      CMIKNN(demo_data, k=0.2, early_stop=True),
     "CMIknnGPU":   CMIknnGPU(demo_data, device="cpu", k=0.2, early_stop=True),
 }
@@ -421,6 +585,7 @@ for name, test in tests.items():
 #
 # **Key helper:**
 # ```python
+# from causalts.ci_tests import StratifiedCIT
 # from causalts.ci_tests.stratified_cit import compute_discrete_indices
 # indices = compute_discrete_indices(["Regime", "State"], df, lags=[0,1,2,3], include_C=True)
 # ```
@@ -438,7 +603,7 @@ for name, test in tests.items():
 #
 # GPU CMI k-NN with the **MSinf distance strategy** (Popescu, Gerhardus, Runge 2023). Pairs where any discrete dimension disagrees get infinite distance — they are never considered neighbors. Within same-discrete-value observations, standard Chebyshev distance over continuous dimensions is used.
 #
-# Inherits all parameters from `CMIknnGPU`. Use when you want a nonparametric CI test that natively handles mixed data without the two-stage Fisher combination approach of `StratifiedCIT`.
+# Takes the same keyword parameters as `CMIknnGPU`. Use when you want a nonparametric CI test that handles mixed data directly, without the per-stratum Fisher combination of `StratifiedCIT`. `CMIknnMixedGPU` and `StratifiedCIT` are the only discrete-aware tests; the others (including `DFCITGPU`) assume continuous data.
 #
 # <div style="border-left: 3px solid #ddd; padding-left: 16px; margin: 12px 0;">
 #
@@ -462,7 +627,7 @@ for name, test in tests.items():
 # 1. All non-NaN values are integer-valued (`x == round(x)`)
 # 2. Number of unique values < `min(20, sqrt(T))`
 #
-# If detected and the CI test is not already discrete-aware (`StratifiedCIT` or `CMIknnMixedGPU`), it wraps the test in `StratifiedCIT` and issues a `UserWarning`.
+# If discrete columns are found and the CI test is not already discrete-aware (`StratifiedCIT` or `CMIknnMixedGPU`), CDNOTS wraps the test in `StratifiedCIT` and issues a `UserWarning`.
 #
 # **Control:**
 # - `discrete_cols=None` (default) — auto-detect
@@ -481,7 +646,7 @@ for name, test in tests.items():
 #
 # Bias-controlled kernel CI test. Splits data into train/test halves: fits kernel ridge regression (KRR) on train to learn E[K_Y|Z] and E[K_X|Z], then computes HSIC on the CME-centered residual kernels on the test set. Eliminates KRR overfitting bias at the cost of using only n/2 points for the HSIC test.
 #
-# **10–20× faster than KCIGPU** at the same T. Matches KCI on nonlinear data. Performance improves with larger T where the test half has enough power.
+# Typically much faster than `KCIGPU` at the same T. Because the HSIC test uses only the test half, it needs larger T than KCI for the same power.
 #
 # <div style="border-left: 3px solid #ddd; padding-left: 16px; margin: 12px 0;">
 #
@@ -520,7 +685,7 @@ for name, test in tests.items():
 #
 # Distribution-Free Conditional Independence Test (Cai, Li, Zhang, JMLR 2022). Estimates conditional CDFs via Nadaraya-Watson kernel smoothing, builds an exponential kernel matrix from CDF values, then tests independence using a batched permutation test with early stopping.
 #
-# **Highest recall on nonlinear data**. Fully distribution-free — detects any dependency, not just monotone. O(T²) per permutation.
+# Distribution-free: targets full conditional independence, not only monotone or mean dependence. Assumes continuous data. O(T²) per permutation.
 #
 # <div style="border-left: 3px solid #ddd; padding-left: 16px; margin: 12px 0;">
 #
@@ -552,16 +717,16 @@ for name, test in tests.items():
 #
 # ---
 #
-# <a id="sigkci-gpu"></a>
-# ## SigKCIGPU
+# <a id="linsigcigpu"></a>
+# ## LinSigCIGPU
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# <em>class</em> causalts.ci_tests.<strong>SigKCIGPU</strong>(<em>data, device=None, sigma='median', dyadic_order=0, path_transform='time_delay', time_delay_dim=3, approx='hbe', nperms=200, lamda=0.001, seed=42</em>)
+# <em>class</em> causalts.ci_tests.<strong>LinSigCIGPU</strong>(<em>data, device=None, sigma='median', dyadic_order=0, path_transform='time_delay', time_delay_dim=3, approx='hbe', nperms=200, ridge=0.001, normalize=True, seed=42, **kwargs</em>)
 # </div>
 #
-# Signature Kernel Conditional Independence Test (Manten, Casolo et al., arXiv:2402.18477). Embeds each observation as a short path (time-delay window), computes signature kernels between paths via a vectorized Goursat PDE solver, then applies the KCI framework to the resulting kernel matrices.
+# Linear-signature-kernel CI test. Embeds each observation as a short path (a time-delay window), computes a signature kernel with a **linear** static kernel on the path increments (closed-form Goursat recursion), and applies the KCI conditioning framework with a moment-matched null. When CDNOTS supplies the lag structure, paths are built from consecutive rows of the same variable; without it the test falls back to an RBF kernel on the values. It is not the published SigKCI method of Manten et al. (2024).
 #
-# Designed for **stochastic processes and SDEs** where causal mechanisms depend on the trajectory of a variable, not just its pointwise value. Fast after vectorisation (~0.002–0.008s/test on CPU).
+# A conditioning variable that is affine in time (a linear trend, or CDNOTS's time-index node C) has constant increments and is invisible to the linear signature kernel, so LinSig does not detect C-adjacency. `SigKCIGPU` / `sigkci` is a deprecated alias of this class.
 #
 # <div style="border-left: 3px solid #ddd; padding-left: 16px; margin: 12px 0;">
 #
@@ -573,21 +738,21 @@ for name, test in tests.items():
 # <dt><strong>device</strong> : <em>str, default=None</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;"><code>'cuda'</code>, <code>'mps'</code>, <code>'cpu'</code>, or <code>None</code>.</dd>
 # <dt><strong>sigma</strong> : <em>float or str, default='median'</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Bandwidth for the inner-product kernel in the PDE. <code>'median'</code> uses the median heuristic. Use a fixed float (e.g. 2.0) to reduce sensitivity.</dd>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Kernel scale: increments' inner products are divided by sigma², and it is the RBF bandwidth in the fallback path. <code>'median'</code> uses the median heuristic.</dd>
 # <dt><strong>dyadic_order</strong> : <em>int, default=0</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">PDE solver refinement level. 0 = raw increments (fast). Higher values linearly interpolate path increments for more accurate signature computation but increase runtime as 2^dyadic_order.</dd>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">PDE refinement level; runtime grows as 2^dyadic_order.</dd>
 # <dt><strong>time_delay_dim</strong> : <em>int, default=3</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Window size for path embedding. Each observation becomes a path of this many consecutive time points. 3 captures short-range dynamics; 2 is the minimum meaningful path.</dd>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Path length (consecutive time points per observation). 2 is the minimum meaningful path.</dd>
 # <dt><strong>approx</strong> : <em>str, default='hbe'</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">P-value approximation: <code>'hbe'</code> (Hall-Buckley-Eagleson, 3-moment), <code>'gamma'</code> (SW, 2-moment), or <code>'perm'</code> (permutation).</dd>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Null approximation: <code>'hbe'</code>, <code>'gamma'</code>, or <code>'perm'</code>.</dd>
 # <dt><strong>nperms</strong> : <em>int, default=200</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Permutations (only for <code>approx='perm'</code>).</dd>
-# <dt><strong>lamda</strong> : <em>float, default=0.001</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Regularisation for KCI matrix inversion. Increased automatically if singular.</dd>
+# <dt><strong>ridge</strong> : <em>float, default=0.001</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Kernel-scaled ridge of the KCI residual-maker used for conditioning.</dd>
+# <dt><strong>normalize</strong> : <em>bool, default=True</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Standardize the data before building paths.</dd>
 # </dl>
 # </div>
-#
-# > **Note:** If the `sigkernel` library is installed, the Gram matrix computation is delegated to its CUDA-accelerated PDE solver. Otherwise the built-in vectorized PyTorch solver is used (comparable speed on CPU).
 
 # %% [markdown]
 # <a id="2-cdnots"></a>
@@ -603,7 +768,7 @@ for name, test in tests.items():
 # ## `run_cdnots`
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# causalts.<strong>run_cdnots</strong>(<em>df, indep_test, num_lags=1, lag_list=None, include_C=True, c_preset=None, c_array=None, alpha=0.05, stable=True, max_degree=None, priority=2, verbose=False, show_progress=False, impute=None, impute_kwargs=None, discrete_cols=None, background_knowledge=None, lag_verify=False, alpha_lv=None, max_combinations=20, return_pvals=False</em>)
+# causalts.<strong>run_cdnots</strong>(<em>df, indep_test, num_lags=1, lag_list=None, include_C=True, c_array=None, c_preset=None, alpha=0.05, stable=True, max_degree=None, max_combinations=20, priority=2, verbose=False, show_progress=False, impute=None, impute_kwargs=None, discrete_cols=None, background_knowledge=None, knowledge=None, lag_verify=False, alpha_lv=None, return_pvals=False, *, orient_margin=0.0, collider_search='full', majority_gamma=0.5</em>)
 # </div>
 #
 # Run the full CDNOTS pipeline: skeleton discovery, collider orientation, Meek rules, and phase 3 nonstationarity-based orientation. Returns a single `CdnotsResult` object.
@@ -629,24 +794,54 @@ for name, test in tests.items():
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Significance level for CI tests.</dd>
 # <dt><strong>discrete_cols</strong> : <em>list[str] or None, default=None</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Discrete column names (auto-detected if None). Pass <code>[]</code> to opt out.</dd>
+# <dt><strong>background_knowledge</strong> : <em>BackgroundKnowledge or None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Forbidden / required edges (causal-learn <code>BackgroundKnowledge</code>, e.g. from <code>make_background_knowledge</code>).</dd>
+# <dt><strong>knowledge</strong> : <em>AncestralKnowledge or None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Edge constraints plus ancestral (path) constraints, built with <code>causalts.AncestralKnowledge</code>. An explicit <code>background_knowledge</code> takes precedence for the edge constraints.</dd>
+# <dt><strong>return_pvals</strong> : <em>bool, default=False</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Store the skeleton p-values, enabling <code>result.pvalue_matrix</code> and <code>result.plot_pvalues()</code>.</dd>
+# <dt><strong>orient_margin</strong> : <em>float, default=0.0</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Confidence gate on the C-based nonstationarity orientation. <code>0.0</code> orients every candidate contemporaneous edge; positive values leave ambiguous ones undirected.</dd>
+# <dt><strong>collider_search</strong> : <em>{'full', 'sepset'}, default='full'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Conditioning sets searched by the lag-0 collider vote: every subset of the endpoints' window neighbours within the skeleton's budget (<code>'full'</code>), or only subsets of the separating set plus the middle node (<code>'sepset'</code>, cheaper, fewer edges oriented).</dd>
+# <dt><strong>majority_gamma</strong> : <em>float, default=0.5</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Ambiguity band of the lag-0 collider vote, in [0, 0.5]. 0.5 is the plain majority rule; smaller values leave more triples ambiguous.</dd>
 # </dl>
 #
 # **Returns:** `CdnotsResult` — self-contained result with:
-# - `.cg_tig` — 3D graph array `(d, d, tau+1)`, `graph[i,j,tau]=1` means `i(t-tau)→j(t)`
-# - `.pvalue_matrix` — p-values from skeleton discovery
+# - `.cg_tig` — 3D graph array `(d + n_C, d + n_C, tau+1)`, where `n_C` is the number of C columns appended when `include_C=True`; `graph[i,j,tau]=1` means `i(t-tau)→j(t)`
+# - `.pvalue_matrix` — p-values from skeleton discovery (requires `return_pvals=True`)
 # - `.var_names`, `.num_lags`, `.include_C`, `.num_c_cols`, `.c_node_names`
 # - `.plot(**kwargs)` — calls `tp.plot_graph` with C labels auto-appended
-# - `.plot_pvalues(graph_true, **kwargs)` — p-value distribution plot
+# - `.plot_pvalues(graph_true, **kwargs)` — p-value distribution plot (requires `return_pvals=True`)
 # - `.estimate_effect(...)`, `.fit_scm(...)`, `.counterfactual(...)` — DoWhy bridge
 # </div>
 #
 # ## `run_cdnots_plus`
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# causalts.<strong>run_cdnots_plus</strong>(<em>df, indep_test, num_lags=1, ..., max_conds_py=None, max_conds_px=None</em>)
+# causalts.<strong>run_cdnots_plus</strong>(<em>df, indep_test, num_lags=1, lag_list=None, include_C=True, c_array=None, c_preset=None, alpha=0.01, max_degree=None, max_conds_py=None, max_conds_px=None, priority=1, verbose=False, show_progress=False, impute=None, impute_kwargs=None, discrete_cols=None, background_knowledge=None, knowledge=None, lag_verify=False, alpha_lv=None, return_pvals=False, *, legacy_mci_conds=False, orient_margin=0.1, return_prefix=False, majority_gamma=0.5, lag0_orient=None, alpha_mci=None, addback_alpha=None, veto_alpha=None</em>)
 # </div>
 #
-# PCMCI+-style two-phase skeleton: phase 1 discovers a parent superset per variable, phase 2 MCI-retests each edge conditioning only on those parents. Avoids the over-conditioning problem on dense graphs. Same return type and interface as `run_cdnots`. Prefer over `run_cdnots` when the graph is dense or variables are highly coupled; prefer `run_cdnots` on sparse systems.
+# PCMCI+-style two-phase skeleton: phase 1 discovers a parent superset per variable, phase 2 MCI-retests each edge conditioning only on those parents. Avoids over-conditioning on dense graphs. Same return type as `run_cdnots`. Prefer it when the graph is dense or variables are highly coupled; prefer `run_cdnots` on sparse systems.
+#
+# Defaults that differ from `run_cdnots`: `alpha=0.01`, `priority=1` (abstain on collider conflicts), `orient_margin=0.1`, and unoriented contemporaneous edges are dropped from `cg_tig` (CDNOTS keeps them as symmetric 1s; both keep the CPDAG on `result.graph`).
+#
+# <div style="border-left: 3px solid #ddd; padding-left: 16px; margin: 12px 0;">
+#
+# **Additional parameters:**
+#
+# <dl style="margin-left: 8px;">
+# <dt><strong>lag0_orient</strong> : <em>{None, 'lingam'}, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Orient lag-0 edges that conditional independence leaves undirected, using bootstrapped DirectLiNGAM on the innovations. Needs non-Gaussian noise and assumes linear mechanisms.</dd>
+# <dt><strong>alpha_mci</strong> : <em>float or None, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Significance level of the phase 2 MCI test only; <code>None</code> uses <code>alpha</code>.</dd>
+# <dt><strong>addback_alpha, veto_alpha</strong> : <em>float or None, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Refine lagged cross links after orientation: add an absent link when its MCI p-value is below <code>addback_alpha</code>, then remove a link whose p-value exceeds <code>veto_alpha</code>, repeating until nothing changes. Needs a CI test with power at the sample size.</dd>
+# <dt><strong>max_conds_py, max_conds_px</strong> : <em>int or None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Caps on the number of parents of Y and X used in the MCI conditioning set.</dd>
+# </dl>
+# </div>
 #
 
 # %%
@@ -654,12 +849,12 @@ for name, test in tests.items():
 parcorr_a = PartialCorr(data=df_a.values)
 result_a = run_cdnots(
     df=df_a, indep_test=parcorr_a, num_lags=maxlag_a,
-    include_C=True, alpha=0.1, stable=True, show_progress=True,
+    include_C=True, alpha=0.1, stable=True,
 )
 graph_a = result_a.cg_tig
 print(f"Graph shape: {graph_a.shape}")
 print(f"Edges discovered: {int(graph_a.sum())}")
-print(f"P-value matrix available: {result_a.pvalue_matrix is not None}")
+print(f"P-value matrix available: {result_a.pvalue_matrix is not None}")  # needs return_pvals=True
 print(f"C node labels: {result_a.c_node_names}")
 
 
@@ -681,18 +876,23 @@ print(f"Edges discovered: {int(graph_b.sum())}")
 #
 # The returned `result` object has bound methods for quick plotting and effect estimation:
 #
-# - `result.plot(exclude_C=False, **kwargs)` — wraps `tp.plot_graph` with C node labels auto-appended
-# - `result.plot_pvalues(graph_true, **kwargs)` — wraps `tp.plot_pvalue_distribution(result.pvalue_matrix, ...)`
-# - `result.estimate_effect(treatment, outcome, ...)` — DoWhy ATE via backdoor
-# - `result.fit_scm(mechanism_type='auto')` — fit DoWhy GCM for counterfactuals
+# - `result.plot(var_names=None, undirected=None, **kwargs)` — wraps `tp.plot_graph` with C node labels auto-appended
+# - `result.plot_pvalues(graph_true, **kwargs)` — wraps `tp.plot_pvalue_distribution(result.pvalue_matrix, ...)`; needs `return_pvals=True`
+# - `result.to_binary(undirected=...)`, `result.to_marks()` — re-render the CPDAG kept on `result.graph`
+# - `result.deconfound()` — LUCID latent-confounder correction (section 5)
+# - `result.make_background_knowledge()`, `result.make_knowledge()` — build constraint objects for re-runs
+#
+# DoWhy bridge (requires `pip install causalts[dowhy]`):
+#
+# - `result.estimate_effect(treatment, outcome, ...)` — ATE via backdoor
+# - `result.fit_scm(mechanism_type='auto')` — fit a DoWhy GCM for counterfactuals
 # - `result.counterfactual(intervention, target)` — what-if analysis
 # - `result.attribute_anomaly(anomaly, target)` — Shapley root cause attribution
-# - `result.arrow_strength(target)` — causal influence of each parent
-# - `result.causal_influence(target)` — intrinsic causal contribution
-# - `result.forecast(targets, horizon)` — graph-informed forecasting
-# - `result.summary()` — human-readable summary of discovery results
-# - `result.falsify()` — DoWhy graph falsification test
-# - `result.make_background_knowledge()` — extract domain constraints for re-runs
+# - `result.arrow_strength(target)`, `result.causal_influence(target)` — strength of each parent
+# - `result.falsify()` — graph falsification test
+# - `result.summary(mechanism_type='linear', top_k=5)` — DoWhy diagnostic report (transition-structure validation, arrow strengths, graph statistics)
+#
+# Result objects have no `forecast` method. For graph-informed forecasting use `wrap_graph(result.cg_tig, df).forecast(...)` or `causalts.effects.CausalForecaster` directly (see the [forecasting](forecasting.ipynb) notebook).
 #
 
 # %%
@@ -707,7 +907,7 @@ result_b.plot(var_names=names_b, node_layout="circular", node_size=0.2, show_col
 # <a id="3-cedar"></a>
 # # 3. CEDAR
 #
-# Scalable causal discovery for autoregressive time series via minimum-lag selection and distance correlation. Requires only **two CI tests per candidate edge** — O(d²) overall.
+# Scalable causal discovery for autoregressive time series via minimum-lag selection and distance correlation. It assumes an autoregressive design (each series depends on its own past). Requires only **two CI tests per candidate edge**, so O(d²) tests overall.
 #
 # ```python
 # from causalts.cedar import run_cedar, Cedar
@@ -717,7 +917,7 @@ result_b.plot(var_names=names_b, node_layout="circular", node_size=0.2, show_col
 # ## `run_cedar`
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# causalts.cedar.<strong>run_cedar</strong>(<em>df, ci_test, max_lag, *, alpha_cond1=0.05, alpha_cond2=0.05, lag_method='partial_dcor', lag_pvalue_method='t_test', lag_alpha=0.05, n_permutations=200, normalize='minmax', filter_children=True, direction_threshold=1.2, direction_method='dcor', prune=True, alpha_mci=None, sweep_all_lags=False, max_prune_path=4, include_lag0=False, multi_lag=True, multi_lag_keep='first', target_var=None, n_jobs=1, verbose=False, forbidden=None, required=None, impute=None, impute_kwargs=None, include_C=False, c_preset='linear', c_array=None, include_autoreg=True, assume_ar1=True</em>) → <em>CedarResult</em>
+# causalts.cedar.<strong>run_cedar</strong>(<em>df, ci_test, max_lag, *, alpha_cond1=0.01, alpha_cond2=0.01, lag_method='partial_dcor', lag_pvalue_method='t_test', lag_alpha=0.05, n_permutations=200, normalize='minmax', filter_children=False, direction_threshold=1.2, direction_method='dcor', prune=True, alpha_mci=None, sweep_all_lags=False, max_prune_path=4, include_lag0=False, multi_lag=True, multi_lag_keep='first', target_var=None, n_jobs=1, verbose=False, forbidden=None, required=None, knowledge=None, impute=None, impute_kwargs=None, include_C=False, c_preset='linear', c_array=None, include_autoreg=True, assume_ar1=True, lag_filter=None, lag_filter_frac=0.95</em>) → <em>CedarResult</em>
 # </div>
 #
 # Convenience wrapper around `Cedar(...).run()`. Runs the full CEDAR pipeline and returns a `CedarResult`.
@@ -733,9 +933,9 @@ result_b.plot(var_names=names_b, node_layout="circular", node_size=0.2, show_col
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Any CI test from <code>causalts.ci_tests</code>. Data is set internally before each test.</dd>
 # <dt><strong>max_lag</strong> : <em>int</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Maximum lag to consider (≥ 1).</dd>
-# <dt><strong>alpha_cond1</strong> : <em>float, default=0.05</em></dt>
+# <dt><strong>alpha_cond1</strong> : <em>float, default=0.01</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Significance threshold for Condition 1 (dependence): reject H₀ if p < alpha_cond1.</dd>
-# <dt><strong>alpha_cond2</strong> : <em>float, default=0.05</em></dt>
+# <dt><strong>alpha_cond2</strong> : <em>float, default=0.01</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Significance threshold for Condition 2 (independence): accept edge if p ≥ alpha_cond2.</dd>
 # <dt><strong>lag_method</strong> : <em>str, default='partial_dcor'</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Lag importance metric: <code>'partial_dcor'</code> (unbiased dcor on X_j(t) residualised on X_j(t-1) — best lag accuracy for hub graphs), <code>'dcor'</code> (unbiased U-centered distance correlation), or <code>'pearson'</code> (faster, linear only).</dd>
@@ -747,7 +947,7 @@ result_b.plot(var_names=names_b, node_layout="circular", node_size=0.2, show_col
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Permutations for lag significance (only for <code>circular_shift</code>/<code>permutation</code> methods).</dd>
 # <dt><strong>normalize</strong> : <em>str or None, default='minmax'</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Data normalization before lag importance: <code>'minmax'</code>, <code>'zscore'</code>, or <code>None</code>.</dd>
-# <dt><strong>filter_children</strong> : <em>bool, default=True</em></dt>
+# <dt><strong>filter_children</strong> : <em>bool, default=False</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Skip testing variables where asymmetric dcor strongly suggests they are children, not causes.</dd>
 # <dt><strong>direction_threshold</strong> : <em>float, default=1.2</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Ratio M[j,i]/M[i,j] above which i is deemed a child of j and filtered. Only applies when <code>filter_children=True</code>.</dd>
@@ -777,6 +977,8 @@ result_b.plot(var_names=names_b, node_layout="circular", node_size=0.2, show_col
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Edges to forbid. Each entry is <code>(cause_var, effect_var, lag)</code> where <code>lag</code> is an int ≥ 1, or <code>None</code> to forbid the pair at all lags. Forbidden edges are skipped before CI tests.</dd>
 # <dt><strong>required</strong> : <em>list of (cause, effect, lag) tuples, optional</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Edges to force into the final graph regardless of CI test outcome. Same format as <code>forbidden</code>. Required edges bypass children filtering and are protected from MCI pruning.</dd>
+# <dt><strong>knowledge</strong> : <em>AncestralKnowledge or None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Its forbidden and required edges are added to <code>forbidden</code> / <code>required</code>.</dd>
 # <dt><strong>impute</strong> : <em>str or None, default=None</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Missing-value strategy. <code>None</code> / <code>'pairwise_complete'</code> — drop NaN rows per CI test (default). <code>'var_em'</code> — fill NaN via iterative VAR-EM before discovery.</dd>
 # <dt><strong>impute_kwargs</strong> : <em>dict, optional</em></dt>
@@ -784,13 +986,17 @@ result_b.plot(var_names=names_b, node_layout="circular", node_size=0.2, show_col
 # <dt><strong>include_C</strong> : <em>bool, default=False</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Append a nonstationarity time-index variable (C node) to the data before discovery. C is treated as a pure cause (never as an effect). Forces <code>include_lag0=True</code> so the contemporaneous C(t) → X_j(t) edge can be discovered.</dd>
 # <dt><strong>c_preset</strong> : <em>str, default='linear'</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Basis function for the C node: <code>'linear'</code>, <code>'quadratic'</code>, <code>'sigmoid'</code>, <code>'sin'</code>, <code>'step'</code>, or <code>'multi'</code> (multiple basis columns). Only used when <code>include_C=True</code> and <code>c_array=None</code>.</dd>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">C basis preset, as in <code>run_cdnots</code>: <code>'linear'</code>, <code>'linear+sin'</code>, <code>'linear+exp'</code>, <code>'linear+quad'</code>, <code>'step'</code>, <code>'step+linear'</code>. Only used when <code>include_C=True</code> and <code>c_array=None</code>.</dd>
 # <dt><strong>c_array</strong> : <em>np.ndarray or None, default=None</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Custom C node array, shape (T,) or (T, k). Overrides <code>c_preset</code> when provided.</dd>
 # <dt><strong>include_autoreg</strong> : <em>bool, default=True</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Detect and include autoregressive self-loop edges based on AR order estimation. Exposes <code>CedarResult.ar_order</code> and <code>CedarResult.ar_violations</code>.</dd>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Add autoregressive self-loops for each variable's AR order. Self-loops are exempt from MCI pruning. Exposes <code>CedarResult.ar_order</code> and <code>CedarResult.ar_violations</code>.</dd>
 # <dt><strong>assume_ar1</strong> : <em>bool, default=True</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">When True, assume AR(1) without running sequential conditional CI tests (faster). When False, estimate AR order via sequential tests up to max_lag.</dd>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">When True, add lag-1 self-loops for every variable without order detection. When False, select each variable's AR order by BIC.</dd>
+# <dt><strong>lag_filter</strong> : <em>{None, 'ar_relative'}, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">With <code>'ar_relative'</code>, drop candidate causes whose peak lag importance is below <code>lag_filter_frac</code> times the target's own autoregressive importance (useful for strongly autoregressive data).</dd>
+# <dt><strong>lag_filter_frac</strong> : <em>float, default=0.95</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Threshold fraction for <code>lag_filter='ar_relative'</code>.</dd>
 # </dl>
 #
 # **Returns:** `CedarResult`
@@ -830,7 +1036,7 @@ result_b.plot(var_names=names_b, node_layout="circular", node_size=0.2, show_col
 # | `var_names` | `list[str]` | Variable names |
 # | `n_tests` | `int` | Total CI tests performed |
 # | `pruned` | `bool` | Whether MCI pruning was applied |
-# | `ar_order` | `dict` | Detected AR order per variable (col name → int). Empty if `include_autoreg=False` |
+# | `ar_order` | `dict` | AR order per variable, keyed by column index (int → int); 1 for every variable when `assume_ar1=True` |
 # | `ar_violations` | `dict` | Variables with AR order ≥ 2 (var → order). Useful for diagnostics |
 # | `c_node_names` | `list[str]` | Names of appended C-node columns (empty if `include_C=False`) |
 #
@@ -842,12 +1048,6 @@ result_b.plot(var_names=names_b, node_layout="circular", node_size=0.2, show_col
 # - `result.attribute_anomaly(anomaly, target)` — Shapley root cause attribution
 
 # %%
-from causalts.synthetic_data.synthetic_datasets import ex3
-
-result_ex3 = ex3(seed=42, T=300)
-df_ex3 = result_ex3["df"]
-true_graph_ex3 = result_ex3["ground_truth"]
-
 ci_b = PartialCorr(data=df_b.values)
 
 # --- Functional API ---
@@ -914,7 +1114,7 @@ print(f"VAR-EM imputed:    {cedar_varem.n_tests} tests, {int(cedar_varem.cg_tig.
 # ---
 
 # %% [markdown]
-# <a id="4-grace"></a>
+# <a id="4-grace-and-reap"></a>
 # # 4. GRACE and REAP
 #
 # Both refine a directed candidate graph: another method's graph passed as `candidate_graph`, or a high-recall CDNOTS graph built on the data. GRACE refines it with a neural gated model under an L0 penalty, after a grow round for the pairs it missed. REAP grows and prunes each target's candidate parents by regression (three grow rounds by default).
@@ -1228,7 +1428,7 @@ for k in ["Precision", "TPR", "F1", "SHD"]:
 # ## `plot_graph`
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# causalts.plotting.<strong>plot_graph</strong>(<em>graph, var_names=None, node_layout='circular', node_pos=None, node_size=0.3, arrow_linewidth=8.0, link_label_fontsize=10, curved_radius=0.2, fig_ax=None, figsize=None, show_colorbar=True, return_pos=False, val_matrix=None, title=None</em>)
+# causalts.plotting.<strong>plot_graph</strong>(<em>graph, val_matrix=None, var_names=None, fig_ax=None, figsize=None, ..., node_pos=None, node_layout='neato', ..., arrow_linewidth=3.0, ..., node_size=0.2, ..., curved_radius=0.2, ..., link_label_fontsize=10, ..., show_colorbar=True, ..., target_node=None, ..., title=None, return_pos=False</em>)
 # </div>
 #
 # Draw a causal graph as a network. Nodes are variables, curved arrows are lagged dependencies, straight arrows are contemporaneous.
@@ -1242,13 +1442,13 @@ for k in ["Precision", "TPR", "F1", "SHD"]:
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Causal graph.</dd>
 # <dt><strong>var_names</strong> : <em>list[str], default=None</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Variable names.</dd>
-# <dt><strong>node_layout</strong> : <em>str, default='circular'</em></dt>
+# <dt><strong>node_layout</strong> : <em>str, default='neato'</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;"><code>'circular'</code>, <code>'spring'</code>, <code>'kamada_kawai'</code>, <code>'shell'</code>, <code>'spectral'</code>, <code>'neato'</code>, <code>'fdp'</code>, <code>'sfdp'</code>, <code>'dot'</code>, <code>'twopi'</code>, <code>'circo'</code>.</dd>
 # <dt><strong>node_pos</strong> : <em>dict, default=None</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Pre-computed positions (overrides layout).</dd>
-# <dt><strong>node_size</strong> : <em>float, default=0.3</em></dt>
+# <dt><strong>node_size</strong> : <em>float, default=0.2</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Node radius.</dd>
-# <dt><strong>arrow_linewidth</strong> : <em>float, default=8.0</em></dt>
+# <dt><strong>arrow_linewidth</strong> : <em>float, default=3.0</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Edge line width.</dd>
 # <dt><strong>link_label_fontsize</strong> : <em>int, default=10</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Lag label font size.</dd>
@@ -1262,7 +1462,13 @@ for k in ["Precision", "TPR", "F1", "SHD"]:
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Return <code>(fig, ax, pos)</code> instead of <code>(fig, ax)</code>.</dd>
 # <dt><strong>val_matrix</strong> : <em>ndarray, default=None</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Edge values for coloring.</dd>
+# <dt><strong>target_node</strong> : <em>str or int, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Highlight a node and color its incoming and outgoing edges.</dd>
+# <dt><strong>title</strong> : <em>str, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Axes title.</dd>
 # </dl>
+#
+# The elided parameters (colorbar ranges and colormaps, font sizes, <code>special_nodes</code>, <code>save_name</code>, ...) are listed in the docstring.
 # </div>
 #
 # > **Note:** Graphviz layouts (`neato`, `fdp`, `sfdp`, `dot`, `twopi`, `circo`) require `graphviz` to be installed. If unavailable, they fall back to `circular`.
@@ -1311,7 +1517,7 @@ plt.show()
 # ## `plot_time_series_graph`
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# causalts.plotting.<strong>plot_time_series_graph</strong>(<em>graph, var_names=None, arrow_linewidth=4, node_size=0.1, figsize=None, order='auto'</em>)
+# causalts.plotting.<strong>plot_time_series_graph</strong>(<em>graph, val_matrix=None, var_names=None, fig_ax=None, figsize=None, ..., arrow_linewidth=4, ..., order='auto', node_size=0.1, ..., title=None, title_pad=None</em>)
 # </div>
 #
 # Time-unrolled visualization showing each variable at each lag as a separate node. By default, variables are reordered to minimize edge crossings using the barycenter heuristic.
@@ -1323,8 +1529,12 @@ plt.show()
 # <dl style="margin-left: 8px;">
 # <dt><strong>graph</strong> : <em>ndarray (N, N, tau+1)</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Causal graph.</dd>
+# <dt><strong>val_matrix</strong> : <em>ndarray, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Edge values for coloring.</dd>
 # <dt><strong>var_names</strong> : <em>list[str], default=None</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Variable names.</dd>
+# <dt><strong>fig_ax</strong> : <em>tuple, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;"><code>(fig, ax)</code> for embedding in subplots.</dd>
 # <dt><strong>arrow_linewidth</strong> : <em>float, default=4</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Edge width.</dd>
 # <dt><strong>node_size</strong> : <em>float, default=0.1</em></dt>
@@ -1333,6 +1543,8 @@ plt.show()
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Figure size.</dd>
 # <dt><strong>order</strong> : <em>list[int] or str, default='auto'</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;"><code>'auto'</code> uses barycenter heuristic to minimize edge crossings. Pass a list of variable indices for manual ordering (top to bottom).</dd>
+# <dt><strong>title</strong> : <em>str, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Axes title.</dd>
 # </dl>
 # </div>
 
@@ -1364,7 +1576,7 @@ plt.show()
 # ## `compare_graphs`
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# causalts.plotting.<strong>compare_graphs</strong>(<em>graph_true, graph_discovered, var_names=None, node_layout='circular', node_pos=None, node_size=0.3, arrow_linewidth=8.0, link_label_fontsize=10, tp_color='green', fp_color='orange', fn_color='red', fn_style='dashed', fn_linewidth=None, show_legend=True, legend_loc='lower left', fig_ax=None, figsize=None, return_pos=False, title=None</em>)
+# causalts.plotting.<strong>compare_graphs</strong>(<em>graph_true, graph_discovered, var_names=None, fig_ax=None, figsize=None, node_pos=None, node_layout='neato', node_size=0.2, node_color='lightgrey', arrow_linewidth=3, label_fontsize=10, node_label_size=12, link_label_fontsize=10, curved_radius=0.2, tp_color='green', fp_color='orange', fp_style='solid', fp_linewidth=None, fn_color='red', fn_style='dashed', fn_linewidth=None, title=None, show_legend=True, legend_loc='lower left', legend_fontsize=None, legend_framealpha=0.8, legend_markerscale=1.0, return_pos=False</em>)
 # </div>
 #
 # Overlay true and discovered graphs with TP/FP/FN color coding.
@@ -1380,7 +1592,7 @@ plt.show()
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Discovered graph.</dd>
 # <dt><strong>var_names</strong> : <em>list[str], default=None</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Variable names.</dd>
-# <dt><strong>node_layout</strong> : <em>str, default='circular'</em></dt>
+# <dt><strong>node_layout</strong> : <em>str, default='neato'</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Layout algorithm.</dd>
 # <dt><strong>node_pos</strong> : <em>dict, default=None</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Pre-computed positions.</dd>
@@ -1465,7 +1677,7 @@ plt.show()
 # ## `plot_lag_metrics`
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# causalts.plotting.<strong>plot_lag_metrics</strong>(<em>graph_true, graph_discovered, metrics=None, cmap='YlGn', annotate=True, figsize=None, title=None</em>)
+# causalts.plotting.<strong>plot_lag_metrics</strong>(<em>graph_true, graph_discovered, metrics=None, fig_ax=None, figsize=None, cmap='YlGn', annotate=True, title=None</em>)
 # </div>
 #
 # Heatmap of precision/recall/F1 broken down by lag.
@@ -1481,6 +1693,8 @@ plt.show()
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Discovered graph.</dd>
 # <dt><strong>metrics</strong> : <em>list[str], default=None</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Default: Precision, Recall, F1.</dd>
+# <dt><strong>fig_ax</strong> : <em>tuple, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;"><code>(fig, ax)</code> for subplots.</dd>
 # <dt><strong>cmap</strong> : <em>str, default='YlGn'</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Colormap.</dd>
 # <dt><strong>annotate</strong> : <em>bool, default=True</em></dt>
@@ -1620,10 +1834,10 @@ plt.show()
 # ## `load_dataset`
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# causalts.synthetic_data.<strong>load_dataset</strong>(<em>name, seed=42, T=300, **kwargs</em>)
+# causalts.synthetic_data.synthetic_datasets.<strong>load_dataset</strong>(<em>name, **kwargs</em>)
 # </div>
 #
-# Load a named synthetic dataset. Returns a dict with `df`, `ground_truth`, `max_lag`, `var_names`.
+# Load a named synthetic dataset; `**kwargs` (for example `seed`, `T`) are passed to the dataset's generator function. Returns the generator's dict, which includes `df`, `ground_truth` and `max_lag`.
 #
 # Available names: `'ex1'` (5-Node Nonlinear System, d=5), `'ex2'` (6-Node Linear VAR, d=6), `'ex3'` (Cascade Network, d=11), `'henon'` (Hénon Chain), `'ercot_weather'` (d=16, calibrated weather benchmark), plus topology variants: `'scale_free'`, `'erdos_renyi'`, `'small_world'` (each with `'_dense'` variant).
 #
@@ -1632,26 +1846,26 @@ plt.show()
 # ## `lorenz96`
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# causalts.synthetic_data.<strong>lorenz96</strong>(<em>N=10, T=2000, F=8.0, dt=0.01, seed=42</em>)
+# causalts.synthetic_data.synthetic_datasets.<strong>lorenz96</strong>(<em>seed=42, T=1000, N=10, F=10.0, dt=0.1, obs_noise=0.1, burn_in=1000</em>)
 # </div>
 #
-# Lorenz-96 chaotic dynamical system with multiplicative (non-additive) coupling. Used as a challenging benchmark where linear and additive assumptions fail. Returns dict with `df`, `ground_truth`, `max_lag=1`.
+# Lorenz-96 chaotic dynamical system with multiplicative (non-additive) coupling: each variable has four lag-1 parents. A benchmark where linear and additive assumptions fail. `obs_noise` is the standard deviation of additive Gaussian observation noise; `burn_in` integration steps are discarded. Returns a dict with `df`, `ground_truth` (N, N, 2) and `max_lag=1`.
 #
 # ---
 #
 # ## `check_linearity`
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# causalts.utils.<strong>check_linearity</strong>(<em>df, max_lag=3, alpha=0.05</em>)
+# causalts.utils.linearity.<strong>check_linearity</strong>(<em>data, alpha=0.05, max_lag=1, pairs=None</em>)
 # </div>
 #
-# Run Ramsey RESET test across all variable pairs to detect nonlinearity. If no significant nonlinearity is found, `ParCorrGPU` is optimal. Returns a dict with `results` (list of per-pair test outcomes) and `any_nonlinear` (bool).
+# Ramsey RESET test of each directed pair `X_i(t-lag) → X_j(t)` (conditioning on `X_j(t-1)`) to detect nonlinearity; `pairs` restricts the tested pairs. Returns a dict with `results` (per-pair dicts with `x`, `y`, `lag`, `reset_pvalue`, `is_nonlinear`), `fraction_nonlinear`, and a human-readable `summary`. `inspect_df` (section 11) uses this check to choose between a linear and a nonlinear CI test.
 #
 # ```python
 # from causalts.utils.linearity import check_linearity
-# result = check_linearity(df, max_lag=3)
-# if not result["any_nonlinear"]:
-#     print("Data appears linear — use ParCorrGPU")
+# result = check_linearity(df, max_lag=1)
+# print(result["fraction_nonlinear"])
+# print(result["summary"])
 # ```
 #
 # ---
@@ -1660,7 +1874,7 @@ plt.show()
 # ## `SCPGraphGenerator`
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# <em>class</em> causalts.synthetic_data.<strong>SCPGraphGenerator</strong>(<em>n_vars, max_lag=5, density='sparse', enforce_stationary=True, max_spectral_radius=0.85, dependency_funcs=('linear', 'quadratic', 'cubic', 'sin', 'cos')</em>)
+# <em>class</em> causalts.synthetic_data.synthetic_datasets.<strong>SCPGraphGenerator</strong>(<em>n_vars, max_lag=5, auto_range=(0.3, 0.79), dep_pos_range=(0.4, 0.89), dep_neg_range=(-0.4, -0.89), step=0.01, dependency_funcs=('lin', 'lin', 'nl1', 'nl2'), func_map=None, enforce_stationary=True, max_spectral_radius=0.85, max_std_ratio=20.0, density='sparse'</em>)
 # </div>
 #
 # Generate random Structural Causal Process (SCP) graphs for benchmarking.
@@ -1680,8 +1894,8 @@ plt.show()
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Ensure VAR stability.</dd>
 # <dt><strong>max_spectral_radius</strong> : <em>float, default=0.85</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Maximum spectral radius.</dd>
-# <dt><strong>dependency_funcs</strong> : <em>tuple, default=all</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Nonlinear function types to include.</dd>
+# <dt><strong>dependency_funcs</strong> : <em>tuple, default=('lin', 'lin', 'nl1', 'nl2')</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Names of the link functions edges draw from (repeat a name to weight it). <code>'nl1'</code> is x + 0.5x², <code>'nl2'</code> is x + sin(0.1x); <code>'nl_sq'</code>, <code>'nl_abs'</code> and <code>'nl_sin'</code> are also available, or pass your own via <code>func_map</code>.</dd>
 # </dl>
 # </div>
 #
@@ -1710,7 +1924,7 @@ plt.show()
 # </dl>
 # </div>
 #
-# **Returns dict:** `df`, `ground_truth`, `var_names`, `max_lag`, `links`, `meta`
+# **Returns dict:** `df`, `ground_truth`, `var_names`, `max_lag`, `links`, `noises`, `meta`, `weights`
 
 # %%
 gen = SCPGraphGenerator(n_vars=10, max_lag=3, density="sparse")
@@ -1763,29 +1977,27 @@ plt.show()
 # **Returns dict:**
 #
 # <dl style="margin-left: 8px;">
-# <dt><strong>TPR</strong> / <strong>Recall</strong></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">True positive rate (per-lag).</dd>
-# <dt><strong>FPR</strong></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">False positive rate (per-lag).</dd>
-# <dt><strong>Precision</strong></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Per-lag precision.</dd>
-# <dt><strong>F1</strong></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Per-lag F1 score.</dd>
-# <dt><strong>SHD</strong></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Structural Hamming Distance.</dd>
-# <dt><strong>Pair_TPR</strong>, <strong>Pair_Precision</strong>, <strong>Pair_F1</strong>, <strong>Pair_SHD</strong></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Pair-level variants.</dd>
+# <dt><strong>TPR</strong>, <strong>FPR</strong>, <strong>Precision</strong>, <strong>F1</strong>, <strong>SHD</strong>, <strong>TP</strong>, <strong>FP</strong>, <strong>FN</strong>, <strong>TN</strong></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Lag-resolved metrics: each <code>(cause, effect, lag)</code> entry counts separately. There is no <code>Recall</code> key; recall is <code>TPR</code>.</dd>
+# <dt><strong>TPR_pair</strong>, <strong>FPR_pair</strong>, <strong>Precision_pair</strong>, <strong>F1_pair</strong>, <strong>SHD_pair</strong></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Pair-level metrics: a cause-effect pair counts once, whatever its lags.</dd>
+# <dt><strong>*_lag0</strong> (TP, FP, FN, TPR, Precision, F1, SHD)</dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Contemporaneous edges only, orientation-sensitive.</dd>
+# <dt><strong>*_lag0_adj</strong></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Contemporaneous adjacencies, ignoring orientation.</dd>
+# <dt><strong>*_lagpos</strong></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Lagged edges only (lag ≥ 1).</dd>
 # </dl>
 # </div>
 
 # %%
 metrics = evaluate_graph(graph_b, true_b)
 for k, v in metrics.items():
-    print(f"{k:<16} {v:.3f}" if isinstance(v, float) else f"{k:<16} {v}")
+    print(f"{k:<20} {v:.3f}" if isinstance(v, float) else f"{k:<20} {v}")
 
 # %% [markdown]
 #
-# <a id="9-effect-estimation"></a>
+# <a id="9-effect-estimation-dowhy"></a>
 # # 9. Effect Estimation (DoWhy)
 #
 # ```python
@@ -1797,8 +2009,8 @@ for k, v in metrics.items():
 #
 # Optional integration with [DoWhy](https://www.pywhy.org/dowhy/) for causal effect estimation, counterfactual analysis, and root cause attribution. Requires `pip install dowhy>=0.11` (or `pip install causalts[dowhy]`).
 #
-# Every built-in algorithm (`run_cdnots`, `run_cdnots_plus`, `SYPI`, `run_grace`, `run_reap`,
-# `run_stability_selection`, `run_cedar`, `run_lucid`, ...) returns a `CausalResult`
+# Every built-in algorithm (`run_cdnots`, `run_cdnots_plus`, `run_cedar`, `run_grace`, `run_reap`,
+# `run_stability_selection`, `run_lucid`, ...) returns a `CausalResult`
 # subclass with these methods bound automatically: `res.estimate_effect(...)`.
 # `wrap_graph` is only needed for a **third-party algorithm that returns a plain
 # array** instead of a result object.
@@ -1930,13 +2142,14 @@ for k, v in metrics.items():
 # causalts.effects.<strong>wrap_graph</strong>(<em>graph, df, var_names=None</em>)
 # </div>
 #
-# Wrap a plain 3D NumPy graph (from GRACE or `run_stability_selection`) with bridge methods.
+# Wrap a plain 3D NumPy graph from a third-party algorithm with the same bridge methods. Built-in results (including GRACE and REAP, which return a `GraceResult`) already have them.
 #
 # ```python
 # from causalts.effects import wrap_graph
-# res = run_grace(df, max_lag=3)
-# cg = wrap_graph(res.cg_tig, df)
-# cg.estimate_effect("PKC", "Mek", treatment_lag=1)  # works identically
+# graph = my_algorithm(df)          # ndarray (d, d, max_lag+1)
+# cg = wrap_graph(graph, df)
+# cg.estimate_effect("PKC", "Mek", treatment_lag=1)
+# forecaster = cg.forecast()        # graph-informed CausalForecaster
 # ```
 #
 # ---
@@ -1945,7 +2158,7 @@ for k, v in metrics.items():
 # ## `graph_to_networkx`
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# causalts.effects.<strong>graph_to_networkx</strong>(<em>graph, var_names=None, mode='full', include_c=False, cycle_resolution='error'</em>)
+# causalts.effects.<strong>graph_to_networkx</strong>(<em>graph, var_names=None, mode='transition', include_c=False, cycle_resolution='error', horizon=None</em>)
 # </div>
 #
 # Convert a 3D causal-ts graph to a NetworkX DiGraph for use with any DoWhy function directly.
@@ -1957,22 +2170,23 @@ for k, v in metrics.items():
 # <dl style="margin-left: 8px;">
 # <dt><strong>graph</strong> : <em>ndarray (d, d, max_lag+1)</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Discovered causal graph.</dd>
-# <dt><strong>mode</strong> : <em>str, default='full'</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;"><code>'full'</code>: all d*(max_lag+1) nodes — for effect estimation. <code>'summary'</code>: lag nodes as roots — for GCM fitting.</dd>
+# <dt><strong>mode</strong> : <em>str, default='transition'</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;"><code>'transition'</code>: d*(max_lag+1) nodes with edges only into current-time nodes (one step of the process; lagged nodes are roots). <code>'full'</code> and <code>'summary'</code> are aliases of <code>'transition'</code>. <code>'unrolled'</code>: the edge pattern repeated over <code>horizon+1</code> slices so lagged nodes have their own parents; required for backdoor identification with a lagged treatment.</dd>
+# <dt><strong>horizon</strong> : <em>int or None, default=None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Past slices to unroll for <code>mode='unrolled'</code>; at least <code>max_lag</code>. For a treatment at lag L, <code>L + max_lag</code> covers all of the treatment's parents.</dd>
+# <dt><strong>include_c</strong> : <em>bool, default=False</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Keep the CDNOTS C node (stripped by default).</dd>
 # <dt><strong>cycle_resolution</strong> : <em>str, default='error'</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;"><code>'error'</code>: raise on cycles. <code>'drop'</code>: silently drop the second direction. <code>'first'</code>: keep lexicographically-first.</dd>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">What to do when lag-0 edges form a cycle. <code>'error'</code>: raise. <code>'drop'</code>: silently drop the offending edge. <code>'first'</code>: keep the lexicographically-first direction.</dd>
 # </dl>
 #
 # **Returns:** `networkx.DiGraph` with time-expanded nodes (e.g. "PKC", "PKC_lag1", "PKC_lag2", ...)
 # </div>
 
 # %% [markdown]
-#
-
-# %% [markdown]
 # ---
 #
-# <a id="10-tigramite-effects"></a>
+# <a id="10-effect-estimation-tigramite"></a>
 # # 10. Effect Estimation (Tigramite)
 #
 # ```python
@@ -2072,7 +2286,7 @@ print(f"Mediators : {s['mediators']}")
 #
 
 # %%
-# PKC -> Erk has 4 directed paths at lags 2,3,4,5 through different routes.
+# PKC -> Erk has 5 directed paths, at total lags 2, 3, 4, 5 and 7, through different routes.
 result_pw = pathwise_effects(
     graph=true_b,
     df=df_b,
@@ -2090,4 +2304,94 @@ for lag, info in sorted(result_pw['by_lag'].items()):
     print(f"  lag {lag}: effect={info['effect']:+.4f}  share={share:.1%}  [{routes}]")
 
 
+# %% [markdown]
+# ---
+#
+# <a id="11-inspection-and-recommendation"></a>
+# # 11. Inspection and Recommendation
+#
+# ```python
+# from causalts import inspect_df, discover_df
+# from causalts.inspection import recommend_config
+# ```
+#
+# ## `inspect_df`
+#
+# <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
+# causalts.<strong>inspect_df</strong>(<em>df, max_lag=None</em>) → <em>dict</em>
+# </div>
+#
+# Checks the data (linearity, stationarity, a suggested max lag, latent-factor and variance-dependence diagnostics) and recommends a configuration. Returns `{schema_version, data, facts, recommendation, cost_class, warnings}`. `max_lag` overrides the suggested lag. The CLI equivalent is `causal-ts inspect`.
+#
+# `recommendation` holds `algorithm` (always `'cdnots'`), `ci_test`, `refine` (the optional refinement of the graph's lagged edges: `'reap'` by default, `'grace'` when variance-only parents are detected), `refine_params` (`{'contemporaneous': True}` for REAP, which re-adds lag-0 edges), `include_C`, `c_preset`, `max_lag`, `params` and a `rationale` string. The CI test follows the facts: discrete or mixed data → `cmiknn-mixed-gpu`; variance-only parents (`facts['variance_dependence']`) → `rcot`; nonlinear → `raft`; linear → `parcorr-gpu`.
+#
+# ## `recommend_config`
+#
+# <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
+# causalts.inspection.<strong>recommend_config</strong>(<em>facts, data</em>) → <em>dict</em>
+# </div>
+#
+# The pure facts → recommendation function that `inspect_df` calls; useful for re-deriving a recommendation from edited facts.
+#
+# ## `discover_df`
+#
+# <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
+# causalts.<strong>discover_df</strong>(<em>df, algorithm='cdnots', ci_test=None, max_lag=3, include_C=False, c_preset='linear', alpha=None, device='cpu', **kwargs</em>)
+# </div>
+#
+# Runs a discovery algorithm on an in-memory DataFrame, building the CI test from its registry name, and returns the algorithm's result object. To run a recommendation, pass `algorithm=rec["algorithm"]` for the CDNOTS graph, or `algorithm=rec["refine"], **rec["refine_params"]` to build the same CDNOTS candidate graph and refine it in one call. `alpha=None` keeps each algorithm's own default.
+
 # %%
+from causalts import inspect_df, discover_df
+
+report = inspect_df(df_b)
+rec = report["recommendation"]
+print("recommendation:", {k: rec[k] for k in ["algorithm", "ci_test", "refine", "refine_params", "include_C", "c_preset", "max_lag"]})
+print("rationale:", rec["rationale"])
+print("variance dependence:", report["facts"]["variance_dependence"])
+print("cost class:", report["cost_class"])
+
+common = dict(ci_test=rec["ci_test"], max_lag=rec["max_lag"],
+              include_C=rec["include_C"], c_preset=rec["c_preset"])
+res_rec = discover_df(df_b, algorithm=rec["algorithm"], **common)
+res_ref = discover_df(df_b, algorithm=rec["refine"], verbose=False, **common, **rec["refine_params"])
+for name, r in [(rec["algorithm"], res_rec), (rec["refine"], res_ref)]:
+    g = np.asarray(r.cg_tig)[:len(names_b), :len(names_b), :]
+    k = min(g.shape[2], true_b.shape[2])
+    g_cmp = np.zeros_like(true_b)
+    g_cmp[:, :, :k] = g[:, :, :k]
+    m = evaluate_graph(g_cmp, true_b)
+    print(f"{name:<7} {type(r).__name__:<13} F1={m['F1']:.3f}  SHD={m['SHD']}")
+
+# %% [markdown]
+# ---
+#
+# <a id="12-feature-selection-and-regimes"></a>
+# # 12. Feature Selection and Regimes
+#
+# ## `select_features`
+#
+# <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
+# causalts.<strong>select_features</strong>(<em>df, target, *, max_lag, algo='cedar', markov_blanket=False, include_lag0=False, ci_test=None, alpha=0.05, c_preset='linear', from_result=None, **algo_kwargs</em>) → <em>FeatureSelectionResult</em>
+# </div>
+#
+# Finds the causal features of a single `target`. `algo='cedar'` (CEDAR's single-target mode) and `algo='fastpc'` (a local PC skeleton around the target, without orientation) test only the target as an effect, so they cost O(d) tests; `algo='cdnots'` runs full CDNOTS and slices the target's neighbourhood. `markov_blanket=True` also returns children and spouses. The result lists `features` (variable, lag, role, score), `variables`, and `to_design_matrix()` for building a lagged regression design. See the [feature selection](feature_selection.ipynb) notebook.
+
+# %%
+from causalts import select_features
+
+fs = select_features(df_b, "Mek", max_lag=maxlag_b, algo="cedar")
+j = names_b.index("Mek")
+print("selected variables (incl. self-lags):", fs.variables)
+print("true parents (incl. self-lags):      ", sorted(names_b[i] for i in range(len(names_b)) if true_b[i, j, 1:].any()))
+for f in fs.features:
+    print(f"  {f.variable}(t-{f.lag})  role={f.role}")
+
+# %% [markdown]
+# ## `run_regime_discovery`
+#
+# <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
+# causalts.regime.<strong>run_regime_discovery</strong>(<em>df, discovery_fn, config=None, detector=None, regime_labels=None, verbose=False</em>) → <em>RegimeResult</em>
+# </div>
+#
+# Splits the series into regimes, runs `discovery_fn(df, max_lag=..., alpha=..., **kw)` on each regime's segments, and aggregates the per-regime graphs. `config` is a `RegimeConfig` (default: 3 quantile regimes, OR aggregation); `detector` is any `RegimeDetector` (quantile, change-point, PELT, HMM, CUSUM, seasonal, column-based, ...); `regime_labels` supplies precomputed labels. The `RegimeResult` exposes the aggregated `cg_tig`, `regime_graphs`, `regime_labels`, `graph_for_regime(...)` and the usual plotting / DoWhy methods. See the [regime discovery](regime_discovery.ipynb) notebook for worked examples.

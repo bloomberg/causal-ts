@@ -16,10 +16,10 @@ from causalts.plotting import (
     compute_association_matrix,
     corr_table,
     pairs_panel,
+    extract_subgraph,
+    build_pvalue_matrix,
 )
 ```
-
----
 
 ## Graph Plots
 
@@ -64,13 +64,11 @@ Configurable subplot matrix for custom multi-panel displays.
    :show-inheritance:
 ```
 
----
-
 ## Comparison & Evaluation Plots
 
 ### `compare_graphs`
 
-Overlay TP (green) / FP (red) / FN (orange) edges between two graphs.
+Overlay TP (green) / FP (orange) / FN (red, dashed) edges between two graphs.
 
 ```{eval-rst}
 .. autofunction:: causalts.plotting.compare.compare_graphs
@@ -99,8 +97,6 @@ Histogram of CI test p-values split by true edges vs. non-edges.
 ```{eval-rst}
 .. autofunction:: causalts.plotting.compare.plot_pvalue_distribution
 ```
-
----
 
 ## Association Matrix (Corrplot)
 
@@ -134,8 +130,6 @@ footnote, all individually toggleable. Prints nicely in notebooks
 .. autofunction:: causalts.plotting.corrplot.corr_table
 ```
 
----
-
 ## Pairs Panel
 
 ### `pairs_panel`
@@ -148,8 +142,6 @@ above.
 .. autofunction:: causalts.plotting.pairs.pairs_panel
 ```
 
----
-
 ## Quick Examples
 
 **Network plot from CDNOTS output:**
@@ -158,7 +150,7 @@ from causalts.plotting import plot_graph
 
 fig, ax = plot_graph(
     graph=graph,                      # shape (d, d, max_lag+1)
-    val_matrix=pvals,                 # optional: p-values → edge width
+    val_matrix=val_matrix,            # optional: signed strengths in [-1, 1] → edge colour
     var_names=list(df.columns) + ["C"],
 )
 fig.savefig("causal_graph.pdf", bbox_inches="tight")
@@ -170,8 +162,7 @@ from causalts.plotting import compare_graphs, plot_metrics_summary
 
 fig, ax = compare_graphs(ground_truth, discovered, var_names=list(df.columns))
 
-metrics = evaluate_graph(discovered, ground_truth)
-fig2, ax2 = plot_metrics_summary({"CDNOTS": metrics, "Baseline": baseline_metrics})
+fig2, ax2 = plot_metrics_summary(ground_truth, discovered)   # F1, precision, recall, …
 ```
 
 **P-value diagnostic:**
@@ -179,8 +170,16 @@ fig2, ax2 = plot_metrics_summary({"CDNOTS": metrics, "Baseline": baseline_metric
 from causalts.plotting import plot_pvalue_distribution
 
 fig, ax = plot_pvalue_distribution(
-    pval_matrix=pvals,
-    ground_truth=ground_truth,
-    alpha=0.05,
+    pvalue_matrix=res.pvalue_matrix,   # run_cdnots(..., return_pvals=True)
+    graph_true=ground_truth,
+    alpha_line=0.05,
 )
+```
+
+## Graph Utilities
+
+```{eval-rst}
+.. autofunction:: causalts.plotting.extract_subgraph
+
+.. autofunction:: causalts.plotting.build_pvalue_matrix
 ```

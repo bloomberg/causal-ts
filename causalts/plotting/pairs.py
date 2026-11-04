@@ -67,7 +67,7 @@ def pairs_panel(
         lower-triangle scatterplot (no smoothing/loess, plain `np.polyfit`).
     scale_text : bool
         If True (default), scale the upper-triangle correlation text's font
-        size and color by |r| (mirrors psych's default). If False, all
+        size and color by ``|r|`` (mirrors psych's default). If False, all
         correlation text is drawn at a fixed size/color.
     edgecolor : str or None
         Border color for histogram bars and scatter point markers (default

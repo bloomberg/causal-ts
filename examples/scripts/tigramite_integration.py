@@ -18,17 +18,14 @@
 # Run tigramite's discovery algorithms (PCMCI+, PCMCI, LPCMCI, PC-stable, etc.) from within causal-ts and feed results directly into the full effects/forecasting/query pipeline.
 #
 # **Features demonstrated:**
-# 1. PCMCI+ with tigramite's ParCorr (+ CDNOTS baseline comparison)
-# 2. PCMCI+ with causal-ts GPU CI tests (SplitKCIGPU, ParCorrGPU)
+# 1. PCMCI+ with tigramite's ParCorr (+ CDNOTS+ baseline comparison)
+# 2. PCMCI+ with causal-ts CI tests (ParCorrGPU, SplitKCIGPU, RCOTGPU)
 # 3. LPCMCI for latent confounder detection
 # 4. Generic dispatcher (`run_tigramite`) for other algorithms
-# 5. Head-to-head comparison: CDNOTS vs PCMCI+ vs PCMCI on ex3
+# 5. Head-to-head comparison: CDNOTS and CDNOTS+ vs PCMCI+ and PCMCI on ex3, plus a nonlinear example
 # 6. Downstream integration: effects, queries, forecasting on tigramite outputs
 
 # %%
-import sys
-sys.path.insert(0, '..')
-
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -59,7 +56,7 @@ print(f'{result["name"]}, T={len(df)}, max_lag={result["max_lag"]}')
 G_pcmci, info = run_pcmciplus(df, tau_max=3, ci_test='parcorr', pc_alpha=0.01)
 m_pcmci = evaluate_graph(G_pcmci, true_graph)
 
-# Run CDNOTS as baseline
+# Run CDNOTS+ as baseline
 ci = PartialCorr(data=df.values)
 _res = run_cdnots_plus(df, ci, num_lags=3, include_C=False, alpha=0.01)
 G_cdnots_ex2 = _res.cg_tig
@@ -73,7 +70,7 @@ print(f'{"CDNOTS+":<12} {m_cdnots["F1"]:>6.3f} {m_cdnots["Precision"]:>6.3f} '
       f'{m_cdnots["TPR"]:>6.3f} {m_cdnots["SHD"]:>5} {int(G_cdnots_ex2.sum()):>6}')
 
 # %%
-# Side-by-side: PCMCI+ vs CDNOTS on ex2
+# Side-by-side: PCMCI+ vs CDNOTS+ on ex2
 fig, axes = plt.subplots(1, 2, figsize=(8, 4))
 
 pos = tp.compare_graphs(
@@ -99,9 +96,9 @@ plt.tight_layout(); plt.show()
 # %% [markdown]
 # ## 2. PCMCI+ with Causal-TS GPU CI Tests
 #
-# Pass any `CIT_Base` GPU test directly — the adapter wraps it automatically for tigramite.
+# Pass any causal-ts CI test instance (a `CIT_Base` subclass) directly — the adapter wraps it automatically for tigramite.
 #
-# This lets you use causal-ts's GPU-accelerated tests (SplitKCI, KCI, DFCIT, etc.) with PCMCI+'s discovery algorithm.
+# This lets you use causal-ts's tests (GPU-capable ones such as SplitKCI, KCI, DFCIT, RCOT, and CPU ones such as RAFT or GCM) with PCMCI+'s discovery algorithm. `device='cpu'` is used below so the notebook runs without a GPU.
 
 # %%
 from causalts.ci_tests import ParCorrGPU
@@ -119,14 +116,11 @@ from causalts.ci_tests import SplitKCIGPU, RCOTGPU
 
 
 # SplitKCIGPU — nonlinear kernel CI test, 10-20x faster than KCI
-# Use smaller T for speed since kernel tests are O(T^2)
-result_small = ex2(seed=42, T=300)
-df_small = result_small['df']
-
-gpu_splitkci = SplitKCIGPU(data=df_small.values, device='cpu')
-rcot = RCOTGPU(data=df_small.values, num_f=25, num_f2=10, device='cpu')
-G_splitkci, _ = run_pcmciplus(df_small, tau_max=3, ci_test=gpu_splitkci, pc_alpha=0.05)
-G_rcot, _ = run_pcmciplus(df_small, tau_max=3, ci_test=rcot, pc_alpha=0.05)
+# RCOTGPU — random-feature approximation of a kernel CI test
+gpu_splitkci = SplitKCIGPU(data=df.values, device='cpu')
+rcot = RCOTGPU(data=df.values, num_f=25, num_f2=10, device='cpu')
+G_splitkci, _ = run_pcmciplus(df, tau_max=3, ci_test=gpu_splitkci, pc_alpha=0.05)
+G_rcot, _ = run_pcmciplus(df, tau_max=3, ci_test=rcot, pc_alpha=0.05)
 
 m_sk = evaluate_graph(G_splitkci, true_graph)
 m_rcot = evaluate_graph(G_rcot, true_graph)
@@ -144,7 +138,7 @@ print(f'PCMCI+ (RCOTGPU, T=300): F1={m_rcot["F1"]:.3f}, '
 # - `<->` : latent confounder present
 # - `o-o` : fully undetermined
 #
-# **Note on the binary output:** The binary `G_hat` conservatively includes both `-->` and `o->` as directed edges. The full PAG with all edge types is preserved in `info["graph_raw"]`, and `info["edge_types"]` gives a count summary. Use the raw PAG when the distinction between definite (`-->`) and possible (`o->`) causes matters.
+# **Note on the binary output:** The binary `G_hat` includes both `-->` and `o->` as directed edges and always excludes `<->`, which asserts that there is *no* direct edge. The full PAG with all edge types is preserved in `info["graph_raw"]`, and `info["edge_types"]` gives a count summary. Use the raw PAG when the distinction between definite (`-->`) and possible (`o->`) causes matters.
 
 # %%
 from causalts import run_lpcmci
@@ -169,6 +163,9 @@ for i in range(raw.shape[0]):
             if raw[i, j, tau] != '':
                 marker = ' *' if raw[i, j, tau] in ('o->', '<->', 'o-o') else ''
                 print(f'  {var_names[i]}(t-{tau}) {raw[i,j,tau]} {var_names[j]}(t){marker}')
+
+# %% [markdown]
+# ex2 is fully observed, so there is no latent confounder for LPCMCI to find. The two `<->` marks (`X3(t-1) <-> X5(t)` and `X4(t-3) <-> X2(t)`) are therefore finite-sample errors: neither pair is adjacent in the true graph. Because `<->` asserts that there is no direct edge, the binary graph leaves both out, which happens to be correct here. Of the three `o->` marks, `X0(t-2) o-> X1(t)` and `X0(t-3) o-> X2(t)` are true edges and `X0(t-3) o-> X1(t)` is a false positive; LPCMCI marks them `o->` because, allowing for hidden variables, it cannot rule out a latent common cause.
 
 # %%
 # Visualize LPCMCI discovered graph vs true
@@ -241,7 +238,7 @@ for name, m, G in [('CDNOTS+', m_cdnotsp, G_cdnotsp3),
           f'{m["SHD"]:>5} {int(G.sum()):>6}')
 
 # %%
-# Compare graphs for all three methods side-by-side
+# Compare graphs for all four methods side-by-side
 fig, axes = plt.subplots(1, 4, figsize=(20, 6))
 
 pos3 = tp.compare_graphs(
@@ -287,9 +284,9 @@ tp.compare_graphs(
 plt.tight_layout(); plt.show()
 
 # %% [markdown]
-# ### 5b. Nonlinear dataset: 5-Node Nonlinear System (ex1_nl, d=5) with KCIGPU
+# ### 5b. Nonlinear dataset: 5-Node Nonlinear System (ex1_nl, d=5) with SplitKCIGPU
 #
-# ex1_nl has nonlinear dependencies where linear tests fail. Here we use KCIGPU (kernel CI test) with both CDNOTS and PCMCI+ to show the benefit of nonlinear CI tests.
+# ex1_nl has nonlinear dependencies. Here we run CDNOTS, CDNOTS+, PCMCI+ and PCMCI with SplitKCIGPU (a split-sample kernel CI test), and CDNOTS and PCMCI+ with ParCorr for comparison.
 
 # %%
 from causalts.synthetic_data.synthetic_datasets import ex1_nl
@@ -302,39 +299,47 @@ true_nl = result_nl['ground_truth']
 var_nl = df_nl.columns.tolist()
 print(f'ex1_nl: d={df_nl.shape[1]}, T={len(df_nl)}, true edges={int(true_nl.sum())}')
 
-# CDNOTS+ with KCIGPU
-kci = SplitKCIGPU(data=df_nl.values, device='cpu')
-_res = run_cdnots_plus(df_nl, kci, num_lags=3, include_C=False, alpha=0.05)
+# CDNOTS+ with SplitKCIGPU
+splitkci = SplitKCIGPU(data=df_nl.values, device='cpu')
+_res = run_cdnots_plus(df_nl, splitkci, num_lags=3, include_C=False, alpha=0.05)
 G_cdnp_nl = _res.cg_tig
 m_cdnp_nl = evaluate_graph(G_cdnp_nl, true_nl)
 
-# CDNOTS with KCIGPU
-_res = run_cdnots(df_nl, kci, num_lags=3, include_C=False, alpha=0.05)
+# CDNOTS with SplitKCIGPU
+_res = run_cdnots(df_nl, splitkci, num_lags=3, include_C=False, alpha=0.05)
 G_cdn_nl = _res.cg_tig
 m_cdn_nl = evaluate_graph(G_cdn_nl, true_nl)
 
-# PCMCI+ with KCIGPU
-kci2 = SplitKCIGPU(data=df_nl.values, device='cpu')
-G_pcmci_nl, _ = run_pcmciplus(df_nl, tau_max=3, ci_test=kci2, pc_alpha=0.05)
+# PCMCI+ with SplitKCIGPU
+splitkci2 = SplitKCIGPU(data=df_nl.values, device='cpu')
+G_pcmci_nl, _ = run_pcmciplus(df_nl, tau_max=3, ci_test=splitkci2, pc_alpha=0.05)
 m_pcmci_nl = evaluate_graph(G_pcmci_nl, true_nl)
 
-# PCMCI with KCIGPU
-# kci3 = KCIGPU(data=df_nl.values, device='cpu')
-G_pcmci_o_nl, _ = run_pcmci(df_nl, tau_max=3, ci_test=kci2, alpha_level=0.05)
+# PCMCI with SplitKCIGPU
+G_pcmci_o_nl, _ = run_pcmci(df_nl, tau_max=3, ci_test=splitkci2, alpha_level=0.05)
 m_pcmci_o_nl = evaluate_graph(G_pcmci_o_nl, true_nl)
 
-print(f'\n{"Method":<16} {"F1":>6} {"Prec":>6} {"Rec":>6} {"SHD":>5} {"Edges":>6}')
+# Linear baselines: CDNOTS and PCMCI+ with ParCorr
+_res = run_cdnots(df_nl, PartialCorr(data=np.zeros((2, 2))), num_lags=3,
+                  include_C=False, alpha=0.05)
+G_cdn_nl_pc = _res.cg_tig
+m_cdn_nl_pc = evaluate_graph(G_cdn_nl_pc, true_nl)
+G_pcmci_nl_pc, _ = run_pcmciplus(df_nl, tau_max=3, ci_test='parcorr', pc_alpha=0.05)
+m_pcmci_nl_pc = evaluate_graph(G_pcmci_nl_pc, true_nl)
+
+print(f'\n{"Method":<18} {"F1":>6} {"Prec":>6} {"Rec":>6} {"SHD":>5} {"Edges":>6}')
 print('-' * 55)
 for name, m, G in [('CDNOTS (SplitKCI)', m_cdn_nl, G_cdn_nl),
                    ('CDNOTS+(SplitKCI)', m_cdnp_nl, G_cdnp_nl),
                    ('PCMCI+ (SplitKCI)', m_pcmci_nl, G_pcmci_nl),
-                   ('PCMCI  (SplitKCI)', m_pcmci_o_nl, G_pcmci_o_nl)]:
-    print(f'{name:<16} {m["F1"]:>6.3f} {m["Precision"]:>6.3f} {m["TPR"]:>6.3f} '
+                   ('PCMCI  (SplitKCI)', m_pcmci_o_nl, G_pcmci_o_nl),
+                   ('CDNOTS (ParCorr)', m_cdn_nl_pc, G_cdn_nl_pc),
+                   ('PCMCI+ (ParCorr)', m_pcmci_nl_pc, G_pcmci_nl_pc)]:
+    print(f'{name:<18} {m["F1"]:>6.3f} {m["Precision"]:>6.3f} {m["TPR"]:>6.3f} '
           f'{m["SHD"]:>5} {int(G.sum()):>6}')
-print('\nSplitKCIGPU handles nonlinear dependencies — much better than ParCorr on this dataset.')
 
 # %%
-# Compare graphs side-by-side for ex1_nl with KCIGPU
+# Compare graphs side-by-side for ex1_nl with SplitKCIGPU
 fig, axes = plt.subplots(1, 4, figsize=(12, 4))
 
 pos_nl = tp.compare_graphs(
@@ -376,13 +381,18 @@ tp.compare_graphs(
     title=f'PCMCI: F1={m_pcmci_o_nl["F1"]:.2f}',
 )
 
-plt.suptitle('ex1_nl (nonlinear, d=5) — all methods use KCIGPU (kernel CI test)', y=1.02)
+plt.suptitle('ex1_nl (nonlinear, d=5) — all methods use SplitKCIGPU (kernel CI test)', y=1.02)
 plt.tight_layout(); plt.show()
+
+# %% [markdown]
+# On this dataset the kernel test improves on ParCorr for both CDNOTS (F1 0.57 vs 0.38) and PCMCI+ (0.67 vs 0.56), but with T=300 every method recovers only about half of the 9 true edges. For nonlinear data the library's recommended default CI test is `raft` (fast, but it tests conditional-mean dependence only); SplitKCI is used here as a full conditional-independence test.
 
 # %% [markdown]
 # ## 6. Downstream Integration
 #
-# Tigramite outputs plug directly into the full causal-ts pipeline via `wrap_graph()`.
+# Tigramite outputs are plain binary arrays, not causal-ts result objects. `wrap_graph()` turns such a third-party array into a `WrappedGraph` that exposes the effects, query and forecasting methods.
+#
+# The interventional query below sets **lagged** nodes. The SCM is fitted on the lag-embedded transition DAG, where every edge points from a lagged node (`Mek_lag2`) into a current-time node (`Erk`); current-time nodes have no children, so intervening on one would leave every other variable unchanged. See the [Probabilistic Queries notebook](probabilistic_queries.ipynb) for details.
 
 # %%
 from causalts.effects import wrap_graph
@@ -395,31 +405,44 @@ print(cg)
 est = cg.estimate_effect('PKC', 'Mek', treatment_lag=1, confidence_intervals=False)
 print(f'\nATE PKC(t-1) -> Mek: {est.value:.4f}')
 
-# Interventional query
-intv = cg.interventional_query({'Mek': 5.0, 'PKA': 2.0}, targets='Erk', n_samples=3000)
+# The query samplers use NumPy's global random state
+np.random.seed(0)
+
+print(f'\nObserved Erk: mean={df3["Erk"].mean():.3f}, std={df3["Erk"].std():.3f}')
+
+print('Parents of Erk in the PCMCI+ graph:',
+      [f'{var3[i]}_lag{lag}' for i, lag in zip(*np.nonzero(G_pcmci3[:, var3.index('Erk'), :]))])
+
+# Interventional query on a lagged node
+intv = cg.interventional_query({'Mek_lag2': 3.0}, targets='Erk', n_samples=3000)
 summary = cg.query_summary(intv)
-print(f'\nInterventional: P(Erk | do(Mek=5, PKA=2))')
+print(f'\nInterventional: P(Erk | do(Mek_lag2=3))')
 print(summary.round(3))
 
-# Observational query
-obs = cg.observational_query({'Mek': 5.0, 'PKA': 2.0}, targets='Erk', n_samples=10000)
+# Observational query on current-time nodes
+obs = cg.observational_query({'Mek': 3.0, 'PKA': 2.0}, targets='Erk', n_samples=10000)
 summary_obs = cg.query_summary(obs)
-print(f'\nObservational: P(Erk | Mek~5, PKA~2)')
+print(f'\nObservational: P(Erk | Mek~3, PKA~2)  (ESS={1 / (obs["_weight"]**2).sum():.0f} of 10000)')
 print(summary_obs.round(3))
 
+# %% [markdown]
+# In the PCMCI+ graph `Erk` has two parents, `Mek_lag2` and `Erk_lag1` (PCMCI+ misses the true edge `PKA(t-1) → Erk(t)`). Setting `Mek_lag2=3` moves the mean of `Erk` from 0.07 to about -0.8. `Erk(t)` shares no parent with `Mek(t)` or `PKA(t)` in this graph, so conditioning on Mek≈3 and PKA≈2 carries no information about `Erk`: its observational mean differs from the observed mean only by sampling noise, since the estimate rests on fewer than 300 effective samples.
+
+# %% [markdown]
+# `cg.forecast()` fits a `CausalForecaster` on the graph. The MAE below is **in-sample**: the forecaster is fitted on `df3` and its one-step predictions are scored on the same `df3`. See the [Causal Forecasting notebook](forecasting.ipynb) for a train/test evaluation.
+
 # %%
-# Forecasting
 forecaster = cg.forecast()
 pred = forecaster.predict(df3)
-print('Causal forecasting on PCMCI+ graph:')
+print('In-sample one-step fit of the forecaster on the PCMCI+ graph:')
 for col in pred.columns[:5]:
-    mae = (pred[col] - df3[col].iloc[-len(pred):].values).abs().mean()
+    mae = (pred[col] - df3[col]).abs().mean()  # same row index; NaN warm-up rows skipped
     print(f'  {col}: MAE = {mae:.4f}')
 
 # %% [markdown]
 # ## 7. Available CI Tests
 #
-# Both tigramite's own tests and causal-ts GPU tests can be used.
+# Both tigramite's own tests and causal-ts CI tests can be used. See the CI-tests guide in the docs for which test suits which data.
 
 # %%
 print('Tigramite CI tests (pass as string):')
@@ -432,23 +455,30 @@ print('  "gpdc"           — Gaussian process distance correlation')
 print('  "gpdc_torch"     — GPDC with PyTorch backend')
 print('  "gsquared"       — G-squared test for discrete data')
 print()
-print('Causal-TS GPU tests (pass instance):')
-print('  ParCorrGPU(data)    — GPU partial correlation')
-print('  SplitKCIGPU(data)   — Split kernel CI (nonlinear, fast)')
-print('  KCIGPU(data)        — Full kernel CI (nonlinear, accurate)')
-print('  DFCITGPU(data)      — Distribution-free CI (permutation-based)')
-print('  SigKCIGPU(data)     — Signature kernel CI (stochastic processes)')
-print('  RCOTGPU(data)       — Randomized conditional correlation')
-print('  CMIknnGPU(data)     — GPU conditional mutual information')
+print('Causal-TS CI tests (pass instance):')
+print('  GPU-capable (CUDA or CPU):')
+print('  ParCorrGPU(data)    — Partial correlation (linear)')
+print('  SplitKCIGPU(data)   — Split kernel CI (nonlinear, 10-20x faster than KCI)')
+print('  KCIGPU(data)        — Full kernel CI (nonlinear)')
+print('  RCOTGPU(data)       — Randomized conditional correlation test (kernel CI approximation)')
+print('  DFCITGPU(data)      — Distribution-free CI')
+print('  LinSigCIGPU(data)   — Linear signature-kernel CI (stochastic processes)')
+print('  CMIknnGPU(data)     — Conditional mutual information via k-NN')
+print('  CPU-only:')
+print('  RAFTCI(data)        — Random-feature F-test, additive (conditional mean, fast)')
+print('  RIFTCI(data)        — RAFT with interaction-aware adjustment for Z (conditional mean)')
+print('  GCM(data)           — Generalised covariance measure (residual score)')
+print('  WGCM(data)          — Weighted GCM (sign-changing conditional covariance)')
+print('  PCM(data)           — Projected covariance measure (conditional mean)')
 
 # %% [markdown]
 # ## Summary
 #
 # | Function | Algorithm | Latent confounders? | Edge types |
 # |---|---|---|---|
-# | `run_pcmciplus()` | PCMCI+ | No | `-->` only |
-# | `run_pcmci()` | PCMCI | No | `-->` only |
-# | `run_lpcmci()` | LPCMCI | Yes | `-->`, `o->`, `<->` |
+# | `run_pcmciplus()` | PCMCI+ | No | `-->`; at lag 0 also `o-o` (unoriented) and `x-x` (conflict) |
+# | `run_pcmci()` | PCMCI | No | `-->` at lags ≥ 1; `o-o` at lag 0 |
+# | `run_lpcmci()` | LPCMCI | Yes | `-->`, `o->`, `<->`, `o-o`, `x-x` |
 # | `run_tigramite(method=...)` | Any of the above + pcalg, pc_stable, fullci, bivci | Depends | Varies |
 #
 # All return `(G_hat, info)` where `G_hat` is a standard binary `(d, d, max_lag+1)` graph compatible with:
@@ -456,4 +486,6 @@ print('  CMIknnGPU(data)     — GPU conditional mutual information')
 # - `wrap_graph()` for effects, queries, forecasting
 # - `compare_graphs()` for visualization
 #
-# GPU CI tests from causal-ts are auto-wrapped via `CITestAdapter` — just pass the instance.
+# The binary conversion keeps `-->` and `o->` as directed edges, never writes `<->`, and by default drops lag-0 `o-o` and `x-x` marks, because a binary array cannot express "adjacent but unoriented". The raw graph is always in `info["graph_raw"]`; to keep lag-0 adjacencies as symmetric 1s, re-render it with `causalts.tigramite_discovery.tigramite_graph_to_binary(info["graph_raw"], undirected="bidirected", conflict="bidirected")`.
+#
+# causal-ts CI tests are auto-wrapped via `CITestAdapter` — just pass the instance.

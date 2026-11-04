@@ -17,20 +17,17 @@
 #
 # Demonstrates `CausalForecaster` — graph-informed time series forecasting using discovered causal structure.
 #
-# **Key idea:** The discovered causal graph tells us which lagged variables are *true causes* of each target. We use only those as predictors, eliminating spurious correlations. Exogenous variables (no causal parents) are forecasted with auto-ETS (Exponential Smoothing with automatic trend/seasonality detection).
+# **Key idea:** The discovered causal graph tells us which lagged variables are causes of each target, and only those are used as predictors. Variables with no causal parents get a univariate fallback: the best of AR(1), AR(2), AR(3) and several exponential-smoothing (ETS) configurations, chosen by multi-step MSE on a held-out tail of the training series.
 #
 # **Features demonstrated:**
 # 1. Causal discovery → forecasting pipeline
-# 2. Auto-ETS fallback for exogenous (parentless) variables
+# 2. AR/ETS fallback for parentless variables
 # 3. Multi-step ahead forecasting
 # 4. Comparison: causal features vs all-lags baseline
 # 5. Custom sklearn models (Ridge, Random Forest)
 # 6. Feature importance from the causal model
 
 # %%
-import sys
-sys.path.insert(0, '..')
-
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -49,7 +46,7 @@ from causalts.effects.forecast import CausalForecaster, get_causal_parents
 # %%
 result = ex2(seed=42, T=600)
 df = result['df']
-true_graph = result['ground_truth'][:6, :6, :]  # strip C node
+true_graph = result['ground_truth']
 var_names = df.columns.tolist()
 
 # Train/test split
@@ -74,7 +71,7 @@ forecaster = CausalForecaster(
 forecaster.fit(df_train)
 print(forecaster)
 print(f'\nCausal models: {list(forecaster.models_.keys())}')
-print(f'ETS models (exogenous): {list(forecaster.exog_models_.keys())}')
+print(f'AR/ETS fallback models: {list(forecaster.exog_models_.keys())}')
 
 # Show parents used for each variable
 print('\nSelected features per target:')
@@ -83,22 +80,22 @@ for var in var_names:
         parents = forecaster.parents_[var]
         print(f'  {var}: {["{0}(t-{1})".format(v, l) for v, l in parents]}')
     elif var in forecaster.exog_models_:
-        print(f'  {var}: auto-ETS (exogenous)')
+        print(f'  {var}: AR/ETS fallback (no parents)')
 
 # %%
 # In-sample fit quality
 scores = forecaster.score(df_train)
 print('In-sample R² (training data):')
 for var, r2 in sorted(scores.items()):
-    model_type = 'ETS' if var in forecaster.exog_models_ else 'Causal'
+    model_type = 'AR/ETS' if var in forecaster.exog_models_ else 'Causal'
     print(f'  {var}: R²={r2:.4f} ({model_type})')
 
 # %% [markdown]
-# ## 3. Auto AR/ETS for Exogenous Variables
+# ## 3. AR/ETS Fallback for Parentless Variables
 #
-# When the discovery algorithm misses a self-loop (common!) or a variable is truly exogenous, the `exog_fallback` activates. Here we simulate this by removing X0's self-loop.
+# When discovery misses a self-loop, or a variable has no parents in the graph, the `exog_fallback` activates. Here we simulate this by removing X0's self-loop.
 #
-# The fallback fits the **best model from AR(1–3) and ETS candidates, selected by AIC**. For a stationary AR process like X0 (no trend, no seasonality), AR(1) wins by AIC and iterates correctly over the full horizon. The old SES-only fallback would predict a flat line beyond step 1, which is why it was 3× worse than the explicit AR model.
+# The fallback fits AR(1), AR(2), AR(3) and several ETS configurations (no trend, additive trend, damped trend, plus a seasonal model when a period is detected) on the training series minus its last few points, forecasts that held-out tail, and keeps the candidate with the lowest multi-step MSE. AIC is not used because statsmodels reports AR and ETS likelihoods on different scales. The winner is refit on the full training series. For X0, a stationary AR process, the fallback's 30-step forecast error is close to that of the AR(1) model given by the true self-loop.
 
 # %%
 # Remove X0's self-loop to simulate a discovery miss
@@ -109,7 +106,7 @@ f_ets = CausalForecaster(graph_no_selfloop, var_names=var_names, include_contemp
 f_ets.fit(df_train)
 print(f_ets)
 print(f'\nCausal models: {list(f_ets.models_.keys())}')
-print(f'ETS fallback:  {list(f_ets.exog_models_.keys())}')
+print(f'AR/ETS fallback: {list(f_ets.exog_models_.keys())}')
 
 # Compare X0 forecast: AR(1) via causal model vs ETS fallback
 horizon = 30
@@ -123,16 +120,16 @@ t_fcast = np.arange(T_train, T_train + horizon)
 ax.plot(t_hist, df_train['X0'].iloc[-30:].values, 'k-', lw=1.5, label='History')
 ax.plot(t_fcast, df_test['X0'].values[:horizon], 'b-', lw=1.5, label='Actual')
 ax.plot(t_fcast, fcast_ar['X0'].values, 'r--', lw=1.5, label='AR(1) — self-loop')
-ax.plot(t_fcast, fcast_ets['X0'].values, 'g-.', lw=1.5, label='Auto-ETS — no self-loop')
+ax.plot(t_fcast, fcast_ets['X0'].values, 'g-.', lw=1.5, label='AR/ETS fallback — no self-loop')
 ax.axvline(T_train, color='gray', ls=':', lw=0.8)
-ax.set_title('X0: AR(1) vs Auto-ETS fallback')
+ax.set_title('X0: AR(1) vs AR/ETS fallback')
 ax.legend()
 plt.tight_layout()
 plt.show()
 
 mse_ar = np.mean((df_test['X0'].values[:horizon] - fcast_ar['X0'].values) ** 2)
 mse_ets = np.mean((df_test['X0'].values[:horizon] - fcast_ets['X0'].values) ** 2)
-print(f'X0 forecast MSE — AR(1): {mse_ar:.4f}, ETS: {mse_ets:.4f}')
+print(f'X0 forecast MSE — AR(1): {mse_ar:.4f}, fallback: {mse_ets:.4f}')
 
 # %% [markdown]
 # ## 3.5. Exogenous Variables
@@ -175,10 +172,11 @@ print(f_with_z)
 # --- One-step-ahead comparison ---
 preds_no_z   = f_no_z.predict(df_test_z)
 preds_with_z = f_with_z.predict(df_test_z, exog=exog_test)
-max_lag = 3
-actual_x3 = df_test_z['X3'].values[max_lag:]
-mse_no_1  = np.mean((actual_x3 - preds_no_z['X3'].dropna().values[:len(actual_x3)])**2)
-mse_wi_1  = np.mean((actual_x3 - preds_with_z['X3'].dropna().values[:len(actual_x3)])**2)
+# Score both models on the same rows (those where both predictions exist)
+mask_x3 = preds_no_z['X3'].notna() & preds_with_z['X3'].notna()
+actual_x3 = df_test_z.loc[mask_x3, 'X3']
+mse_no_1  = np.mean((actual_x3 - preds_no_z.loc[mask_x3, 'X3'])**2)
+mse_wi_1  = np.mean((actual_x3 - preds_with_z.loc[mask_x3, 'X3'])**2)
 print(f'\nOne-step X3 MSE — no exog: {mse_no_1:.4f}, with exog Z: {mse_wi_1:.4f}  '
       f'({(mse_no_1-mse_wi_1)/mse_no_1*100:+.1f}%)')
 
@@ -212,6 +210,8 @@ print(f_with_z.feature_importance('X3').to_string(index=False))
 # ## 4. Multi-Step Ahead Forecasting
 #
 # Forecast 100 steps with the full true graph. All variables use causal models; X0 uses its own lag-1 (autoregressive).
+#
+# The process is stationary, so iterated forecasts decay toward the series mean within a few steps. Over the full 100-step horizon the normalized MSE (MSE divided by the test-set variance) is therefore close to 1 for every variable; the gain from the model is concentrated in the first steps.
 
 # %%
 horizon = len(df_test)
@@ -248,7 +248,7 @@ for var in var_names:
 #
 # Compare the causal forecaster (only true parents as features) against a baseline that uses **all variables at all lags** — i.e., a standard VAR-style approach without causal feature selection.
 #
-# > **Note:** The causal model is not expected to win on raw prediction error here. The comparison is included to illustrate the tradeoff — see the interpretation cell below.
+# Both models use Ridge regression and are scored on the same test rows.
 
 # %%
 from sklearn.linear_model import Ridge
@@ -274,40 +274,33 @@ causal = CausalForecaster(
 )
 causal.fit(df_train)
 
-# One-step-ahead out-of-sample evaluation
+# One-step-ahead out-of-sample evaluation.
+# predict() returns a frame on the same row index as its input, with NaN in the
+# first rows where a target's lagged parents are unavailable. Score every model
+# on the same rows (t >= max_lag), compared index-by-index with the actual values.
 causal_preds = causal.predict(df_test)
 baseline_preds = baseline.predict(df_test)
+eval_rows = df_test.index[max_lag:]
 
 print(f'{"Variable":<8} {"Causal MSE":>12} {"Baseline MSE":>14} {"Improvement":>12}')
 print('-' * 50)
 for var in var_names:
-    if var not in baseline_preds.columns:
-        continue
-    actual = df_test[var].values[max_lag:]
-    c_pred = causal_preds[var].dropna().values[:len(actual)]
-    b_pred = baseline_preds[var].dropna().values[:len(actual)]
-    n = min(len(actual), len(c_pred), len(b_pred))
-    mse_c = np.mean((actual[:n] - c_pred[:n]) ** 2)
-    mse_b = np.mean((actual[:n] - b_pred[:n]) ** 2)
+    actual = df_test.loc[eval_rows, var]
+    mse_c = np.mean((actual - causal_preds.loc[eval_rows, var]) ** 2)
+    mse_b = np.mean((actual - baseline_preds.loc[eval_rows, var]) ** 2)
     improvement = (mse_b - mse_c) / mse_b * 100
     print(f'{var:<8} {mse_c:>12.4f} {mse_b:>14.4f} {improvement:>+11.1f}%')
 
 # %% [markdown]
 #
-# **Why use a causal model then?**
+# On this linear system the two models are roughly tied: one-step MSE differs by a few percent per variable, in both directions (the causal model is ahead on five of six variables, behind on X1). With 500 training rows and 18 lagged features per target, the dense model's extra coefficients are estimated close to zero, so restricting features to the causal parents does not buy much accuracy here.
 #
-# | Property | Causal model | Dense baseline |
-# |----------|-------------|----------------|
-# | Stable under intervention | Yes | No — correlations break when you externally force a variable |
-# | Interpretable coefficients | Yes | No — mixes direct and indirect effects |
-# | Generalizes across distribution shifts / regime changes | Yes | No |
-#
-# The dense baseline is exploiting *spurious-but-stable* correlations that hold in the training distribution. If the distribution shifts — a new regime, an external intervention, a policy change — those correlations break and the causal model is the one that stays valid.
+# What the causal model does give is a smaller, interpretable model: each coefficient is a direct effect of a parent at a specific lag (see Section 7), and the predictors are causes of the target rather than merely correlated with it. A dense model fitted to observational data can rely on non-causal predictors whose relation to the target may change if the system is intervened on or its regime shifts; this example does not test that setting.
 
 # %% [markdown]
 # ## 6. Custom Models
 #
-# Any sklearn-compatible regressor works. Here we compare Linear, Ridge, and Random Forest.
+# Any sklearn-compatible regressor works. Here we compare Linear, Ridge, and Random Forest, scored on the same test rows as above. On this linear system, Linear and Ridge give almost identical errors and the Random Forest is worse on every variable.
 
 # %%
 from sklearn.linear_model import LinearRegression
@@ -326,11 +319,9 @@ for name, model in models.items():
     preds = f.predict(df_test)
     mses = {}
     for var in var_names:
-        if var in preds.columns and var in f.models_:
-            actual = df_test[var].values[max_lag:]
-            pred = preds[var].dropna().values[:len(actual)]
-            n = min(len(actual), len(pred))
-            mses[var] = np.mean((actual[:n] - pred[:n]) ** 2)
+        if var in f.models_:
+            actual = df_test.loc[eval_rows, var]
+            mses[var] = np.mean((actual - preds.loc[eval_rows, var]) ** 2)
     results[name] = mses
 
 print(f'{"Variable":<8}', end='')
@@ -369,12 +360,11 @@ plt.show()
 # %% [markdown]
 # ## 8. End-to-End: Discovery to Forecast
 #
-# Full pipeline: discover the graph with CDNOTS, then forecast.
+# Full pipeline: discover the graph with CDNOTS, then forecast. The 100-step forecast errors from the discovered graph are close to those from the true graph, even though discovery recovers only part of the edge set.
 
 # %%
 from causalts import run_cdnots
 from causalts.ci_tests import PartialCorr
-from causalts.effects import wrap_graph
 from causalts.utils import evaluate_graph
 
 # Discover
@@ -386,9 +376,9 @@ _res = run_cdnots(
 m = evaluate_graph(_res.cg_tig, true_graph)
 print(f'Discovery: F1={m["F1"]:.2f}, Precision={m["Precision"]:.2f}, Recall={m["TPR"]:.2f}')
 
-# Forecast using discovered graph
-cg_wrapped = wrap_graph(_res.cg_tig, df_train)
-fc = cg_wrapped.forecast(include_contemp=False)
+# Forecast using the discovered graph
+fc = CausalForecaster(_res.cg_tig, var_names=var_names, include_contemp=False)
+fc.fit(df_train)
 print(f'\n{fc}')
 
 fcast_disc = fc.forecast_horizon(df_train, horizon=len(df_test))
@@ -415,13 +405,10 @@ for var in var_names:
 # | R² scores | `forecaster.score(df, exog=exog_df)` |
 # | Multi-step forecast | `forecaster.forecast_horizon(df, horizon=N, exog_future=exog_N)` |
 # | Feature importance | `forecaster.feature_importance(target)` |
-# | Via WrappedGraph | `cg.forecast(include_contemp=False)` |
+# | Third-party graph array | `wrap_graph(arr, df).forecast(include_contemp=False)` |
 #
 # **Key design:**
 # - Causal parents → sklearn model (any regressor)
 # - Exogenous variables → lag-0 features added to all causal models; future values required at forecast time
-# - Parentless variables → auto-selected AR(1–3) or ETS fallback (by AIC); AR wins for stationary series, ETS wins for trending/seasonal ones
-# - Multi-step iterates: ETS/AR forecasts exogenous → causal model uses those as inputs
-
-# %% [markdown]
-#
+# - Parentless variables → AR(1–3) or ETS fallback, selected by held-out multi-step MSE (skipped when `exog` is given)
+# - Multi-step forecasts iterate: the AR/ETS fallback forecasts parentless variables, and the causal models use those forecasts as inputs

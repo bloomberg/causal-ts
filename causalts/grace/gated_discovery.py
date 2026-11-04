@@ -1097,9 +1097,12 @@ class GatedCausalDiscovery(LightningModule):
 
         Parameters
         ----------
-        skeleton : [cause, effect, lag] with lag 0..max_lag — binary
-        pos_val : log_alpha value for edges in skeleton
-        neg_val : log_alpha value for edges not in skeleton
+        skeleton : numpy.ndarray
+            Binary ``(d, d, max_lag + 1)`` array indexed ``[cause, effect, lag]``.
+        pos_val : float
+            log_alpha value for edges in the skeleton.
+        neg_val : float
+            log_alpha value for edges not in the skeleton.
         """
         # Convert from [cause, effect, lag(0..L)] to internal [cause, lag(L..0), effect]
         skel_internal = np.transpose(skeleton[:, :, ::-1], (0, 2, 1)).copy()
@@ -1112,7 +1115,8 @@ class GatedCausalDiscovery(LightningModule):
 
         Parameters
         ----------
-        skeleton : [cause, effect, lag] with lag 0..max_lag — binary
+        skeleton : numpy.ndarray
+            Binary ``(d, d, max_lag + 1)`` array indexed ``[cause, effect, lag]``.
         """
         # Convert to internal [cause, lag(L..0), effect]
         skel_internal = np.transpose(skeleton[:, :, ::-1], (0, 2, 1)).copy()

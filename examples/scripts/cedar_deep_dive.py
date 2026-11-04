@@ -19,11 +19,13 @@
 #
 # **CEDAR** (Causal Edge Discovery for Autoregressive processes) is a constraint-based algorithm for causal discovery in autoregressive time series. Its key idea is to avoid the exponential conditioning-set explosion of PC/PCMCI by using *minimum-lag selection* to build small, targeted conditioning sets.
 #
-# ### How it works (3-phase pipeline)
+# ### How it works (lag selection plus three phases)
 #
 # ```
 # Phase 0  Lag selection
-#          Compute distance correlation (dcor) between all variable pairs at each lag.
+#          Score every variable pair at each lag. The default lag_method='partial_dcor'
+#          uses the unbiased distance correlation between Xi(t-k) and Xj(t) after
+#          residualising Xj(t) on Xj(t-1), which removes Xj's own AR(1) contribution.
 #          Run a t-test (or permutation) to find which lags are statistically significant.
 #          Select the most important lag per pair as the "minimum lag" w_{ij}.
 #
@@ -35,7 +37,7 @@
 # Phase 2  Condition 2 — independence test (AR check)
 #          Test Xi(t-1) ⊥ Xj(t+w) | {same conditioning set, Xi(t)}
 #          Accept the final edge if p ≥ α_cond2.
-#          (AR/Markov screen: Xi(t) must render Xi(t-1) independent of Xj.
+#          (AR/Markov screen: Xi(t) must render Xi(t-1) independent of Xj.)
 #
 # Phase 3  MCI pruning (optional)
 #          For each accepted edge Xi(t-τ) → Xj(t), run one more CI test
@@ -47,20 +49,20 @@
 # | Property | Details |
 # |-----------|---------|
 # | **Complexity** | O(d²) CI tests (vs O(d^k) for PC/FCI) |
-# | **Lag selection** | Unbiased U-centered dcor — detects nonlinear lags, not just linear |
+# | **Lag selection** | Distance correlation (default `partial_dcor`) — detects nonlinear lags, not just linear |
 # | **CI test** | Any `causalts.ci_tests` instance (ParCorr, KCI, SplitKCI, DFCIT, …) |
-# | **target_var** | Discover causes of a single variable: O(d) tests — unique to CEDAR |
+# | **target_var** | Discover causes of a single variable with O(d) tests |
 # | **Multi-lag** | Can report all accepted lags per pair, not just the top one |
 # | **MCI pruning** | Stable (order-independent) removal of indirect edges |
 #
 # ---
 #
 # ## Notebook contents
-# 1. Head-to-head vs CDNOTS and old CEDAR on all standard benchmarks
+# 1. Head-to-head vs CDNOTS on the standard benchmarks
 # 2. Ablation: effect of key options (`multi_lag_keep`, `filter_children`, `prune`, …)
 # 3. Lag selection diagnostics — where and why lags are wrong
 # 4. Scaling to larger graphs (d=20 Erdős–Rényi)
-# 5. **Target-variable mode** — discover causes of a single variable (unique to CEDAR)
+# 5. **Target-variable mode** — discover causes of a single variable
 # 6. Nonlinear datasets with kernel CI tests
 # 7. Plotting
 # 8. Background knowledge
@@ -75,7 +77,7 @@ import time
 import numpy as np
 import pandas as pd
 from causalts.ci_tests import ParCorrGPU, SplitKCIGPU, KCIGPU
-from causalts.cedar import SYPI, Cedar, run_cedar, CedarResult
+from causalts.cedar import run_cedar
 from causalts import run_cdnots
 from causalts.synthetic_data import synthetic_datasets as sd
 from causalts.utils.helpers import precision_recall_3d, shd_3d
@@ -141,18 +143,11 @@ for name, data in datasets.items():
 
     for method, run_fn in [
         ('CDNOTS', lambda: run_cdnots(df, ci, num_lags=ml, alpha=0.05)),
-        ('Old CEDAR', None),
         ('keep=first', lambda: run_cedar(df, ci, max_lag=ml, multi_lag_keep='first')),
         ('keep=all', lambda: run_cedar(df, ci, max_lag=ml, multi_lag_keep='all')),
     ]:
         t0 = time.time()
-        if method == 'Old CEDAR':
-            so = SYPI(data=df, ci_test=ci, max_lag=ml, lag_sel_algo='dcor',
-                      p_cond1=0.05, p_cond2=0.05, make_log=False,
-                      filter_potential_children=True, cache_dir='/tmp/nb_cache')
-            so.run_ts_causality()
-            est = so.graph_pruned if so.graph_pruned is not None else so.graph
-        elif method == 'CDNOTS':
+        if method == 'CDNOTS':
             res = run_fn()
             est = res.cg_tig[:d, :d, :]
         else:
@@ -173,7 +168,7 @@ import causalts.plotting as tp
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-methods_list = ['CDNOTS', 'Old CEDAR', 'keep=first', 'keep=all']
+methods_list = ['CDNOTS', 'keep=first', 'keep=all']
 
 def _align(est, gt):
     """Pad or trim the lag axis so shapes match."""
@@ -188,9 +183,9 @@ for ds_name, ds_data in datasets.items():
     gt_edges  = int(gt.astype(bool).sum())
     ds_rows   = results_df[results_df['dataset'] == ds_name]
 
-    fig = plt.figure(figsize=(24, 4.5))
-    gs  = gridspec.GridSpec(1, 5, figure=fig,
-                            width_ratios=[2.0, 1.2, 1.2, 1.2, 1.2],
+    fig = plt.figure(figsize=(20, 4.5))
+    gs  = gridspec.GridSpec(1, 4, figure=fig,
+                            width_ratios=[2.0, 1.2, 1.2, 1.2],
                             wspace=0.06)
 
     # ── Col 0: metrics table ──────────────────────────────────────────────
@@ -223,7 +218,7 @@ for ds_name, ds_data in datasets.items():
         fontsize=10, loc='left', pad=10, fontweight='bold',
     )
 
-    # ── Cols 1-4: compare graphs (TP/FP/FN coloring) ─────────────────────
+    # ── Cols 1-3: compare graphs (TP/FP/FN coloring) ─────────────────────
     pos = None
     for col_idx, method in enumerate(methods_list):
         ax    = fig.add_subplot(gs[0, col_idx + 1])
@@ -316,7 +311,9 @@ for config_name, kwargs in configs.items():
 # %% [markdown]
 # ## 3. Lag Selection Diagnostics
 #
-# For each ground-truth edge, show what lag was selected and why.
+# For each ground-truth edge, show what lag was selected and why. The scores, p-values
+# and selected lags are taken from a default `run_cedar` call (`lag_method='partial_dcor'`,
+# `lag_pvalue_method='t_test'`), so they are exactly what Phase 0 used.
 
 # %%
 import causalts.plotting as tp
@@ -329,16 +326,14 @@ data = load_dataset(ds_name)
 df, gt, ml = data['df'], data['gt_clean'], data['max_lag']
 cols = list(df.columns)
 
-from causalts.cedar.discovery import _normalize
-from causalts.cedar.lag_selection import (
-    compute_lag_importance, compute_lag_pvalues,
-    select_lags, select_all_significant_lags,
-)
+from causalts.cedar.lag_selection import select_all_significant_lags
 
-data_norm = _normalize(df.values.astype(np.float64), 'minmax')
-lag_imp   = compute_lag_importance(data_norm, ml, method='dcor')
-lag_pvals = compute_lag_pvalues(data_norm, lag_imp, ml, method='t_test')
-sel_lags  = select_lags(lag_imp, lag_pvals, alpha=0.05)
+ci_diag   = ParCorrGPU(np.zeros((2, 2)), device=DEVICE)
+res_diag  = run_cedar(df, ci_diag, max_lag=ml)   # defaults: partial_dcor + t_test
+lag_imp   = res_diag.lag_importance
+lag_pvals = res_diag.lag_pvalues
+sel_lags  = res_diag.selected_lags
+# BH-corrected significance at lag_alpha=0.05, as in Phase 0
 sig_mask  = select_all_significant_lags(lag_imp, lag_pvals, alpha=0.05)
 
 # All true-edge pairs (ordered by true lag for readability)
@@ -376,7 +371,7 @@ for ax, (c, e, true_lag) in zip(all_axes, true_edges):
     ax.set_title(f"{cols[c]}→{cols[e]}\ntrue τ={true_lag}  sel={sel_str} {tick}",
                  fontsize=8, pad=3)
     ax.set_xlabel("lag τ", fontsize=7)
-    ax.set_ylabel("dcor", fontsize=7)
+    ax.set_ylabel("partial dcor", fontsize=7)
     ax.set_xticks(lags_x)
     ax.tick_params(labelsize=7)
     ax.set_ylim(bottom=0)
@@ -386,7 +381,7 @@ for ax in all_axes[n_panels:]:
     ax.set_visible(False)
 
 legend_elements = [
-    Patch(facecolor='#2196F3', label='significant lag (p<0.05)'),
+    Patch(facecolor='#2196F3', label='significant lag (BH-adjusted p<0.05)'),
     Patch(facecolor='#BDBDBD', label='non-significant lag'),
     Line2D([0], [0], marker='*', color='gold', markersize=10,
            linestyle='none', label='selected lag (★)'),
@@ -396,14 +391,14 @@ legend_elements = [
 fig.legend(handles=legend_elements, loc='lower center',
            ncol=4, fontsize=9, bbox_to_anchor=(0.5, -0.04))
 fig.suptitle(
-    f"{data['name']} — Lag importance (dcor) for every true-edge pair\n",
+    f"{data['name']} — Lag importance (partial_dcor) for every true-edge pair\n",
     fontsize=11, y=1.01,
 )
 plt.tight_layout()
 plt.show()
 
 # %%
-result.plot_lag_importance(figsize=(12, 8), maximum=1.0, show_gridlines=True);
+res_diag.plot_lag_importance(figsize=(12, 8), maximum=1.0, show_gridlines=True);
 
 # %% [markdown]
 # ## 4. Scaling to Larger Graphs (d=20)
@@ -452,12 +447,14 @@ print(f'{"CEDAR keep=all":30s} | {t1:6.2f}s | {e:3d} | {p:.3f} {r:.3f} {f:.3f} {
 # %% [markdown]
 # ## 5. Target-Variable Mode
 #
-# **Unique to CEDAR:** Discover causes of a single target variable without running the full d-variable machinery. This is especially valuable for:
+# `run_cedar(..., target_var=...)` discovers the causes of a single target variable and only tests pairs that involve the target, so the number of CI tests grows with d rather than d². This is useful for:
 # - Large systems where you only care about one outcome
 # - Root-cause analysis: "what drives variable X?"
 # - Interactive exploration: test one variable at a time
 #
-# CDNOTS, GRACE, and PCMCI do NOT support this — they always discover the full graph.
+# Other single-target routes in the library:
+# - `causalts.select_features(df, target, algo=...)` wraps this mode (`algo='cedar'`) and also offers `algo='fastpc'` (a local PC skeleton around the target, also O(d)) and `algo='cdnots'` (full CDNOTS sliced to the target's neighbourhood, O(d²)). See the feature-selection example.
+# - The tigramite wrappers (`run_pcmci`, `run_pcmciplus`) accept `selected_links` to restrict testing to links into the target.
 
 # %%
 # Demo on the d=20 graph: discover causes of one variable
@@ -572,6 +569,11 @@ result.plot(figsize=(8, 6));
 #
 # - **Forbidden** edges are skipped before any CI test (zero wasted computation).
 # - **Required** edges are force-included in the final graph and protected from MCI pruning.
+#
+# The demo below forbids the first false positive of a baseline run and requires its first
+# false negative. If the baseline has no false positive, it forbids an edge the baseline did
+# find (a true edge, here) instead, only to show that a forbidden edge is removed; in practice
+# you forbid edges that domain knowledge rules out.
 
 # %%
 data_ex2 = load_dataset('ex2')
@@ -599,16 +601,39 @@ fns = [
 ]
 print(f"FPs: {fps[:2]}  FNs: {fns[:2]}")
 
-# Apply background knowledge: forbid the first FP, require the first FN
+# Edge to forbid: the first FP, or (if there is none) the first edge the baseline found
+found = [
+    (cols_ex2[c], cols_ex2[eff], int(tau))
+    for c in range(d_ex2) for eff in range(d_ex2) for tau in range(1, 4)
+    if res_base.cg_tig[c, eff, tau] == 1 and c != eff
+]
+forbid = fps[:1] if fps else found[:1]
+require = fns[:1]
+print(f"Forbidding {forbid} ({'false positive' if fps else 'edge found by the baseline'}); "
+      f"requiring {require}")
+
+# Apply background knowledge
 ci_bk2  = ParCorrGPU(np.zeros((2, 2)), device=DEVICE)
-res_bk  = run_cedar(
-    df_ex2, ci_bk2, max_lag=3,
-    forbidden=fps[:1],   # remove a spurious edge
-    required=fns[:1],    # restore a missed edge
-)
+res_bk  = run_cedar(df_ex2, ci_bk2, max_lag=3, forbidden=forbid, required=require)
 p2, r2, f2, s2, e2 = eval_graph(res_bk.cg_tig, gt_ex2)
 print(f"With BK  : F1={f2:.3f}  Prec={p2:.3f}  Rec={r2:.3f}  SHD={s2}")
+for name, (cv, ev, tau) in [("forbidden", e) for e in forbid] + [("required", e) for e in require]:
+    present = bool(res_bk.cg_tig[cols_ex2.index(cv), cols_ex2.index(ev), tau])
+    print(f"  {name} edge {cv}(t-{tau}) -> {ev} in result: {present}")
+fps_bk = [
+    (cols_ex2[c], cols_ex2[eff], int(tau))
+    for c in range(d_ex2) for eff in range(d_ex2) for tau in range(1, 4)
+    if res_bk.cg_tig[c, eff, tau] == 1 and gt_ex2[c, eff, tau] == 0 and c != eff
+]
+print(f"  false positives with BK: {fps_bk}")
 print(res_bk)
+
+# %% [markdown]
+# The required edge is added and the forbidden edge is gone. Because the forbidden edge
+# was a true edge here, the scores drop: recall is unchanged only because the required
+# edge replaces the missed one, and CEDAR now reports the same pair at a different lag
+# (the false positive listed above). A forbidden entry with a lag removes only that lag;
+# pass `None` as the lag to forbid the pair at every lag.
 
 # %% [markdown]
 # ## 9. Effect Estimation (DoWhy)
@@ -622,15 +647,14 @@ data_ex3 = load_dataset('ex3')
 df_ex3   = data_ex3['df']
 gt_ex3   = data_ex3['gt_clean']
 cols_ex3 = list(df_ex3.columns)
-ci_bk    = ParCorrGPU(np.zeros((2, 2)), device=DEVICE)
+ci_ex3   = ParCorrGPU(np.zeros((2, 2)), device=DEVICE)
 
-# Baseline — no background knowledge
-res_base = run_cedar(df_ex3, ci_bk, max_lag=3)
+# Discover the graph on ex3 (11 variables) with default settings
+res_ex3 = run_cedar(df_ex3, ci_ex3, max_lag=3)
 
 try:
-    # Reuse the background-knowledge result (ex3, 11 vars)
     # ATE: causal effect of PKC(t-1) on Mek(t)
-    effect = res_base.estimate_effect(
+    effect = res_ex3.estimate_effect(
         treatment='PKC', outcome='Mek', treatment_lag=1,
         method='backdoor.linear_regression',
         confidence_intervals=False,
@@ -638,8 +662,8 @@ try:
     print(f"ATE  PKC(t-1) → Mek : {effect.value:+.4f}")
 
     # SCM + counterfactual: what if PKC were zero?
-    _, _, lagged_df = res_base.fit_scm(mechanism_type='linear')
-    cf = res_base.counterfactual(intervention={'PKC_lag1': 0.0}, target='Mek')
+    _, _, lagged_df = res_ex3.fit_scm(mechanism_type='linear')
+    cf = res_ex3.counterfactual(intervention={'PKC_lag1': 0.0}, target='Mek')
     print(f"Counterfactual Mek (do PKC=0) : mean={cf.mean():+.4f}  "
           f"vs observed mean={lagged_df['Mek'].mean():+.4f}")
 
@@ -681,7 +705,7 @@ ci_varem   = ParCorrGPU(np.zeros((2, 2)), device=DEVICE)
 res_full    = run_cedar(df_full, ci_full,  max_lag=3)
 res_pw      = run_cedar(df_miss, ci_pw,    max_lag=3)
 
-# Strategy 2: VAR-EM — fill NaN before discovery (better for MCAR/MAR data)
+# Strategy 2: VAR-EM — fill NaN with a fitted VAR model before discovery
 res_varem   = run_cedar(df_miss, ci_varem, max_lag=3, impute='var_em')
 
 pf, rf, ff, sf, _ = eval_graph(res_full.cg_tig,  gt_mv)
@@ -691,6 +715,13 @@ pv, rv, fv, sv, _ = eval_graph(res_varem.cg_tig, gt_mv)
 print(f"No missing          :  F1={ff:.3f}  Prec={pf:.3f}  Rec={rf:.3f}  SHD={sf}  n_tests={res_full.n_tests}")
 print(f"15% NaN, pairwise   :  F1={fp:.3f}  Prec={pp:.3f}  Rec={rp:.3f}  SHD={sp}  n_tests={res_pw.n_tests}")
 print(f"15% NaN, var_em     :  F1={fv:.3f}  Prec={pv:.3f}  Rec={rv:.3f}  SHD={sv}  n_tests={res_varem.n_tests}")
+
+# %% [markdown]
+# In this run, pairwise-complete deletion on the 15%-missing data reproduces the
+# full-data result, while `var_em` imputation adds false positives (precision 1.000 →
+# 0.750). Pairwise-complete is the safer default when values are missing completely at
+# random; consider `var_em` when missingness is heavier or depends on observed values,
+# and check its output for extra edges.
 
 # %% [markdown]
 # ## 11. Nonstationary Time Series (C Node)
@@ -788,6 +819,3 @@ for c_i in range(d_ct, d_ct + 2):
         if res_c.cg_tig[c_i, e_j, :].any():
             lag = int(np.argmax(res_c.cg_tig[c_i, e_j, :]))
             print(f"  {cols_ct_c[c_i]}(t-{lag}) -> {cols_ct[e_j]}")
-
-
-# %%

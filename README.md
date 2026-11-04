@@ -11,14 +11,16 @@
 
 📚 **[Full documentation is on Read the Docs](https://causal-ts.readthedocs.io/en/latest/)** — algorithm deep-dives, CI test guide, CLI reference, and worked example notebooks.
 
-Causal-TS is a Python framework for causal discovery in time series data. It implements four discovery algorithms and a suite of GPU-accelerated conditional independence tests, both linear and nonlinear, along with built-in visualization and evaluation tools.
+Causal-TS is a Python framework for causal discovery in time series data. It implements five discovery algorithms, a suite of conditional independence tests (linear and nonlinear, GPU-accelerated where it helps), latent-confounder correction, DoWhy-based effect estimation, and built-in visualization and evaluation tools.
 
 **Algorithms:**
 
 - **CDNOTS** — Constraint-based discovery handling nonstationarity via a time-index node.
-- **CDNOTS+** — PCMCI+-style two-phase skeleton (MCI conditioning) for improved precision on dense graphs.
-- **CEDAR** — Scalable pairwise discovery using minimum-lag selection. O(d²) complexity.
-- **GRACE / REAP** — Hybrid: a directed candidate graph (CDNOTS by default, or any method's graph) + grow-shrink refinement for high-dimensional data, by neural L0 gates (GRACE) or by regression (REAP).
+- **CDNOTS+** — PCMCI+-style two-phase skeleton (MCI conditioning on discovered parents), avoiding over-conditioning on dense graphs.
+- **CEDAR** — Pairwise discovery for autoregressive processes using minimum-lag selection. O(d²) pairs.
+- **GRACE / REAP** — Grow-shrink refinement of a directed candidate graph (CDNOTS by default, or any method's graph), by neural L0 gates (GRACE) or by regression (REAP).
+
+**Also:** `causal-ts inspect` / `inspect_df` recommend a configuration from the data; LUCID corrects a discovered graph for latent confounders; effect estimation, SCMs and counterfactuals through DoWhy; regime discovery; missing and mixed discrete-continuous data; PCMCI/PCMCI+/LPCMCI through tigramite.
 
 **CI Tests:** Run `causal-ts ci-test-info` for a full selection guide.
 
@@ -26,14 +28,15 @@ Causal-TS is a Python framework for causal discovery in time series data. It imp
 |------|------|-------|
 | `parcorr-gpu` | Linear | instant |
 | `gcmi` | Monotone nonlinear | instant |
-| `splitkci` | Nonlinear (kernel) | fast |
-| `rcot` | Nonlinear (RFF) | fast |
+| `raft` / `rift` | Random-feature F-test (conditional mean) | fast |
+| `rcot` | Nonlinear (RFF, full CI) | fast |
+| `splitkci` | Nonlinear (kernel) | moderate |
 | `linsig` | Path-space (linear signature) | moderate |
 | `kci` | Nonlinear (kernel) | slow |
 | `dfcit` | Distribution-free | moderate |
 | `gcm` / `wgcm` / `pcm` | Residual score (regression) | fast |
-| `raft` / `rift` | Random-feature F-test (regression) | fast |
 | `cmiknn-gpu` | Nonparametric (k-NN) | slow |
+| `cmiknn-mixed-gpu` | Mixed discrete-continuous (k-NN) | slow |
 
 
 ## Getting Started
@@ -77,9 +80,8 @@ To let a coding agent drive causal-ts, run `causal-ts install-skill` — see the
 ## Quick Start
 
 ```python
-import numpy as np
 from causalts.synthetic_data.synthetic_datasets import load_dataset
-from causalts.ci_tests import SplitKCIGPU
+from causalts.ci_tests import RAFTCI
 from causalts import run_cdnots
 from causalts.utils import evaluate_graph
 from causalts.plotting import compare_graphs
@@ -89,7 +91,7 @@ data = load_dataset("ex1", seed=42, T=500)
 df, ground_truth = data["df"], data["ground_truth"]
 
 # 2. Run CDNOTS causal discovery
-ci_test = SplitKCIGPU(np.zeros((2, 2)), device="cpu")
+ci_test = RAFTCI(df.values)   # fast nonlinear (conditional-mean) test
 res = run_cdnots(
     df=df, indep_test=ci_test, num_lags=data["max_lag"],
     include_C=True, alpha=0.05, stable=True,
