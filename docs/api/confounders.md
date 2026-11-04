@@ -8,7 +8,8 @@ observed controls cannot block a factor that loads on everything.
 
 LUCID infers the regime from the residual spectrum — against the Marchenko–Pastur
 no-factor null — and applies the matching correction. Both branches run the *same*
-base discovery engine, so the regime affects only the correction that follows.
+base discovery engine, so the regime affects only the correction that follows. See
+[arXiv:2609.31315](https://arxiv.org/abs/2609.31315).
 
 ```python
 from causalts.confounders import (

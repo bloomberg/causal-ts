@@ -231,6 +231,8 @@ If you use Causal-TS in your research, please cite:
 >
 > Fesanghary, Havaldar. "GRACE: Gated Refinement for Accurate Causal Edge Discovery in High-Dimensional Time Series." [arXiv:2606.23880](https://arxiv.org/abs/2606.23880), 2026.
 >
+> Fesanghary. "LUCID: Learning Under Confounding for Inference and Discovery in Time Series." [arXiv:2609.31315](https://arxiv.org/abs/2609.31315), 2026.
+>
 > Sadeghi, Gopal, Fesanghary. "Causal Discovery from Nonstationary Time Series." *International Journal of Data Science and Analytics*, 19, pp. 33–59, 2025. [doi:10.1007/s41060-024-00679-7](https://doi.org/10.1007/s41060-024-00679-7)
 
 :::{dropdown} BibTeX
@@ -253,6 +255,13 @@ If you use Causal-TS in your research, please cite:
   title={GRACE: Gated Refinement for Accurate Causal Edge Discovery in High-Dimensional Time Series},
   author={Fesanghary, Mohammad and Havaldar, Abhinav},
   journal={arXiv preprint arXiv:2606.23880},
+  year={2026}
+}
+
+@article{fesanghary2026lucid,
+  title={LUCID: Learning Under Confounding for Inference and Discovery in Time Series},
+  author={Fesanghary, Mohammad},
+  journal={arXiv preprint arXiv:2609.31315},
   year={2026}
 }
 
