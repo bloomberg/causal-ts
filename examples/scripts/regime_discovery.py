@@ -23,15 +23,21 @@
 #
 # Standard causal discovery algorithms assume a fixed lag structure and struggle with these systems. The `causalts.regime` module addresses this by:
 #
-# 1. **Detecting regimes** via changepoint detection (PELT, Levene, KS, CUSUM, Ensemble, or HMM)
+# 1. **Detecting regimes** via changepoint detection (PELT, Levene, KS, CUSUM, Ensemble, or HMM), or from quantiles, calendar seasons, rolling statistics or an explicit indicator column (`QuantileRegimeDetector`, `SeasonalRegimeDetector`, `ChangePointRegimeDetector`, `ColumnRegimeDetector`)
 # 2. **Running discovery per regime** with regime-appropriate `max_lag`
 # 3. **Aggregating** per-regime graphs into a summary
 #
-# This notebook demonstrates the approach on synthetic data with known regime-dependent lags, comparing 8 different regime detectors across 4 types of regime change (mean shift, variance shift, shape shift, gradual drift).
+# This notebook demonstrates the approach on synthetic data with known regime-dependent lags. A mean-shift example walks through the workflow with PELT; then six changepoint detectors (eight configurations, counting two CUSUM targets and HMM with a fixed or automatic number of regimes) are compared on three further types of regime change (variance shift, shape shift, gradual drift). §10 applies the approach to the Elbe river benchmark.
 
 # %%
+import logging
 import warnings
 warnings.filterwarnings('ignore')
+# hmmlearn reports "Model is not converging" through logging when an EM step
+# lowers the log-likelihood slightly (a numerical-precision effect). The fit
+# still returns a segmentation, which the F1 tables below evaluate, so the
+# message is silenced here.
+logging.getLogger("hmmlearn").setLevel(logging.ERROR)
 
 import numpy as np
 import pandas as pd
@@ -75,7 +81,7 @@ def _chain_ground_truth(d=4):
 
 
 def generate_mean_shift_data(seed, T_total=1000, burnin=200):
-    """Regime 1 (t<500): mean~50, lag=1.  Regime 2: mean~10, lag=3."""
+    """Regime 1 (t<500): intercept 50, lag=1.  Regime 2: intercept 10, lag=3."""
     rng = np.random.default_rng(seed)
     T_raw = T_total + burnin
     d = 4
@@ -96,7 +102,7 @@ def generate_mean_shift_data(seed, T_total=1000, burnin=200):
 
 
 def generate_variance_shift_data(seed, T_total=1000, burnin=200):
-    """Same mean (30) throughout; noise amplitude 2 -> 8.  Lag 1 -> 3."""
+    """Same intercept (30) throughout; noise amplitude 2 -> 8.  Lag 1 -> 3."""
     rng = np.random.default_rng(seed)
     T_raw = T_total + burnin
     d = 4
@@ -117,7 +123,7 @@ def generate_variance_shift_data(seed, T_total=1000, burnin=200):
 
 
 def generate_shape_shift_data(seed, T_total=1000, burnin=200):
-    """Same mean/scale; noise switches Gaussian -> Laplace (heavier tails)."""
+    """Same intercept/noise scale; noise switches Gaussian -> Laplace (heavier tails)."""
     rng = np.random.default_rng(seed)
     T_raw = T_total + burnin
     d = 4
@@ -169,7 +175,7 @@ def generate_drift_data(seed, T_total=1000, burnin=200):
 # - **Regime 1** (t < 500): high activity, fast propagation — lag = 1
 # - **Regime 2** (t ≥ 500): low activity, slow propagation — lag = 3
 #
-# The mean level also shifts between regimes (50 vs 10), mimicking flood/dry conditions.
+# The intercept also shifts between regimes (50 vs 10), so the average level of the four series drops from about 100 to about 19, mimicking flood/dry conditions.
 
 # %%
 names = _CHAIN_NAMES
@@ -182,8 +188,8 @@ T = len(df)
 BURNIN_ORIG = 200
 
 print(f"T={T} (after discarding {BURNIN_ORIG} burn-in samples), d={d}, true edges={int(gt.sum())}")
-print(f"Regime 1 (t<500): A->B->C->D at lag 1, mean~50")
-print(f"Regime 2 (t>=500): A->B->C->D at lag 3, mean~10")
+print(f"Regime 1 (t<500): A->B->C->D at lag 1, mean level {data[:500].mean():.1f}")
+print(f"Regime 2 (t>=500): A->B->C->D at lag 3, mean level {data[500:].mean():.1f}")
 
 
 # %%
@@ -498,7 +504,7 @@ def print_multiseed_table(f1_by_method, n_seeds, title=None):
 # %% [markdown]
 # ### 8.1 Variance Shift
 #
-# Same chain graph **A → B → C → D**, but now the regime change is a **variance shift** — the mean stays at 30 throughout, but noise amplitude quadruples in regime 2. This is invisible to PELT with the default `signal="mean"` (its L2 cost tracks the mean, which is unchanged), but detectable by Levene, HMM, `PeltRegimeDetector(signal="volatility")`, and others.
+# Same chain graph **A → B → C → D**, but now the regime change is mainly a **variance shift** — the intercept stays at 30 throughout, but noise amplitude quadruples in regime 2. Levene, HMM and `PeltRegimeDetector(signal="volatility")` target this kind of change. The coupling coefficient also changes (0.6 → 0.5), which lowers the levels of B, C and D by a few units, so PELT with the default `signal="mean"` still has a small mean shift to work with.
 
 # %%
 # Variance-shift data: same mean, different noise amplitude per regime.
@@ -516,7 +522,7 @@ for i, name in enumerate(names_v):
 ax.axvline(500, color='red', linestyle='--', label='Regime change')
 ax.set_xlabel('Time'); ax.set_ylabel('Value')
 ax.legend(loc='upper right')
-ax.set_title('Variance-shift regime change (same mean=30, noise 2→8, burn-in discarded)')
+ax.set_title('Variance-shift regime change (intercept 30, noise 2→8, burn-in discarded)')
 plt.tight_layout()
 plt.show()
 
@@ -597,7 +603,7 @@ print_multiseed_table(f1_v, N_SEEDS, title="Variance-shift data — F1 over seed
 # %% [markdown]
 # ### 8.2 Distribution Shape Shift
 #
-# The regime change is a **distribution shape shift** — mean and variance stay similar, but the noise switches from Gaussian to Laplace (heavier tails). KS (which compares full CDFs), HMM (which learns full covariance), and Ensemble (via its kurtosis feature) are designed to pick this up; the multi-seed table below shows how each detector actually fares.
+# The regime change is a **distribution shape shift** — the noise switches from Gaussian (sd 3) to Laplace with about the same standard deviation, so the tails get heavier while the scale stays similar. KS (which compares full CDFs), HMM (which learns full covariance), and Ensemble (via its kurtosis feature) are designed to pick this up. As in §8.1, the coupling coefficient also drops from 0.6 to 0.5, which lowers the levels of B, C and D by 5–10 units; mean-based detectors (PELT, CUSUM on the mean) can use that shift. The multi-seed table below shows how each detector actually fares.
 
 # %%
 # Shape-shift data: Gaussian -> Laplace noise (same mean, similar scale).
@@ -609,10 +615,14 @@ data_s = df_s.values
 T_s = len(df_s)
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 3))
-axes[0].hist(data_s[:500].ravel(), bins=50, alpha=0.6, density=True, label='Regime 1 (Gaussian)')
-axes[0].hist(data_s[500:].ravel(), bins=50, alpha=0.6, density=True, label='Regime 2 (Laplace)')
+# Centre each variable within its regime before pooling, so the histogram and
+# kurtosis reflect the noise shape rather than the different levels of A-D.
+r1 = data_s[:500] - data_s[:500].mean(axis=0)
+r2 = data_s[500:] - data_s[500:].mean(axis=0)
+axes[0].hist(r1.ravel(), bins=50, alpha=0.6, density=True, label='Regime 1 (Gaussian)')
+axes[0].hist(r2.ravel(), bins=50, alpha=0.6, density=True, label='Regime 2 (Laplace)')
 axes[0].legend()
-axes[0].set_title('Distribution comparison')
+axes[0].set_title('Distribution comparison (each variable centred)')
 
 axes[1].plot(data_s[:, 0], alpha=0.7, linewidth=0.5)
 axes[1].axvline(500, color='red', linestyle='--')
@@ -625,8 +635,11 @@ plt.show()
 
 from scipy.stats import kurtosis
 print(f"T={T_s} (seed={SEED}, burn-in discarded)")
-print(f"Regime 1 kurtosis: {kurtosis(data_s[:500].ravel()):.2f} (Gaussian ≈ 0)")
-print(f"Regime 2 kurtosis: {kurtosis(data_s[500:].ravel()):.2f} (Laplace ≈ 3)")
+# Excess kurtosis per variable, averaged. Laplace noise has excess kurtosis 3;
+# the autoregressive filtering mixes several noise terms, which pulls the
+# observed value towards 0, but regime 2 stays clearly heavier-tailed.
+print(f"Regime 1 excess kurtosis (mean over A-D): {kurtosis(r1, axis=0).mean():.2f} (Gaussian ≈ 0)")
+print(f"Regime 2 excess kurtosis (mean over A-D): {kurtosis(r2, axis=0).mean():.2f} (Laplace noise = 3)")
 
 
 # %%
@@ -825,22 +838,27 @@ print_multiseed_table(f1_d, N_SEEDS, title="Gradual-drift data — F1 over seeds
 # %% [markdown]
 # ## 10. Real-World: Elbe River Network
 #
-# The Elbe River benchmark (12 stations, chain graph with 11 true edges) exhibits exactly the variable-lag problem: flood season propagation is fast (lag 1-2 at 3h resolution), dry season is slow (lag 5+).
+# The Elbe River benchmark (12 stations, chain graph with 11 true edges) is a natural candidate for regime-dependent lags: the travel time of water between gauges depends on discharge, so flow regimes can change the lag structure.
 #
-# Here we apply regime-conditional discovery with PELT (the best detector for this mean-shift-dominated dataset). Data must be downloaded first (see `examples/elbe_river.ipynb`).
+# Here we segment the flow level with PELT (`signal="mean"`, three regimes) and run discovery per regime with a regime-specific `max_lag`. PELT on the mean is used because flow regimes are level changes; the other detectors are not compared on this dataset.
+#
+# The data are the CausalRivers files downloaded by [`elbe_river.ipynb`](elbe_river.ipynb), read from `CAUSALRIVERS_DIR` (default `/tmp/causalrivers`). The preprocessing differs from that notebook: here flow is averaged over 3-hour intervals and kept in levels (PELT needs the level signal), gaps are filled by linear interpolation, and only data before 2023 is used, whereas `elbe_river.ipynb` uses differenced 6-hour volumes with MAD clipping and GRACE. The scores of the two notebooks are therefore not directly comparable.
 
 # %%
+import os
 import pickle
 from pathlib import Path
-from causalts.imputation import var_em_impute
 
-DATA_DIR = Path("/tmp/causalrivers/product")
+DATA_DIR = Path(os.environ.get("CAUSALRIVERS_DIR", "/tmp/causalrivers")) / "product"
 if not DATA_DIR.exists():
     print("CausalRivers data not found. Run examples/elbe_river.ipynb first to download.")
 else:
     # Load Elbe main branch (12 stations)
     ELBE_STATIONS = [166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177]
-    full_G = pickle.load(open(DATA_DIR / "rivers_east_germany.p", "rb"))
+    # The river graph is a pickle, which can execute code when loaded: only use
+    # the file from the official CausalRivers release.
+    with open(DATA_DIR / "rivers_east_germany.p", "rb") as fh:
+        full_G = pickle.load(fh)
     ts_raw = pd.read_csv(DATA_DIR / "rivers_ts_east_germany.csv", index_col=0, parse_dates=True)
     ts_res = ts_raw.resample("3h").mean()
     avail = [n for n in ELBE_STATIONS if str(n) in ts_res.columns]
@@ -961,3 +979,6 @@ if DATA_DIR.exists():
         np.fill_diagonal(g2d, 0)
         mr = evaluate(g2d, gt_elbe)
         print(f"  {res_cedar_elbe.regime_names[r]}: TP={mr['TP']} FP={mr['FP']} F1={mr['F1']:.3f}")
+
+# %% [markdown]
+# On this preprocessing, a single CEDAR run on the full series recovers only 2 of the 11 river reaches (F1 0.11). Splitting the series into PELT flow regimes and running discovery per regime raises F1 to 0.75 with CEDAR and 0.80 with CDNOTS+. Per regime, the low-flow segments give the cleanest CEDAR graph (8 true edges, 1 false positive), while the high-flow regime has the most false positives.

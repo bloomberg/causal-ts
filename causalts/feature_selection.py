@@ -913,7 +913,11 @@ def select_features(
     from_result=None,
     **algo_kwargs,
 ) -> FeatureSelectionResult:
-    """Discover the causal feature set of ``target`` in O(d).
+    """Discover the causal feature set of ``target``.
+
+    The default parent-only search (``algo="cedar"`` or ``"fastpc"`` with
+    ``markov_blanket=False``) is O(d) in the number of variables;
+    ``algo="cdnots"`` and ``markov_blanket=True`` are O(d²) (see below).
 
     Parameters
     ----------
@@ -954,7 +958,7 @@ def select_features(
         (lag >= 0 relative to the target) are kept.
     include_lag0 : bool, default False
         Include contemporaneous (lag-0) cross-variable features.
-    ci_test : CIT_Base, optional
+    ci_test : ~causalts.ci_tests.cit_test.CIT_Base, optional
         CI test instance. Defaults to :class:`ParCorrGPU`.
     alpha : float, default 0.05
         Significance level for CI tests.

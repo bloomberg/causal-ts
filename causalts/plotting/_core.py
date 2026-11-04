@@ -1436,19 +1436,22 @@ def plot_graph(
 
     Parameters
     ----------
-    graph : string or bool array-like, optional (default: None)
-        Either string matrix providing graph or bool array providing only adjacencies
-        Must be of same shape as val_matrix.
-    val_matrix : array_like
+    graph : string or bool array-like
+        Either string matrix providing graph or bool array providing only
+        adjacencies, of shape (N, N, tau_max+1) or (N, N). Must be of same
+        shape as val_matrix.
+    val_matrix : array_like, optional (default: None)
         Matrix of shape (N, N, tau_max+1) containing test statistic values.
+        If None, links and nodes are drawn without a colormap.
     var_names : list, optional (default: None)
         List of variable names. If None, range(N) is used.
     fig_ax : tuple of figure and axis object, optional (default: None)
         Figure and axes instance. If None they are created.
-    figsize : tuple
+    figsize : tuple, optional (default: None)
         Size of figure.
     save_name : str, optional (default: None)
-        Name of figure file to save figure. If None, figure is shown in window.
+        Name of figure file to save figure (at 300 dpi). If given, the figure
+        is saved and nothing is returned; if None, ``(fig, ax)`` is returned.
     link_colorbar_label : str, optional (default: 'MCI')
         Test statistic label.
     node_colorbar_label : str, optional (default: 'auto-MCI')
@@ -1463,47 +1466,58 @@ def plot_graph(
         node_pos = {'x':array of shape (N,), 'y':array of shape(N)}. These
         coordinates could have been transformed before for basemap plots. You can
         also add a key 'transform':ccrs.PlateCarree() in order to plot graphs on
-        a map using cartopy.
-    arrow_linewidth : float, optional (default: 30)
+        a map using cartopy. If None, positions are computed from node_layout.
+    node_layout : str or callable, optional (default: 'neato')
+        Layout passed to ``compute_node_positions`` when node_pos is None
+        (e.g. ``'neato'``, ``'circular'``, ``'spring'``, ``'kamada_kawai'``).
+        Graphviz layouts fall back to ``'circular'`` with a warning when
+        Graphviz is unavailable.
+    node_layout_kwargs : dict, optional (default: None)
+        Extra keyword arguments for the layout function, either flat or keyed
+        by layout name.
+    arrow_linewidth : float, optional (default: 3.0)
         Linewidth.
     vmin_edges : float, optional (default: -1)
         Link colorbar scale lower bound.
-    vmax_edges : float, optional (default: 1)
+    vmax_edges : float, optional (default: 1.0)
         Link colorbar scale upper bound.
     edge_ticks : float, optional (default: 0.4)
         Link tick mark interval.
     cmap_edges : str, optional (default: 'RdBu_r')
         Colormap for links.
-    vmin_nodes : float, optional (default: 0)
+    vmin_nodes : float, optional (default: -1)
         Node colorbar scale lower bound.
-    vmax_nodes : float, optional (default: 1)
+    vmax_nodes : float, optional (default: 1.0)
         Node colorbar scale upper bound.
     node_ticks : float, optional (default: 0.4)
         Node tick mark interval.
-    cmap_nodes : str, optional (default: 'OrRd')
-        Colormap for links.
-    node_size : int, optional (default: 0.3)
+    cmap_nodes : str, optional (default: 'RdBu_r')
+        Colormap for nodes.
+    node_size : float, optional (default: 0.2)
         Node size.
     node_aspect : float, optional (default: None)
         Ratio between the height and width of the variable nodes.
-    arrowhead_size : int, optional (default: 20)
-        Size of link arrow head. Passed on to FancyArrowPatch object.
-    curved_radius, float, optional (default: 0.2)
+    curved_radius : float, optional (default: 0.2)
         Curvature of links. Passed on to FancyArrowPatch object.
     label_fontsize : int, optional (default: 10)
         Fontsize of colorbar labels.
-    alpha : float, optional (default: 1.)
-        Opacity.
-    node_label_size : int, optional (default: 10)
-        Fontsize of node labels.
-    link_label_fontsize : int, optional (default: 6)
-        Fontsize of link labels.
     tick_label_size : int, optional (default: 6)
         Fontsize of tick labels.
+    alpha : float, optional (default: 1.0)
+        Opacity.
+    node_label_size : int, optional (default: 12)
+        Fontsize of node labels.
+    link_label_fontsize : int, optional (default: 10)
+        Fontsize of link labels.
     lag_array : array, optional (default: None)
         Optional specification of lags overwriting np.arange(0, tau_max+1)
-    show_colorbar : bool
+    show_colorbar : bool, optional (default: True)
         Whether to show colorbars for links and nodes.
+    link_matrix : None
+        Deprecated; passing anything other than None raises ``ValueError``.
+        Use ``graph`` instead.
+    special_nodes : dict, optional (default: None)
+        Mapping ``{(var_name_or_index, lag): color}`` of node fill colors.
     edge_color : str, optional (default: 'black')
         Default color for edges when no colormap is active (i.e. when
         ``val_matrix`` is *None* or ``target_node`` is set). Accepts any
@@ -1523,8 +1537,19 @@ def plot_graph(
         Fill color for target node(s).
     target_between_color : str, optional (default: '#9C27B0')
         Color for edges connecting two target nodes.
-    show_autodependency_lags : bool (default: False)
+    show_autodependency_lags : bool, optional (default: False)
         Shows significant autodependencies for a node.
+    title : str, optional (default: None)
+        Axes title; only applied when the figure is created (fig_ax is None).
+    return_pos : bool, optional (default: False)
+        If True, return ``(fig, ax, node_pos)`` where node_pos has the same
+        ``{'x': ..., 'y': ...}`` form accepted by the node_pos parameter.
+
+    Returns
+    -------
+    fig, ax : matplotlib Figure and Axes
+        Returned when save_name is None (plus node_pos if return_pos is True).
+        None when save_name is given.
     """
 
     if link_matrix is not None:
@@ -2151,20 +2176,22 @@ def plot_time_series_graph(
 
     Parameters
     ----------
-    graph : string or bool array-like, optional (default: None)
+    graph : string or bool array-like
         Either string matrix providing graph or bool array providing only adjacencies
         Either of shape (N, N, tau_max + 1) or as auxiliary graph of dims
         (N, N, tau_max+1, tau_max+1) describing auxADMG.
-    val_matrix : array_like
+    val_matrix : array_like, optional (default: None)
         Matrix of same shape as graph containing test statistic values.
+        If None, links are drawn without a colormap.
     var_names : list, optional (default: None)
         List of variable names. If None, range(N) is used.
     fig_ax : tuple of figure and axis object, optional (default: None)
         Figure and axes instance. If None they are created.
-    figsize : tuple
+    figsize : tuple, optional (default: None)
         Size of figure.
     save_name : str, optional (default: None)
-        Name of figure file to save figure. If None, figure is shown in window.
+        Name of figure file to save figure (at 300 dpi). If given, the figure
+        is saved and nothing is returned; if None, ``(fig, ax)`` is returned.
     link_colorbar_label : str, optional (default: 'MCI')
         Test statistic label.
     link_width : array-like, optional (default: None)
@@ -2180,29 +2207,25 @@ def plot_time_series_graph(
         Linewidth.
     vmin_edges : float, optional (default: -1)
         Link colorbar scale lower bound.
-    vmax_edges : float, optional (default: 1)
+    vmax_edges : float, optional (default: 1.0)
         Link colorbar scale upper bound.
     edge_ticks : float, optional (default: 0.4)
         Link tick mark interval.
     cmap_edges : str, optional (default: 'RdBu_r')
         Colormap for links.
-    node_size : int, optional (default: 0.1)
+    node_size : float, optional (default: 0.1)
         Node size.
     node_aspect : float, optional (default: None)
         Ratio between the height and width of the variable nodes.
     lag_array : array-like, optional (default: None)
         Array of actual lag values for column labels. If None, uses
         sequential integers 0, 1, ..., tau_max.
-    arrowhead_size : int, optional (default: 20)
-        Size of link arrow head. Passed on to FancyArrowPatch object.
-    curved_radius, float, optional (default: 0.2)
+    curved_radius : float, optional (default: 0.2)
         Curvature of links. Passed on to FancyArrowPatch object.
     label_fontsize : int, optional (default: 10)
         Fontsize of colorbar labels.
-    alpha : float, optional (default: 1.)
+    alpha : float, optional (default: 1.0)
         Opacity.
-    node_label_size : int, optional (default: 10)
-        Fontsize of node labels.
     node_label_size : int, optional (default: 10)
         Fontsize of node (variable) labels.
     link_label_fontsize : int, optional (default: 6)
@@ -2212,6 +2235,8 @@ def plot_time_series_graph(
     edge_color : str, optional (default: 'black')
         Color for edges/links when no colormap is active (i.e., when
         ``val_matrix`` is *None*). Also sets the node ring colour.
+    standard_color_nodes : str, optional (default: 'lightgrey')
+        Fill color for nodes not listed in special_nodes.
     title : str, optional (default: None)
         Axes title.
     title_pad : float, optional (default: None)
@@ -2220,8 +2245,11 @@ def plot_time_series_graph(
         lag labels (``t``, ``t-1``, …) that are drawn just above the axes
         top. Increase if the title still overlaps on very small figures.
     inner_edge_style : string, optional (default: 'dashed')
-        Style of inner_edge contemporaneous links.
-    special_nodes : dict
+        Currently unused; accepted for compatibility with tigramite.
+    link_matrix : None
+        Deprecated; passing anything other than None raises ``ValueError``.
+        Use ``graph`` instead.
+    special_nodes : dict, optional (default: None)
         Dictionary of format {(i, -tau): 'blue', ...} to color special nodes.
     node_classification : dict or None (default: None)
         Dictionary of format ``{i: 'space_context', ...}`` to classify
@@ -2230,6 +2258,11 @@ def plot_time_series_graph(
         ``"space_context"``, ``"time_dummy"``, or ``"space_dummy"``.
         Space contexts and dummy nodes are shown as a single node.
         If None, all nodes are treated as system nodes.
+
+    Returns
+    -------
+    fig, ax : matplotlib Figure and Axes
+        Returned when save_name is None; None when save_name is given.
     """
 
     if link_matrix is not None:

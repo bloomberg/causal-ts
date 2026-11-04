@@ -30,6 +30,10 @@
 # We simulate a stable VAR(1) with i.i.d. (contemporaneously independent) Student-t innovations, then observe it at different sampling rates `k`.
 
 # %%
+import warnings
+
+warnings.filterwarnings("ignore", message="IProgress not found")
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt

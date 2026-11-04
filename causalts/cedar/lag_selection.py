@@ -327,14 +327,16 @@ def compute_lag_pvalues(
     max_lag : int
         Maximum lag.
     method : str
-        "t_test" — dcor t-test (Székely & Rizzo 2013), asymptotic,
-            no permutation, ~200x faster. Uses Student-t null distribution
-            based on unbiased U-centered estimator. Well-calibrated for
-            n >= 20. Slightly inflated FPR (~15%) for autocorrelated data.
-        "circular_shift" — circular shift permutation. Preserves
-            autocorrelation within the target by shifting rather than
-            shuffling. Properly calibrated FPR (~5%) for AR data.
-        "permutation" — standard random permutation (legacy).
+        One of:
+
+        - ``"t_test"`` — dcor t-test (Székely & Rizzo 2013), asymptotic,
+          no permutation, ~200x faster. Uses Student-t null distribution
+          based on unbiased U-centered estimator. Well-calibrated for
+          n >= 20. Slightly inflated FPR (~15%) for autocorrelated data.
+        - ``"circular_shift"`` — circular shift permutation. Preserves
+          autocorrelation within the target by shifting rather than
+          shuffling. Properly calibrated FPR (~5%) for AR data.
+        - ``"permutation"`` — standard random permutation (legacy).
     n_permutations : int
         Number of permutations (for "circular_shift" and "permutation").
     seed : int

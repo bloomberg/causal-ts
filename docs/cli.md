@@ -10,13 +10,12 @@ causal-ts [OPTIONS] COMMAND [ARGS]...
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-o, --output-dir PATH` | `./causal_ts_output` | Directory for all saved files |
-| `-s, --seed INT` | random | Global random seed |
-| `--device TEXT` | auto | Compute device (`cpu`, `cuda`, `mps`) |
-| `-v, --verbose` | off | Verbose logging |
+| `-o, --output-dir PATH` | `./causal_ts_output` | Base directory; each command writes a new timestamped folder in it (`generate_<timestamp>/`, `discover_<algorithm>_<timestamp>/`, …) |
+| `-s, --seed INT` | random (`generate`: 42) | Global random seed |
+| `-d, --device TEXT` | auto | Compute device (`cpu`, `cuda`, `cuda:0`, `mps`) |
+| `-v, --verbose` | off | Verbose logging; repeat (`-vv`) for more |
 | `-q, --quiet` | off | Suppress non-error output |
-
----
+| `--version` | | Show the version and exit |
 
 ## `inspect`
 
@@ -39,21 +38,30 @@ The report has six blocks:
 |-----|----------|
 | `schema_version` | Integer, bumped on breaking changes to this contract |
 | `data` | `n_rows`, `n_vars`, `var_names`, `missing_by_col`, `constant_cols`, `discrete_cols` |
-| `facts` | Linearity fraction, per-column ADF+KPSS (non)stationarity and its `form`, PACF-suggested max lag |
-| `recommendation` | `algorithm`, `ci_test`, `include_C`, `c_preset`, `max_lag`, `rationale` |
+| `facts` | Linearity fraction, per-column ADF+KPSS (non)stationarity and its `form`, PACF-suggested max lag, `latent_factor` (`detected`, `spectral_ratio`, `tau`), `variance_dependence` (`detected`, `n_pairs`, `pairs`: lagged variables that change another's noise scale only; `reason` when `detected` is null: `not_applicable`, `too_large` or `unavailable`) |
+| `recommendation` | `algorithm`, `ci_test`, `refine`, `refine_params`, `include_C`, `c_preset`, `max_lag`, `params`, `rationale` |
 | `cost_class` | `cheap`, `moderate`, or `expensive` — how heavy the recommended run is |
-| `warnings` | Data-health flags (heavy missingness, constant columns, too few rows) |
+| `warnings` | Data-health flags (heavy missingness, constant columns, too few rows, more variables than time steps) |
+
+The recommendation is always `algorithm: cdnots`, with a CI test chosen from the
+facts (`cmiknn-mixed-gpu` for discrete/mixed columns, `rcot` when variance-only
+parents are detected, `raft` for nonlinear data, otherwise `parcorr-gpu`).
+`refine` names an optional second step that refines that graph's lagged edges:
+`reap` (with `refine_params` `{"contemporaneous": true}`, i.e. `--contemporaneous`,
+which re-adds lag-0 edges), or `grace` when variance-only parents are detected
+(keep the CDNOTS graph's lag-0 edges).
 
 ```bash
-# Inspect, then run exactly what it recommends
+# Inspect, then run what it recommends
 causal-ts inspect data.csv | jq '.recommendation'
+causal-ts discover data.csv --algorithm cdnots --ci-test raft --max-lag 3
+# optional refinement: builds the same CDNOTS graph and refines its lagged edges
+causal-ts discover data.csv --algorithm reap --ci-test raft --max-lag 3 --contemporaneous
 ```
 
 The same report is available in Python as
 {func}`causalts.inspection.inspect_df`, and the pure facts → config step as
 {func}`causalts.inspection.recommend_config`.
-
----
 
 ## `discover`
 
@@ -69,10 +77,10 @@ causal-ts discover DATA.csv [OPTIONS]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-a, --algorithm` | `cdnots` | `cdnots`, `cdnots+`, `cedar`, `grace`, `grace-ss`, `reap` |
-| `--ci-test` | `parcorr-gpu` | CI test — see `ci-test-info` |
+| `--ci-test` | `parcorr-gpu` | CI test — see `ci-test-info`. For `grace`, `grace-ss` and `reap` it builds the candidate graph; unset, they pick `parcorr-gpu` on CUDA, else CPU `parcorr` |
 | `--max-lag INT` | `3` | Maximum time lag |
-| `--alpha FLOAT` | `0.01` for `cdnots+`, else `0.05` | Significance level for `cdnots`, `cdnots+`, `grace`, `grace-ss`, `reap` (`0.01` recommended); Cedar uses `--alpha-cond1`/`--alpha-cond2` |
-| `--lag-list TEXT` | — | Comma-separated explicit lags, e.g. `1,3,12` |
+| `--alpha FLOAT` | `0.01` for `cdnots+`, else `0.05` | Significance level for `cdnots`, `cdnots+`, `grace`, `grace-ss`, `reap`; Cedar uses `--alpha-cond1`/`--alpha-cond2` |
+| `--lag-list TEXT` | — | Comma-separated explicit lags, e.g. `1,3,12` (`cdnots` and `cdnots+` only; other algorithms use `--max-lag`) |
 | `--var-names TEXT` | from CSV | Comma-separated variable names |
 
 ### CDNOTS-specific
@@ -81,10 +89,14 @@ causal-ts discover DATA.csv [OPTIONS]
 |------|---------|-------------|
 | `--include-c / --no-c` | on | Include nonstationarity node C (also applies to CEDAR) |
 | `--c-preset` | `linear` | C node basis: `linear`, `step`, `step+linear`, `linear+sin`, `linear+exp`, `linear+quad` (also applies to CEDAR) |
-| `--stable` | off | Stable skeleton discovery (slower, more robust) |
+| `--stable` | off | Order-independent (PC-stable) skeleton, slower and more robust. `run_cdnots` in Python defaults to `stable=True`; ignored for `cdnots+` |
 | `--max-degree INT` | — | Maximum node degree constraint |
 
 ### CEDAR-specific
+
+The CLI defaults below differ from `run_cedar` in Python, where `alpha_cond1` /
+`alpha_cond2` are 0.01, `filter_children` and the C node are off, and AR(1) is
+assumed (`assume_ar1=True`).
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -101,13 +113,13 @@ causal-ts discover DATA.csv [OPTIONS]
 | `--include-lag0` | off | Include contemporaneous (lag-0) effects |
 | `--no-prune` | off | Skip MCI pruning pass after discovery |
 | `--include-autoreg / --no-autoreg` | on | Add autoregressive self-loops `Xi(t-k)→Xi(t)` for the detected AR order of each variable |
-| `--assume-ar1` | off | Skip AR order estimation; use standard AR(1) Cond2 for all variables (backward-compatible with original SyPI) |
+| `--assume-ar1` | off | Skip AR order estimation (BIC per variable); use standard AR(1) Cond2 for all variables (as in the original SyPI) |
 | `--include-c / --no-c` | on | Append a nonstationarity time-index variable C — forces `include_lag0=True` so C(t) → X(t) edges are detectable |
 | `--c-preset` | `linear` | C node basis preset: `linear`, `step`, `step+linear`, `linear+sin`, `linear+exp`, `linear+quad` |
 
 ### GRACE- and REAP-specific
 
-`--algorithm reap` is REAP, the regression-based refinement; it is the same as `--algorithm grace --refine shrink`.
+`--algorithm reap` is REAP, the regression-based refinement; it is the same as `--algorithm grace --refine shrink`. Algorithms registered by third-party packages through the `causalts.algorithms` entry point also appear as `--algorithm` choices.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -141,6 +153,14 @@ a supplied candidate graph too.
 | `--impute` | — | `pairwise_complete`, `var_em`, or `causal_iterative` |
 | `--impute-kwargs JSON` | — | Extra imputer kwargs, e.g. `'{"p": 2, "n_iter": 5}'` |
 
+Not every strategy works with every algorithm:
+
+| Algorithm | none / `pairwise_complete` | `var_em` | `causal_iterative` |
+|---|---|---|---|
+| `cdnots`, `cdnots+` | yes | yes | yes |
+| `cedar` | yes | yes | not supported |
+| `grace`, `reap` | not supported when values are missing | yes | replaced by `var_em` (with a warning) |
+
 ### Output & evaluation
 
 | Flag | Default | Description |
@@ -149,7 +169,7 @@ a supplied candidate graph too.
 | `--save-plot / --no-plot` | on | Save graph plot images |
 | `--plot-format` | `png` | `png`, `pdf`, or `svg` |
 | `--json` | off | Echo the run summary — including a named edge list and a `diagnostics` block — as JSON to stdout |
-| `--pvalues / --no-pvalues` | off | Include per-edge p-values (CDNOTS family and CEDAR). Off by default as a memory safeguard on very high-dimensional data; safe to enable at low/moderate `d`. Not available for GRACE, which emits gate values rather than per-test p-values. |
+| `--pvalues / --no-pvalues` | off | Include per-edge p-values (CDNOTS family and CEDAR). Off by default as a memory safeguard on very high-dimensional data; safe to enable at low/moderate `d`. Not available for GRACE, GRACE-SS or REAP (GRACE emits gate values; REAP always writes `edge_pvalue.npy`). |
 
 With `--json`, the `edges` list gives `{source, target, lag, pvalue}` per edge
 (`pvalue` is `null` unless `--pvalues` was passed), and `diagnostics` carries
@@ -160,7 +180,7 @@ With `--json`, the `edges` list gives `{source, target, lag, pvalue}` per edge
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--validate` | off | Re-run discovery on contiguous bootstrap windows and annotate every edge with its `persistence` (fraction of windows it recurs). Not supported for GRACE. |
+| `--validate` | off | Re-run discovery on contiguous bootstrap windows and annotate every edge with its `persistence` (fraction of windows it recurs). Not supported for GRACE, GRACE-SS, REAP or plugin algorithms; check the CDNOTS graph they refine instead. |
 | `--n-bootstrap INT` | `20` | Number of bootstrap windows |
 | `--window-frac FLOAT` | `0.6` | Window size as a fraction of `T` |
 
@@ -178,14 +198,12 @@ causal-ts -o out discover data.csv --json --validate --n-bootstrap 30
 ```bash
 causal-ts -s 42 discover data.csv \
   --algorithm cdnots \
-  --ci-test splitkci \
+  --ci-test raft \
   --max-lag 3 \
   --alpha 0.05 \
   --ground-truth ground_truth.npy \
   --plot-format pdf
 ```
-
----
 
 ## `generate`
 
@@ -203,7 +221,7 @@ causal-ts generate [OPTIONS]
 | `--max-lag INT` | `3` | Maximum lag |
 | `-T, --samples INT` | `500` | Time series length |
 | `--density` | `sparse` | `sparse` or `dense` |
-| `--dep-funcs TEXT` | `lin,lin,nl1,nl2` | Comma-separated dependency functions |
+| `--dep-funcs TEXT` | `lin,lin,nl1,nl2` | Comma-separated dependency functions, drawn at random per link: `lin`, `nl1`, `nl2`, `nl_sq`, `nl_abs`, `nl_sin` |
 
 **Outputs:** `data.csv`, `ground_truth.npy`, `meta.json`
 
@@ -214,8 +232,6 @@ causal-ts generate --dataset ex1 -T 1000
 # Generate a random 10-variable sparse network
 causal-ts generate -n 10 --max-lag 2 -T 500 --density sparse
 ```
-
----
 
 ## `evaluate`
 
@@ -238,8 +254,6 @@ causal-ts evaluate GRAPH_TRUE.npy GRAPH_DISCOVERED.npy [OPTIONS]
 causal-ts evaluate ground_truth.npy discovered.npy --var-names X0,X1,X2,X3
 ```
 
----
-
 ## `deconfound`
 
 Apply LUCID latent-confounder corrections to an already-discovered graph.
@@ -257,19 +271,15 @@ causal-ts deconfound GRAPH --data data.csv
 | `--var-names` | — | Comma-separated variable names |
 | `--json` | off | Echo the run summary as JSON to stdout |
 
----
-
 ## `ci-test-info`
 
 Print a selection guide for CI tests with indicative performance notes.
 
 ```bash
-causal-ts ci-test-info [--test TEST_NAME]
+causal-ts ci-test-info [--test TEST_NAME|all]
 ```
 
-Run without arguments for a full table; pass `--test splitkci` for details on a single test.
-
----
+Run without arguments for the selection guide; pass `--test raft` for the summary of a single test, or `--test all` for every test.
 
 ## `plot`
 
@@ -287,8 +297,6 @@ causal-ts plot GRAPH [options]
 | `--figsize` | — | Figure size as `W,H` (e.g. `10,8`) |
 | `--plot-format` | `png` | Output format: `png`, `pdf`, or `svg` |
 | `--save-name` | — | Custom output filename (without extension) |
-
----
 
 ## `install-skill`
 
@@ -313,11 +321,9 @@ symlink stays current across `pip install -U causalts`; `--copy` pins a static
 snapshot. The repository also ships a `.claude-plugin/` manifest, so the same
 skill can be added as a Claude Code plugin from a checkout.
 
----
-
 ## `dowhy` — Effect Estimation
 
-Requires `pip install causalts[dowhy]`. Every subcommand takes a saved `graph.npy`; most also take a CSV via `--data`, except `drift`, which compares two periods with `--data-old` / `--data-new`.
+Requires `pip install causalts[dowhy]`. Every subcommand takes a saved graph (the `estimated_graph.npy` written by `discover`); most also take a CSV via `--data`, except `drift`, which compares two periods with `--data-old` / `--data-new`. All subcommands except `effect` accept `--mechanism [auto|linear|gp]` (default `auto`).
 
 ### `dowhy effect`
 
@@ -329,15 +335,17 @@ causal-ts dowhy effect GRAPH --data data.csv \
   --method backdoor.linear_regression
 ```
 
+`--lag` (default 1) is the treatment's lag; confidence intervals use `--bootstraps`
+replications (default 100), or pass `--no-ci` to skip them.
+
 ### `dowhy fit-scm`
 
-Fit a Structural Causal Model and optionally run a counterfactual query.
+Fit a Structural Causal Model and save it to `--outdir` (default `.`).
+Counterfactual queries are run from Python (`res.counterfactual(...)` or
+`causalts.effects.counterfactual`).
 
 ```bash
-causal-ts dowhy fit-scm GRAPH --data data.csv \
-  --mechanism linear \
-  --counterfactual-target X2 \
-  --intervention "X0=0.0"
+causal-ts dowhy fit-scm GRAPH --data data.csv --mechanism linear --outdir scm/
 ```
 
 ### `dowhy root-cause`
@@ -347,6 +355,10 @@ Attribute an observed anomaly to root-cause variables using Shapley-based intrin
 ```bash
 causal-ts dowhy root-cause GRAPH --data data.csv --target X2
 ```
+
+The anomalous observation is a row of `--data` (`--anomaly-index`, default the
+last row) or a JSON dict passed as `--anomaly-row`; `--n-samples` (default 2000)
+sets the Monte Carlo samples for the attribution.
 
 ### `dowhy validate`
 
@@ -386,20 +398,23 @@ Attribute a distribution shift in one target between two periods.
 causal-ts dowhy drift GRAPH --data-old before.csv --data-new after.csv --target Mek
 ```
 
----
+`--robust` uses the multiply-robust estimator.
 
 ## Typical Full Workflow
 
 ```bash
-# 1. Generate data
-causal-ts -s 42 -o ./run1 generate --dataset ex1 -T 500
+# 1. Generate data -> run1/generate_<timestamp>/{data.csv, ground_truth.npy}
+causal-ts -s 42 -o run1 generate --dataset ex1 -T 500
 
-# 2. Run discovery
-causal-ts -s 42 -o ./run1 discover run1/generate/data.csv \
-  --ci-test splitkci --max-lag 3 \
-  --ground-truth run1/generate/ground_truth.npy
+# 2. Inspect it and get a recommended configuration
+causal-ts inspect run1/generate_*/data.csv | jq '.recommendation'
 
-# 3. Evaluate separately (optional)
-causal-ts evaluate run1/generate/ground_truth.npy \
-  run1/discover/graph.npy --var-names X0,X1,X2,X3,X4
+# 3. Run discovery -> run1/discover_cdnots_<timestamp>/estimated_graph.npy
+causal-ts -s 42 -o run1 discover run1/generate_*/data.csv \
+  --ci-test raft --max-lag 3 \
+  --ground-truth run1/generate_*/ground_truth.npy
+
+# 4. Evaluate separately (optional)
+causal-ts -o run1 evaluate run1/generate_*/ground_truth.npy \
+  run1/discover_cdnots_*/estimated_graph.npy --var-names X0,X1,X2,X3,X4
 ```

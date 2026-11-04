@@ -1,6 +1,15 @@
 # CI Tests API
 
----
+Class reference for every registered test. For choosing a test, see the
+[CI Test Selection Guide](../ci_tests.md). Tests can also be created by name:
+
+```{eval-rst}
+.. autofunction:: causalts.ci_tests.create_ci_test
+
+.. autofunction:: causalts.ci_tests.list_ci_tests
+
+.. autofunction:: causalts.ci_tests.register_ci_test
+```
 
 ## ParCorrGPU
 
@@ -10,8 +19,6 @@
    :show-inheritance:
 ```
 
----
-
 ## GCMIGPU
 
 ```{eval-rst}
@@ -19,8 +26,6 @@
    :members:
    :show-inheritance:
 ```
-
----
 
 ## SplitKCIGPU
 
@@ -30,8 +35,6 @@
    :show-inheritance:
 ```
 
----
-
 ## KCIGPU
 
 ```{eval-rst}
@@ -39,8 +42,6 @@
    :members:
    :show-inheritance:
 ```
-
----
 
 ## DFCITGPU
 
@@ -50,8 +51,6 @@
    :show-inheritance:
 ```
 
----
-
 ## RCOTGPU
 
 ```{eval-rst}
@@ -59,8 +58,6 @@
    :members:
    :show-inheritance:
 ```
-
----
 
 ## CMIknnGPU
 
@@ -70,8 +67,6 @@
    :show-inheritance:
 ```
 
----
-
 ## LinSigCIGPU
 
 ```{eval-rst}
@@ -79,8 +74,6 @@
    :members:
    :show-inheritance:
 ```
-
----
 
 ## StratifiedCIT
 
@@ -90,8 +83,6 @@
    :show-inheritance:
 ```
 
----
-
 ## CMIknnMixedGPU
 
 ```{eval-rst}
@@ -99,8 +90,6 @@
    :members:
    :show-inheritance:
 ```
-
----
 
 ## GCM
 
@@ -110,8 +99,6 @@
    :show-inheritance:
 ```
 
----
-
 ## WGCM
 
 ```{eval-rst}
@@ -120,8 +107,6 @@
    :show-inheritance:
 ```
 
----
-
 ## PCM
 
 ```{eval-rst}
@@ -129,8 +114,6 @@
    :members:
    :show-inheritance:
 ```
-
----
 
 ## RAFT / RIFT
 
@@ -142,3 +125,31 @@
 .. autoclass:: causalts.ci_tests.raft.RIFTCI
    :show-inheritance:
 ```
+
+## CPU implementations
+
+```{eval-rst}
+.. autoclass:: causalts.ci_tests.parcorr.PartialCorr
+   :members:
+   :show-inheritance:
+
+.. autoclass:: causalts.ci_tests.cmiknn.CMIKNN
+   :members:
+   :show-inheritance:
+```
+
+## causal-learn adapters
+
+```{eval-rst}
+.. autoclass:: causalts.ci_tests.causallearn_tests.CausalLearnFisherZ
+   :show-inheritance:
+
+.. autoclass:: causalts.ci_tests.causallearn_tests.CausalLearnChisq
+   :show-inheritance:
+
+.. autoclass:: causalts.ci_tests.causallearn_tests.CausalLearnGsq
+   :show-inheritance:
+```
+
+`SigKCIGPU` (registry name `sigkci`) is a deprecated alias of `LinSigCIGPU`.
+

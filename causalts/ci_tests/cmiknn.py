@@ -622,6 +622,37 @@ class CMIknn(CondIndTest):
 
 
 class CMIKNN(CMIknn):
+    """Index-based CPU CMI-kNN test over a fixed data matrix.
+
+    Wraps :class:`CMIknn` (Frenzel-Pompe estimator with a shuffle-test null,
+    [Runge2018]_) with the ``ci(X, Y, condition_set) -> (pvalue, statistic)``
+    calling convention used by the discovery algorithms. ``data`` is stored once
+    and the variables are passed as column indices; rows with NaN in the tested
+    columns are dropped per call (``(1.0, 0.0)`` is returned if fewer than 30
+    remain).
+
+    Parameters
+    ----------
+    data : ndarray, shape (T, d), optional
+        Data matrix.
+    k : int or float, optional
+        Number of nearest neighbours; values below 1 are a fraction of T.
+        Default 0.2.
+    workers : int, optional
+        Number of workers for the k-d tree queries. Default 1.
+    sig_samples : int, optional
+        Number of shuffle-test samples. Default 500.
+    early_stop : bool, optional
+        Stop the shuffle test early once the running p-value is clearly
+        separated from ``target_quantile``. Default True.
+    target_quantile : float, optional
+        Reference level used by the early-stopping rule. Default 0.05.
+    cache_dir, data_hash, param_hash
+        Result-caching controls, passed to :class:`CMIknn`.
+    **kwargs
+        Forwarded to :class:`CMIknn`.
+    """
+
     def __init__(
         self,
         data=None,

@@ -1251,10 +1251,12 @@ def run_cedar(
         Parallelism for lag computation.
     verbose : bool
         Enable logging.
-    forbidden : list of (cause, effect, lag) tuples, optional
+    forbidden : list of tuple, optional
+        ``(cause, effect, lag)`` triples.
         Edges to forbid. Each tuple is ``(cause_var, effect_var, lag)`` where
         ``lag`` is an int ≥ 1, or ``None`` to forbid the pair at all lags.
-    required : list of (cause, effect, lag) tuples, optional
+    required : list of tuple, optional
+        ``(cause, effect, lag)`` triples.
         Edges to force into the graph regardless of CI test outcome. Same
         format as ``forbidden``. Required edges are also protected from MCI
         pruning.

@@ -16,9 +16,14 @@
 # <a id="mixed-data"></a>
 # # Mixed Discrete-Continuous Data
 #
-# Real-world time series often contain both continuous measurements and discrete variables (binary regime indicators, categorical states, count data). Standard CI tests (ParCorr, KCI, DFCIT, etc.) assume continuous inputs — applying them directly to discrete columns can give incorrect results because the rank transform or kernel bandwidth breaks down on discrete values.
+# Real-world time series often contain both continuous measurements and discrete variables (binary regime indicators, categorical states, count data). Most CI tests in the library (ParCorr, KCI, SplitKCI, DFCIT, RCoT, ...) assume continuous inputs. Applied directly to discrete columns they can give incorrect p-values, because ties, kernel bandwidths and k-NN distances behave badly on discrete values.
 #
-# `causal-ts` handles this automatically: `run_cdnots` detects discrete columns in your DataFrame and wraps the CI test in a `StratifiedCIT` — which partitions the sample by discrete conditioning values and runs the inner test within each stratum. No code changes needed from the user.
+# The library has two discrete-aware options:
+#
+# - **`StratifiedCIT`** wraps any continuous CI test. It partitions the sample by the values of the discrete conditioning variables and runs the inner test within each stratum. `run_cdnots` detects discrete columns in the DataFrame and applies this wrapper automatically, so no code changes are needed.
+# - **`CMIknnMixedGPU`** (`cmiknn-mixed-gpu`) is a k-NN conditional mutual information estimator for mixed discrete-continuous data. It is the test `inspect_df` recommends for discrete or mixed data. From the command line: `causal-ts discover data.csv --ci-test cmiknn-mixed-gpu`.
+#
+# This notebook demonstrates the automatic `StratifiedCIT` wrapping.
 #
 # **What goes wrong without discrete handling?**
 # When binary regime variables (B1, B2) appear in the conditioning set during CI testing, treating them as continuous gives incorrect partial correlations. This causes spurious lagged edges *between* the binary variables themselves — edges that would be correctly rejected if the test operated within each discrete stratum.
@@ -117,6 +122,9 @@ plt.show()
 
 
 # %% [markdown]
+# With `StratifiedCIT`, CDNOTS recovers 10 of the 11 true edges with one false positive (F1 0.909). Treating B1 and B2 as continuous finds every true edge but adds three false positives, two of which involve only the binary variables (`B2(t-2) → B1` and the lag-2 self-loop on B2).
+
+# %% [markdown]
 # ## Limitations of StratifiedCIT
 #
 # | Limitation | Details |
@@ -130,7 +138,4 @@ plt.show()
 # - You know the discrete variable has no outgoing edges
 # - T is small and sample splitting would hurt power more than incorrect conditioning
 #
-# **Alternatives:** `CMIknnMixedGPU` handles mixed data natively without splitting — it uses a mixed-variable k-NN estimator that treats discrete and continuous variables jointly.
-#
-
-# %%
+# **Alternative:** `CMIknnMixedGPU` estimates conditional mutual information on mixed data directly with a mixed-variable k-NN estimator, so it does not split the sample into strata. DFCIT, ParCorr and the kernel tests assume continuous data and should only be used on discrete columns through the `StratifiedCIT` wrapper.

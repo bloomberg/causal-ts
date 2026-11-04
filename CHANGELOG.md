@@ -157,6 +157,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * The CLI created an output directory for commands that write nothing.
 * `ParCorrGPU` warned on read-only input (e.g. `df.values` under pandas
   copy-on-write).
+* Docstrings with wrong defaults or claims (`plot_graph`, `compare_graphs`,
+  `select_features`, `CausalForecaster`, `interventional_query`, `run_pcmci`, ...) and
+  RST errors.
 * `CIT_Base.set_data` wrote buffered cache rows into the new data's cache file.
 * `RCOTGPU` p-values depended on the order of the conditioning set.
 * `ParCorrGPU.batch_test` (precision method) now runs the same

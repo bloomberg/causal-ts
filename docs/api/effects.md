@@ -4,9 +4,7 @@
 Requires `pip install causalts[dowhy]`.
 :::
 
-All effect estimation functions accept the 3D graph array (`d × d × (max_lag+1)`) returned by any Causal-TS discovery algorithm. For algorithms that return a plain NumPy array (e.g. GRACE), use {py:func}`wrap_graph` first.
-
----
+Every Causal-TS discovery result (`CdnotsResult`, `CedarResult`, `GraceResult` from GRACE and REAP, `LucidResult`, …) carries the effect methods directly (`res.estimate_effect(...)`, `res.fit_scm()`, …). The functions below also accept the 3D graph array (`d × d × (max_lag+1)`); use {py:func}`wrap_graph` to attach the same methods to a plain array from another library.
 
 ## Workflow: Discovery → Effects
 
@@ -21,13 +19,11 @@ res = run_cdnots(df=df, indep_test=ci, num_lags=3)   # returns CdnotsResult
 # 2. Estimate effect directly from result (bridge methods attached)
 ate = res.estimate_effect("X1", "X3", treatment_lag=1)
 
-# 3. Or wrap a plain graph (GRACE, CEDAR)
+# 3. Or wrap a plain (d, d, max_lag+1) array from another library
 from causalts.effects import wrap_graph
-wrapped = wrap_graph(graph, df)
+wrapped = wrap_graph(graph_array, df)
 ate = wrapped.estimate_effect("X1", "X3", treatment_lag=1)
 ```
-
----
 
 ## Convenience Wrapper
 
@@ -47,15 +43,11 @@ Wrap any 3D graph array with bound effect-estimation methods (same interface as 
    :show-inheritance:
 ```
 
----
-
 ## Effect Estimation
 
 ```{eval-rst}
 .. autofunction:: causalts.effects.effect.estimate_effect
 ```
-
----
 
 ## Structural Causal Models
 
@@ -65,15 +57,11 @@ Wrap any 3D graph array with bound effect-estimation methods (same interface as 
 .. autofunction:: causalts.effects.scm.counterfactual
 ```
 
----
-
 ## Root Cause Analysis
 
 ```{eval-rst}
 .. autofunction:: causalts.effects.root_cause.attribute_anomaly
 ```
-
----
 
 ## Influence & Feature Relevance
 
@@ -86,8 +74,6 @@ Wrap any 3D graph array with bound effect-estimation methods (same interface as 
 
 .. autofunction:: causalts.effects.influence.distribution_change
 ```
-
----
 
 ## Validation
 
@@ -122,8 +108,6 @@ the same verdict.
 
 .. autofunction:: causalts.effects.validate.evaluate_model
 ```
-
----
 
 ## Exporting to DoWhy
 
@@ -169,12 +153,54 @@ verify_parent_adjustment_set(estimate, parents)  # raises if it silently didn't 
 .. autofunction:: causalts.effects.graph_bridge.verify_parent_adjustment_set
 ```
 
----
-
 ## Graph Utilities
 
 ```{eval-rst}
 .. autofunction:: causalts.effects.graph_bridge.graph_to_networkx
 
 .. autofunction:: causalts.effects.graph_bridge.make_lagged_df
+
+.. autofunction:: causalts.effects.graph_bridge.networkx_to_graph
+
+.. autofunction:: causalts.effects.graph_bridge.parent_adjustment_set
+
+.. autofunction:: causalts.effects.graph_bridge.treatment_parents
+
+.. autofunction:: causalts.effects.graph_bridge.required_lag_depth
+
+.. autofunction:: causalts.effects.effect.print_effect_summary
+```
+
+## Probabilistic Queries
+
+Sample observational and interventional distributions from a fitted SCM. An
+intervention changes downstream values only through the lag structure, so
+intervene on a lagged node (e.g. `X0_lag1`) to see its effect on current values.
+
+```{eval-rst}
+.. autofunction:: causalts.effects.query.observational_query
+
+.. autofunction:: causalts.effects.query.interventional_query
+
+.. autofunction:: causalts.effects.query.query_summary
+```
+
+## Forecasting
+
+```{eval-rst}
+.. autoclass:: causalts.effects.forecast.CausalForecaster
+   :members:
+
+.. autofunction:: causalts.effects.forecast.get_causal_parents
+```
+
+## Tigramite Effects
+
+Linear path-wise effects through tigramite (`pip install causalts[tigramite]`).
+
+```{eval-rst}
+.. autoclass:: causalts.effects.tigramite_effects.TigramiteEffects
+   :members:
+
+.. autofunction:: causalts.effects.tigramite_effects.pathwise_effects
 ```

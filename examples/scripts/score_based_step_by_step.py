@@ -265,10 +265,11 @@ for v in VARS:
 # covariance-based BIC score used underneath the GES baseline. The offset is irrelevant to
 # the search because every decision uses **score differences**.
 #
-# This cell is a verification of the tutorial arithmetic.
-# <!-- , not API usage to copy into your
-# own analysis; it reaches into implementation details so that we can check the numbers. -->
-#
+# This cell verifies the tutorial arithmetic; it is not API usage to copy into your own
+# analysis. It calls causal-learn's `local_score_BIC_from_cov` directly, after the private
+# helper `_patch_ges_numpy2()`. The helper is needed because older causal-learn releases
+# call `float()` on a 1×1 matrix inside that function, which fails under NumPy ≥ 2. On
+# current releases the patched function computes the same value, so the call is harmless.
 
 # %% tags=["hide-input", "optional", "intermediate"]
 from causalts.baselines import _patch_ges_numpy2
@@ -1104,8 +1105,9 @@ print("\ntrue edges:  A(t-1) → C(t),  B(t-1) → C(t),  C(t-1) → D(t)")
 # |---|---|
 # | See the constraint-based family in the same detail | [How the PC Algorithm Works](pc_step_by_step.ipynb) |
 # | Get the conceptual background | [Beginner's Guide](beginners_guide.ipynb) |
-# | Run all four `causal-ts` algorithms on real data | [Getting Started Tutorial](../tutorial.ipynb) |
-# | Compare against GES, DYNOTEARS and friends | [Baseline comparison](baseline_comparison.ipynb) |
+# | Run the `causal-ts` discovery algorithms end to end on synthetic data | [Getting Started Tutorial](../tutorial.ipynb) |
+# | See discovery on real river-discharge data | [Elbe river](elbe_river.ipynb) |
+# | Compare against GES and other baselines | [Baseline comparison](baseline_comparison.ipynb) |
 # | Diagnose hidden confounding | [Latent confounder detection](latent_confounder_detection.ipynb) |
 # | See a hybrid constraint + learned-score method | [GRACE high-dimensional](grace_high_dim.ipynb) |
 # | Turn a discovered graph into an effect estimate | [Effect estimation](effect_estimation.ipynb) |

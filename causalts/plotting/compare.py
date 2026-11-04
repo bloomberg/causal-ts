@@ -79,19 +79,23 @@ def compare_graphs(
         ``{'x': array(N,), 'y': array(N,)}`` node positions.
         If *None*, computed from *node_layout*.
     node_layout : str, optional
-        Layout algorithm (``'circular'``, ``'spring'``, etc.). Default ``'circular'``.
+        Layout algorithm passed to ``compute_node_positions`` (``'neato'``,
+        ``'circular'``, ``'spring'``, etc.). Default ``'neato'``; Graphviz
+        layouts fall back to ``'circular'`` with a warning when Graphviz is
+        unavailable.
     node_size : float, optional
-        Node diameter. Default 0.3.
+        Node diameter. Default 0.2.
     node_color : str, optional
         Fill color for nodes. Default ``'lightgrey'``.
     arrow_linewidth : float, optional
-        Edge width. Default 6.
+        Edge width. Default 3.
     label_fontsize : float, optional
-        Font size for colorbar / axis labels.
+        Base font size; the title uses ``label_fontsize + 2`` and the legend
+        defaults to ``label_fontsize - 1``. Default 10.
     node_label_size : float, optional
-        Font size for node labels.
+        Font size for node labels. Default 12.
     link_label_fontsize : float, optional
-        Font size for edge lag labels.
+        Font size for edge lag labels; ``0`` hides them. Default 10.
     curved_radius : float, optional
         Curvature of edges. Default 0.2.
     tp_color : str, optional
@@ -595,7 +599,10 @@ def plot_lag_metrics(
     graph_discovered : array-like, shape (N, N, tau_max+1)
         Discovered graph (0/1).
     metrics : list of str, optional
-        Default ``["Precision", "Recall", "F1"]``.
+        Metric rows to show. Default ``["Precision", "Recall", "F1"]``.
+        Valid names: ``"Precision"``, ``"Recall"``, ``"F1"``, ``"TP"``,
+        ``"FP"``, ``"FN"``, ``"SHD"``; unknown names are shown as 0. The
+        colour scale is fixed to [0, 1], so count metrics saturate.
     fig_ax : tuple (fig, ax), optional
         Existing figure and axes.
     figsize : tuple, optional

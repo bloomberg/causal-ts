@@ -112,12 +112,12 @@ else:
 fig, axes = plt.subplots(1, 2, figsize=(8, 4))
 _, _, pos = tp.plot_graph(
     gt1, var_names=names1, node_layout="neato", fig_ax=(fig, axes[0]),
-    show_colorbar=False, return_pos=True, title="Ground truth (spring)"
+    show_colorbar=False, return_pos=True, title="Ground truth (neato)"
 )
 
 tp.plot_graph(
     discovered, var_names=names1, fig_ax=(fig, axes[1]),
-    node_pos=pos, show_colorbar=False, title="Discovered (spring)"
+    node_pos=pos, show_colorbar=False, title="Discovered (reused positions)"
 );
 
 
@@ -170,7 +170,7 @@ plt.show()
 # %% [markdown]
 # ## 4. Custom Edge Color
 #
-# Use `edge_color` to change the default edge color (previously hardcoded to black). Works when `val_matrix` is not provided.
+# Use `edge_color` to change the default edge color (black). It applies when `val_matrix` is not provided.
 
 # %%
 fig, axes = plt.subplots(1, 3, figsize=(10, 4))
@@ -230,6 +230,20 @@ plt.show()
 # ### Multi-target highlighting
 #
 # Pass a list to `target_node` to highlight multiple variables simultaneously. Edges between targets use `target_between_color`.
+
+# %%
+fig, ax = tp.plot_graph(
+    gt1, var_names=names1,
+    target_node=names1[:2], edge_color="#CCCCCC",
+    figsize=(4, 4),
+)
+ax.set_title(f"Targets: {names1[0]}, {names1[1]}")
+plt.show()
+
+# %% [markdown]
+# ### Target highlighting with `val_matrix`
+#
+# When `target_node` is set, target highlighting takes precedence over the `val_matrix` colormap.
 
 # %%
 # Target highlighting overrides val_matrix colormap
@@ -515,8 +529,6 @@ fig, ax = tp.plot_graph(
 # fig.savefig("my_graph.pdf", bbox_inches="tight")
 print("Uncomment savefig lines above to export")
 plt.show()
-
-# %%
 
 # %% [markdown]
 # ## `corrplot` — Correlation & Association Matrix

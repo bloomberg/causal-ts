@@ -33,7 +33,7 @@
 #
 # | your graph | use |
 # |---|---|
-# | hubs (scale-free), or dense | **CDNOTS+** — up to +0.20 F1 |
+# | hubs (scale-free), or dense | **CDNOTS+** — up to +0.29 F1 |
 # | moderate density, limited data | **CDNOTS+** — it is never materially worse |
 # | sparse, homogeneous, lots of data | either — they tie |
 #
@@ -84,12 +84,13 @@ for r in rows:
 #
 # Over the full study below (9,480 runs):
 #
-# | | F1 | Precision | Recall | edges found (of 99) |
-# |---|---|---|---|---|
-# | CDNOTS | 0.765 | 0.884 | 0.700 | 66 |
-# | CDNOTS+ | 0.846 | 0.899 | 0.824 | 80 |
+# | | F1 | Precision | Recall |
+# |---|---|---|---|
+# | CDNOTS | 0.765 | 0.884 | 0.700 |
+# | CDNOTS+ | 0.846 | 0.899 | 0.824 |
 #
-# Same precision, 14 more true edges recovered.
+# Precision is about the same; recall is 0.124 higher. On a graph with 99 true
+# edges that is about 12 more true edges recovered.
 
 # %% [markdown]
 # ## 2. When does it help? Density and sample size
@@ -122,10 +123,13 @@ axes[0].legend(frameon=False, fontsize=9)
 plt.tight_layout(); plt.show()
 
 # %% [markdown]
-# **The gain grows with density and shrinks with sample size**, in all three
-# topologies. It is largest where hubs exist (scale-free) and smallest on
-# Erdős–Rényi, which has none. Range: +0.018 (sparse scale-free, T=2000) to
-# +0.199 (dense scale-free, T=200).
+# **The gain grows with density** in all three topologies. It is largest where
+# hubs exist (scale-free) and smallest on Erdős–Rényi, which has none (at most
+# +0.07, and close to zero at T=2000). Sample size matters less than density and
+# not monotonically: in sparse graphs the gain shrinks as T grows, but for dense
+# scale-free graphs (mean degree 7.5) it goes from +0.21 at T=200 to +0.29 at
+# T=500 and T=1000, and is still +0.26 at T=2000. On scale-free graphs the range
+# is +0.018 (mean degree 1.5, T=2000) to +0.288 (mean degree 7.5, T=1000).
 #
 # **Dimension does almost nothing.** Paired ΔF1 by topology and $d$:
 #
@@ -156,8 +160,9 @@ plt.tight_layout(); plt.show()
 #
 # Both methods prefer `alpha=0.01` over `0.05` on this benchmark
 # (CDNOTS 0.753 vs 0.733 overall), though the margin is topology-dependent —
-# CDNOTS alone does better at 0.05 on scale-free. The library default is 0.05;
-# consider 0.01 for either method.
+# CDNOTS alone does better at 0.05 on scale-free. `run_cdnots_plus` defaults to
+# `alpha=0.01`; `run_cdnots` defaults to `alpha=0.05`, so pass `alpha=0.01`
+# explicitly if you want the same setting for CDNOTS.
 #
 # ---
 #

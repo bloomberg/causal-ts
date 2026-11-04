@@ -25,14 +25,16 @@
 # If instead you want the target's **actual causes**, you *could* run full causal
 # discovery and read the target's neighbourhood off the graph — but that is
 # **O(d²)** and computes the entire graph when you needed one target's corner of it.
-# `select_features` gets you just that corner — the target's causes — in **O(d)**.
+# `select_features` gets you just that corner — the target's causes — in **O(d)**
+# with the `cedar` and `fastpc` backends (the `cdnots` backend runs the full graph).
 #
 # This notebook is a guided tour of *why* causal features are worth it and *how* to
 # use them.
 #
 # **Three things you'll get, and why each matters:**
 #
-# 1. **Speed.** Single-target discovery is O(d) vs O(d²) for a full graph — we'll
+# 1. **Speed.** Parent-only single-target discovery (`cedar`, `fastpc`) is O(d) vs
+#    O(d²) for a full graph — we'll
 #    *see* the curves diverge.
 # 2. **Causal, not merely correlational, features.** The headline. Correlational
 #    selectors pick variables that predict but don't cause; those models look great
@@ -65,9 +67,6 @@
 # role keeps the same colour in every graph and bar chart below.
 
 # %%
-import sys
-sys.path.insert(0, "..")
-
 import time
 import warnings
 
@@ -118,7 +117,7 @@ def features_df(r):
     return pd.DataFrame(rows)
 
 
-from causalts.plotting._core import plot_graph
+from causalts.plotting import plot_graph
 
 _GRAPH_ROLES = set(ROLE_COLORS)
 
@@ -222,7 +221,12 @@ features_df(r)
 # > **Takeaway:** three lines take you from raw data to a fitted predictor.
 # > `select_features` returns the target's causes as typed
 # > `(variable, lag, role, score)` records; `to_design_matrix()` turns them into
-# > lagged columns. The rest of the notebook unpacks *why* those features — and not
+# > lagged columns. The column count can differ from the number of records:
+# > cross-variable features always become columns, while self-history lags are
+# > added separately whenever their partial distance-correlation strength is at
+# > least `self_threshold` (default 0.05). Here the table lists two parents and
+# > one `self` record, while the design matrix has four columns: the two parents
+# > plus two self-lags that pass the threshold. The rest of the notebook unpacks *why* those features — and not
 # > the most *correlated* ones — are what you want.
 
 # %% [markdown]
@@ -239,15 +243,16 @@ features_df(r)
 # | backend | cost | what it does | use it when… |
 # |---|---|---|---|
 # | **`cedar`** | O(d) | pairwise single-target search; assumes AR(1) self-history | you want the fast default and roughly linear/pairwise dependence |
-# | **`fastpc`** | O(d) | local PC-around-the-target *skeleton* — a fast **approximation** of CDNOTS adjacency (no orientation / Meek / MCI) | you want speed and are OK with lag-0 edges left `undirected` |
-# | **`cdnots`** | O(d²) | the **real** CDNOTS run once and sliced to the target — fully oriented | you want faithful orientation (parent vs child) and can pay full cost |
+# | **`fastpc`** | O(d) | local PC-around-the-target *skeleton* — a fast **approximation** of CDNOTS adjacency (no collider orientation, Meek rules, MCI pruning or phase-3 nonstationarity step) | you want speed and are OK with lag-0 edges left `undirected` |
+# | **`cdnots`** | O(d²) | the full CDNOTS algorithm run once and sliced to the target; lag-0 edges are oriented where the CPDAG allows, otherwise reported `undirected` | you want CDNOTS's skeleton and orientation (parent vs child) and can pay full cost |
 #
 # Two things worth internalising before we go on:
 #
 # - **Temporal precedence orients lagged edges for free.** A cause at `lag ≥ 1`
 #   precedes its effect, so it is unambiguously a **parent**. Only *contemporaneous*
 #   (`lag 0`) edges are direction-ambiguous — `fastpc` reports those as
-#   **`undirected`**; real `cdnots` tries to orient them.
+#   **`undirected`**; `cdnots` orients them where collider and Meek rules allow and
+#   leaves the rest `undirected`.
 # - **Discovery ≠ prediction.** `result.features` reports what discovery *found*.
 #   Which self-history lags actually become model inputs is a separate, predictive
 #   decision made in `to_design_matrix(include_self=, self_threshold=)`.
@@ -300,11 +305,13 @@ plt.show()
 # %% [markdown]
 # ## 4. `fastpc` vs real `cdnots`
 #
-# `fastpc` is the fast skeleton; `cdnots` is the real, fully-oriented algorithm.
-# They agree on the lagged parents (temporal precedence pins those), but differ on
-# contemporaneous edges: `fastpc` leaves lag-0 adjacencies **`undirected`**, while
-# real `cdnots` orients them. Here they agree on `X3`; the difference shows up on
-# targets with contemporaneous neighbours.
+# `fastpc` is a local skeleton search; `cdnots` is the full algorithm. Besides
+# orientation, `fastpc` skips CDNOTS's MCI pruning and phase-3 nonstationarity step,
+# so its adjacencies can differ too. Lagged parents are oriented by temporal
+# precedence in both. On contemporaneous edges, `fastpc` leaves lag-0 adjacencies
+# **`undirected`**, while `cdnots` orients them where the CPDAG allows (some can
+# remain unresolved). Here they agree on `X3`; differences show up on targets with
+# contemporaneous neighbours or where the pruning steps matter.
 
 # %%
 fig, axes = plt.subplots(1, 2, figsize=(8.4, 3.4))
@@ -315,9 +322,10 @@ plt.tight_layout()
 plt.show()
 
 # %% [markdown]
-# > **Takeaway:** for a target whose causes are all lagged, `fastpc` and
-# > `cdnots` return the same parents — so you can pay O(d) for `fastpc` and only
-# > reach for O(d²) `cdnots` when contemporaneous orientation matters.
+# > **Takeaway:** for this target, whose causes are all lagged, `fastpc` and
+# > `cdnots` return the same parents — so you can pay O(d) for `fastpc` and reach
+# > for O(d²) `cdnots` when contemporaneous orientation or CDNOTS's extra pruning
+# > matters.
 
 # %% [markdown]
 # ## 5. The O(d) speed win
@@ -420,7 +428,7 @@ plt.show()
 # %% [markdown]
 # `X1` (aqua **spouse**) appears only with `markov_blanket=True`; the default
 # correctly does **not** claim it as a cause of `X0`. With `algo="cdnots"` the
-# blanket is read straight off the full oriented graph instead of by re-running per
+# blanket is read straight off the full CDNOTS graph instead of by re-running per
 # variable — no extra searches needed.
 
 # %%
@@ -428,7 +436,7 @@ r_cd = select_features(df, "X4", max_lag=max_lag, algo="cdnots",
                        markov_blanket=True)
 print(r_cd)
 
-# Extract *just* X4's Markov blanket from the full oriented graph and plot that
+# Extract *just* X4's Markov blanket from the full CDNOTS graph and plot that
 # subgraph next to the ground-truth FULL graph, so you can see the whole system
 # vs. the corner select_features returned.
 mb_vars = ["X4"] + [v for v in r_cd.variables if v != "X4"]
@@ -802,14 +810,17 @@ features_df(r_noisy)
 #   choice for O(d) selection.
 # - **`fastpc`** — O(d) skeleton; use when you want speed and can accept lag-0 edges
 #   reported as `undirected`. It is an *approximation* of CDNOTS adjacency.
-# - **`cdnots`** — the real, fully-oriented algorithm at O(d²). Use when parent-vs-
-#   child orientation of contemporaneous edges matters, or as the faithful reference.
+# - **`cdnots`** — the full CDNOTS algorithm at O(d²). Use when parent-vs-child
+#   orientation of contemporaneous edges matters, or as the reference. Its output
+#   is a CPDAG slice, so some lag-0 edges can stay `undirected`.
 #
 # **Limitations to keep honest about**
 #
 # - **Latent confounders.** If an unobserved variable drives both a candidate and
 #   the target, its edge can be reported as a cause. Single-target selection cannot
-#   condition on what isn't measured — no method here handles hidden confounding.
+#   condition on what isn't measured, and none of these backends models hidden
+#   confounders. For latent-confounder detection and adjustment, see LUCID in
+#   [`latent_confounder_detection.ipynb`](latent_confounder_detection.ipynb).
 # - **Test choice = assumptions.** With the default linear `ParCorr`, a purely
 #   nonlinear cause can be missed. Pass a nonlinear `ci_test` (e.g. `KCIGPU`,
 #   `CMIknnGPU`) for nonlinear dependence — scores then use that test's conditional
@@ -820,17 +831,16 @@ features_df(r_noisy)
 # - **Discovery vs. prediction of self-history.** `features` reflects what discovery
 #   surfaced; use `to_design_matrix(include_self=, self_threshold=)` to decide which
 #   self-lags actually enter the model.
-#
-# Full quantitative validation against Lasso / correlation-top-k across several
-# datasets lives in `experiments/feature_selection/FINDINGS.md`.
 
 # %% [markdown]
 # ## 10. Summary & next steps
 #
 # - **`select_features(df, target, max_lag=…, algo=…)`** returns a single target's
-#   causal features in **O(d)** — no full O(d²) graph required.
+#   causal features (parents) in **O(d)** with the `cedar` and `fastpc` backends —
+#   no full O(d²) graph required. The `cdnots` backend and `markov_blanket=True`
+#   cost O(d²).
 # - **Backends:** `cedar` (fast pairwise), `fastpc` (fast skeleton approximation),
-#   `cdnots` (real, fully oriented).
+#   `cdnots` (full CDNOTS; lag-0 edges may stay `undirected`).
 # - **Roles:** `parent`, `child`, `spouse`, `self`, `undirected`, `nonstationarity`
 #   — a consistent, interpretable vocabulary.
 # - **`markov_blanket=True`** adds children + spouses (the theoretically optimal
@@ -842,7 +852,6 @@ features_df(r_noisy)
 #
 # **Next steps**
 #
-# - `experiments/feature_selection/FINDINGS.md` — full baseline benchmarks.
 # - `cedar_deep_dive.ipynb` — the single-target algorithm in depth.
 # - `effect_estimation.ipynb` — go from a discovered graph to estimated effects with
 #   DoWhy.

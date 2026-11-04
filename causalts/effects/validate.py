@@ -811,8 +811,7 @@ def sensitivity_analysis(
 
     Parameters
     ----------
-    graph, data, treatment, outcome, treatment_lag, var_names, include_c,
-    cycle_resolution
+    graph, data, treatment, outcome, treatment_lag, var_names, include_c, cycle_resolution
         As for :func:`refute_effect`.
     simulation_method : str
         Passed to DoWhy as ``simulation_method``.

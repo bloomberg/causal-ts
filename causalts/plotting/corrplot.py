@@ -1623,8 +1623,9 @@ def corr_table(
     show_n : bool
         If True (default), prepend Mean (M) and SD columns per variable.
     sig_stars : bool
-        If True (default), append APA significance stars (* p<.05,
-        ** p<.01, *** p<.001) to each cell, when p-values are available.
+        If True (default), append APA significance stars (``*`` p<.05,
+        ``**`` p<.01, ``***`` p<.001) to each cell, when p-values are
+        available.
     show_ci : bool
         If True, append a 95% Fisher-z confidence interval to each cell.
         The analytic Fisher-z formula (and its metric-specific standard

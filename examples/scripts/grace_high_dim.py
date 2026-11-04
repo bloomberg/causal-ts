@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 
 from causalts.synthetic_data.synthetic_datasets import SCPGraphGenerator
 from causalts.ci_tests import PartialCorr
-from causalts import run_cdnots, run_cdnots_plus
+from causalts import run_cdnots
 from causalts import run_grace
 from causalts.utils import evaluate_graph
 
@@ -89,7 +89,7 @@ print(f"  TP={metrics_cdnots['TP']}  FP={metrics_cdnots['FP']}  FN={metrics_cdno
 # 2. **Gated model.** One Hard Concrete gate per candidate cross edge, trained with an $L_0$ penalty. Its strength λ comes from a bounded rule in d, T and the data's background lagged cross-correlation (`lambda_rule="xcorr"`).
 # 3. **Grow round.** Lagged pairs outside the candidates are tested, for an effect on the target's mean and on its noise scale; hits join the candidates and the gates are retrained.
 # 4. **Final graph.**
-#    - Cross edges are cut from the gates (the `auto` cutoff).
+#    - Cross edges are cut from the gates. With the default `gate_threshold="auto"` and GRACE's own candidate graph, the cutoff is Li's minimum cross-entropy threshold on the gate values, floored at 0.5 (0.5 is used directly when too few gates fall on either side of the Li threshold). See the GRACE paper (arXiv:2606.23880).
 #    - Self-loops come from an ungated autoregressive head and are kept by a partial F-test.
 #    - A minimum effect per edge (`effect_floor`) removes cross edges that explain a negligible share of their target's variance.
 

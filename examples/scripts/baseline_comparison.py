@@ -16,7 +16,9 @@
 # # Baseline Comparison: Constraint-Based vs. Standard Methods
 #
 # This notebook compares causal-ts discovery algorithms (CDNOTS, CDNOTS+, CEDAR) against
-# standard baselines available from `causalts.baselines`:
+# standard baselines available from `causalts.baselines` on four synthetic datasets: ex1
+# (nonlinear, d=5), ex2 (linear VAR, d=6), ex3 (linear cascade, d=11) and a Hénon chain
+# (nonlinear, d=5).
 #
 # | Method | Type | Assumptions | Thresholding |
 # |--------|------|-------------|--------------|
@@ -29,7 +31,7 @@
 # | **TGES** | Score-based (BIC) | Linear Gaussian, LGES + tier-based orientation of undirected edges | BIC penalty (automatic) |
 # | **VARLiNGAM** | ICA-based | Linear, non-Gaussian noise | Coefficient threshold (default 0.05) |
 # | **LASSO-VAR** | L1-penalized VAR | Linear, autoregressive | LassoCV penalty (automatic) |
-# | **Granger** | LASSO-VAR | Linear, autoregressive | Any non-zero LASSO coef |
+# | **Granger** | LASSO-VAR (causal-learn) | Linear, autoregressive | Any non-zero LASSO coef |
 #
 # > **CDNOTS vs. CDNOTS+:** CDNOTS uses the standard PC skeleton. CDNOTS+ replaces it
 # > with a two-phase PCMCI+-style skeleton: phase 1 discovers a parent superset per variable,
@@ -55,14 +57,16 @@
 # > more directed edges than the raw CPDAG.
 #
 # > **Note on evaluation fairness:** All methods are evaluated on the full ground truth including
-# > autoregressive self-edges (X_{t-k}→X_t). CEDAR adds AR(1) self-loops for all variables
-# > unconditionally via `assume_ar1=True` — not through CI testing. When the ground truth is
-# > missing AR self-loops (e.g. ex2), these become false positives and adversely affect
-# > CEDAR's precision.
+# > autoregressive self-edges (X_{t-k}→X_t). With its defaults (`include_autoreg=True`,
+# > `assume_ar1=True`) CEDAR adds a lag-1 self-loop for every variable without testing it.
+# > Where the ground truth has no self-loop for a variable (X1 and X2 in ex1 and ex2), that
+# > self-loop is a false positive; where the true self-loop is at a longer lag (lag 2 in the
+# > Hénon chain), CEDAR misses it.
 #
 # > **Note:** VARLiNGAM uses a coefficient magnitude threshold (default `threshold=0.05`)
-# > to determine edges. LASSO-VAR and Granger use LASSO sparsity — non-zero coefficients
-# > are edges. GES/LGES/TGES and constraint-based methods produce edges directly.
+# > to determine edges. LASSO-VAR and Granger both fit a cross-validated LASSO (`LassoCV`)
+# > VAR and count non-zero coefficients as edges, so they are expected to return identical
+# > graphs. GES/LGES/TGES and constraint-based methods produce edges directly.
 
 # %%
 import warnings
@@ -133,13 +137,12 @@ def run_comparison(dataset_name, seed=42, nonlinear=False):
         rows.append({"Method": "CDNOTS+ (nonlinear)", **m_plus_nl})
 
     # --- CEDAR (linear) ---
-    # exclude_self_loops=True: CEDAR tests cross-variable pairs only and never
-    # discovers autoregressive self-edges (X_{t-k}→X_t); excluding them gives
-    # a fair evaluation of what CEDAR is designed to find.
+    # Scored on the full ground truth, self-loops included. With the default
+    # include_autoreg=True, CEDAR adds a lag-1 self-loop for every variable.
     try:
         ci_cedar = ParCorrGPU(np.zeros((2, 2)), device="cpu")
         res_cedar = run_cedar(df, ci_cedar, alpha_cond1=0.01, alpha_cond2=0.01, max_lag=max_lag)
-        m = evaluate_graph(res_cedar.cg_tig, gt) #, exclude_self_loops=True)
+        m = evaluate_graph(res_cedar.cg_tig, gt)
         rows.append({"Method": "CEDAR (linear)", **m})
     except Exception as e:
         print(f"  CEDAR (linear) failed: {e}")
@@ -150,7 +153,7 @@ def run_comparison(dataset_name, seed=42, nonlinear=False):
         try:
             ci_cedar_nl = SplitKCIGPU(np.zeros((2, 2)), device="cpu")
             res_cedar_nl = run_cedar(df, ci_cedar_nl, alpha_cond1=0.01, alpha_cond2=0.01, max_lag=max_lag)
-            m_nl = evaluate_graph(res_cedar_nl.cg_tig, gt) #, exclude_self_loops=True)
+            m_nl = evaluate_graph(res_cedar_nl.cg_tig, gt)
             rows.append({"Method": "CEDAR (nonlinear)", **m_nl})
         except Exception as e:
             print(f"  CEDAR (nonlinear) failed: {e}")
@@ -218,8 +221,8 @@ results_ex1
 # %% [markdown]
 # ## Example 2: 6-Node Linear VAR (ex2, d=6, T=300)
 #
-# A 6-variable linear VAR process. All methods should handle this reasonably well,
-# but constraint-based methods leverage conditional independence structure more effectively.
+# A 6-variable linear VAR process. The linear-Gaussian assumptions of the score-based
+# methods (GES, LGES, TGES) hold here exactly.
 
 # %%
 results_ex2 = run_comparison("ex2")
@@ -228,8 +231,8 @@ results_ex2
 # %% [markdown]
 # ## Example 3: Cascade Network (ex3, d=11, T=300)
 #
-# An 11-variable linear system — the increased dimensionality challenges all methods
-# but particularly score-based and LASSO approaches.
+# An 11-variable linear system with a self-loop on every variable. The LASSO-based
+# baselines and VARLiNGAM find most true edges but add many false ones.
 
 # %%
 results_ex3 = run_comparison("ex3")
@@ -238,16 +241,14 @@ results_ex3
 # %% [markdown]
 # ## Example 4: Henon Chain (d=5, T=200, highly coupled nonlinear)
 #
-# Each node depends nonlinearly on its nearest neighbors — a dense coupling
-# pattern that creates high cross-correlation across all variables. This tests
-# the hypothesis that **CDNOTS+ helps when features are correlated**: standard
-# PC builds large conditioning sets on dense graphs, making CI tests noisy,
+# Each interior node depends nonlinearly on its own lag-1 value and its nearest
+# neighbours, and every node has a linear self-term at lag 2. Of the 16 true edges, 10
+# are self-loops (lags 1 and 2) and 6 are lag-1 links between neighbours. The strong
+# coupling makes the variables highly cross-correlated, which tests whether
+# **CDNOTS+ helps when features are correlated**: PC builds larger conditioning sets,
 # while CDNOTS+ restricts conditioning to discovered parents.
-#
 
 # %%
-from causalts.synthetic_data.synthetic_datasets import henon_chain
-
 results_henon = run_comparison("henon", nonlinear=True)
 results_henon
 
@@ -365,28 +366,28 @@ plt.show()
 # %% [markdown]
 # ## Key Takeaways
 #
-# 1. **CEDAR leads on ex1 (nonlinear) and ex3; CDNOTS+ ties CEDAR on ex2; CDNOTS leads on Henon.**
-#    - **ex1** (nonlinear, d=5): CEDAR (nonlinear) achieves the highest F1 at 0.778 vs CDNOTS+ (nonlinear) 0.571. Partial distance correlation lag selection captures nonlinear associations that ParCorr misses, giving CEDAR an edge before the CI test even runs.
+# 1. **CEDAR leads on ex1 (nonlinear) and ex3, GES/LGES/TGES lead on ex2, and CDNOTS (nonlinear) leads on Henon.**
+#    - **ex1** (nonlinear, d=5): CEDAR (nonlinear) has the highest F1 (0.778), ahead of GES/LGES/TGES (0.636) and CDNOTS/CDNOTS+ with SplitKCI (both 0.571).
 #    - **ex2** (linear VAR, d=6): GES, LGES and TGES tie for the lead at 0.917, ahead of CDNOTS+ and CEDAR (both 0.870) and CDNOTS (0.800).
-#    - **ex3** (cascade, d=11): CEDAR achieves perfect F1=1.000 (GES/LGES/TGES 0.949, CDNOTS 0.945, CDNOTS+ 0.964). The chain structure and AR self-loops in the ground truth align exactly with CEDAR's pairwise design and `assume_ar1=True`.
-#    - **Henon** (nonlinear, dense, d=5): CDNOTS (nonlinear) dominates at 0.828. Coupled-map dynamics violate the AR(1) assumption; lag selection misidentifies the dominant lag and Cond2 is unreliable (CEDAR 0.560 linear, 0.667 nonlinear).
+#    - **ex3** (cascade, d=11): CEDAR achieves F1=1.000 (CDNOTS+ 0.982, GES/LGES/TGES 0.949, CDNOTS 0.945). Every variable has a lag-1 self-loop in the ground truth, which matches CEDAR's default of adding exactly those.
+#    - **Henon** (nonlinear, d=5): CDNOTS (nonlinear) leads at 0.828. The lag-2 self-terms violate CEDAR's AR(1) assumption (CEDAR 0.560 linear, 0.667 nonlinear).
 #
 # 2. **CDNOTS+ advantage is dataset-dependent.**
-#    Helps on moderately dense linear graphs (ex2: +0.070 over CDNOTS) via MCI conditioning, and now also helps on the sparse cascade (ex3: +0.019). Hurts on dense nonlinear graphs (Henon: −0.207 vs CDNOTS nonlinear) where parent estimation errors compound.
+#    With ParCorr it is ahead of CDNOTS on ex1 (+0.181), ex2 (+0.070) and ex3 (+0.037), and level on Henon (+0.002). With SplitKCI it ties on ex1 and is clearly worse on Henon (0.552 vs 0.828), so the expectation that it helps on correlated features does not hold for this Hénon chain.
 #
 # 3. **Nonlinear CI tests strongly help on coupled systems.**
-#    CDNOTS gains +0.196 on ex1 and +0.309 on Henon from switching to SplitKCI. CEDAR gains +0.190 on ex1 and +0.107 on Henon.
+#    CDNOTS gains +0.196 on ex1 and +0.268 on Henon from switching to SplitKCI. CEDAR gains +0.190 on ex1 and +0.107 on Henon.
 #
 # 4. **CEDAR lag selection uses partial distance correlation.**
 #    `partial_dcor` residualises each target on its own lag-1 via OLS, then computes unbiased dcor against the residual. This removes the target's AR contribution before scoring cross-variable dependence. It assumes AR(1) for the target; results may degrade when the target has AR(p>1) dynamics.
 #
-# 5. **CEDAR self-loops are assumed, not discovered.** `assume_ar1=True` unconditionally adds one self-loop per variable. When the ground truth has self-loops (ex3), these are true positives. When it lacks them (ex2, Henon), they become false positives. All methods here are evaluated on the full ground truth including self-loops.
+# 5. **CEDAR self-loops are assumed, not discovered.** With `include_autoreg=True` and `assume_ar1=True` (the defaults) CEDAR adds a lag-1 self-loop for every variable. In ex3 every variable has one, so they are all true positives. In ex1 and ex2, X1 and X2 have no self-loop, so two of them are false positives. In the Hénon chain the lag-1 self-loops are correct but the lag-2 ones are missed. All methods here are evaluated on the full ground truth including self-loops.
 #
 # 6. **GES, LGES and TGES are identical on all four datasets here — but not in general.** All three run on the lag-embedded matrix under the same temporal background knowledge (a variable can only cause another at an equal or later time step). LGES adds SafeInsert and ConservativeInsert on top; TGES adds a tier-based orientation pass on top of LGES. On these four small, clean systems all three land on the same F1/Precision/TPR/SHD, because plain GES's own search already reaches the fixed point the extra machinery is there to reach for it. That is a property of these datasets, not of the methods: at `d=15`, `T=300`, with contemporaneous edges mixed into the lagged structure (see the demonstration above), GES adds 7 spurious edges LGES's ConservativeInsert withholds (F1 0.870 → 0.936, SHD 15 → 7).
 #
-# 7. **VARLiNGAM, LASSO-VAR, and Granger lag far behind.** VARLiNGAM achieves high recall but poor precision; non-Gaussian identifiability rarely holds. LASSO-VAR and Granger produce nearly identical results and are dominated by constraint-based and CEDAR methods on every dataset.
+# 7. **VARLiNGAM, LASSO-VAR and Granger trail on ex1, ex2 and ex3.** All three reach high recall but poor precision; the noise here is Gaussian, so VARLiNGAM's non-Gaussian identifiability does not hold. LASSO-VAR and Granger return identical graphs because both are `LassoCV` fits of the same VAR. The Hénon chain is the exception: LASSO-VAR (0.566) edges out every ParCorr-based method (CDNOTS 0.560, CDNOTS+ 0.562, CEDAR 0.560), though it stays well below CDNOTS (0.828) and CEDAR (0.667) with SplitKCI.
 #
-# > **Note on reproducibility:** CDNOTS+'s numbers above reflect its current defaults (see the CDNOTS vs. CDNOTS+ notebook). CEDAR's own numbers can also shift slightly between runs of this notebook: CEDAR's `SplitKCIGPU`/permutation-based lag selection draws from PyTorch's global RNG, so anything that runs before it in the same kernel and consumes random draws (including CDNOTS+, whose behaviour depends on its own internal test count) can leave that RNG in a different state. This is a pre-existing property of the shared global generator, not a change to CEDAR's code or parameters.
+# > **Note on reproducibility:** Some numbers can shift slightly between runs of this notebook. SplitKCI and CEDAR's permutation-based lag selection draw from PyTorch's global RNG, so anything that runs earlier in the same kernel and consumes random draws can leave that RNG in a different state.
 #
 # ---
 #

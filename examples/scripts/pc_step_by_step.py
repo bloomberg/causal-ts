@@ -301,8 +301,9 @@ plt.show()
 # A small p-value does not prove a direct causal link, and a large one does not prove
 # independence. These are operational decisions made under uncertainty.
 #
-# "Mark for deletion" rather than "delete" is deliberate: PC-stable finishes every test at
-# the current depth before touching the graph. Section 4 shows why that matters.
+# "Mark for deletion" rather than "delete" is deliberate: PC-stable picks every candidate
+# blocker at the current depth from one frozen snapshot of the graph. Section 4 shows why
+# that matters.
 #
 # The recorded set `S` is the **separating set**, `sepset(X, Y)`. It looks like bookkeeping
 # now; Section 7 turns it into orientation.
@@ -396,16 +397,20 @@ plt.show()
 #
 # | | **original PC** | **PC-stable** (our default) |
 # |---|---|---|
-# | adjacency sets | updated the moment an edge dies | **frozen** for the whole depth |
-# | on finding a separator | stop testing that pair | **test every eligible blocker anyway** |
+# | adjacency sets used to pick blockers | updated the moment an edge dies | **frozen** for the whole depth |
 # | when edges are removed | immediately, mid-sweep | **all at once, at the end of the depth** |
-# | result | can depend on the order edges are visited | **order-independent** |
+# | result | can depend on the order edges are visited | **order-independent skeleton** |
 #
-# Deleting an edge mid-sweep shrinks the neighbour sets, so every pair tested afterwards
-# faces a different candidate list — that is exactly how visit order leaks into the answer.
-# PC-stable pays for a few extra tests and buys a deterministic skeleton.
+# Both versions stop testing a pair as soon as they find a separator for it. The only
+# difference is which neighbour sets the candidate blockers come from. Deleting an edge
+# mid-sweep shrinks the neighbour sets, so every pair tested afterwards faces a different
+# candidate list — that is exactly how visit order leaks into the answer. PC-stable keeps
+# some candidates that original PC would already have dropped, so it can run a few extra
+# tests, and in return the skeleton does not depend on visit order.
 #
-# **We follow PC-stable below**
+# **We follow PC-stable below.** To show every p-value, the hand-run cells below test every
+# candidate blocker of every edge, even after a separator has been found. A real
+# implementation stops at the first separator, so it runs at most this many tests.
 
 # %%
 def neighbours(edge_set, v):
@@ -534,7 +539,7 @@ plt.show()
 # >
 # > - Started with 6 edges, ended with 3: `A–C`, `B–C`, `C–D` — the correct skeleton of the
 # >   true DAG.
-# > - PC-stable evaluated 6 + 10 + 3 = 19 distinct CI statements and recorded 3 separating
+# > - We evaluated 6 + 10 + 3 = 19 distinct CI statements and recorded 3 separating
 # >   sets: `sepset(A,B) = {}`, `sepset(A,D) = {C}`, `sepset(B,D) = {C}`.
 # > - **We still have zero arrows.** Every edge is undirected. That is the next stage.
 
@@ -881,12 +886,13 @@ print("\nExact match. PC reconstructed the DAG from 19 CI tests and two rules.")
 #
 # Everything above, assembled. There is nothing conceptually new in it.
 #
-# > **This is teaching code, not a PC implementation.** Two things to notice. It `break`s at
-# > the first separator and deletes immediately — that is **original PC, not PC-stable**, so
-# > its skeleton can in principle depend on edge order. And it is deliberately minimal:
-# > just the orientation propagation this four-node example needs. Real libraries also
-# > handle orientation conflicts, the full rule set, background knowledge, missing data, and
-# > numerical edge cases.
+# > **This is teaching code, not a PC implementation.** Two things to notice. It computes
+# > the candidate blockers once per depth and `break`s at the first separator for a pair.
+# > Edges leave `E` immediately, but the candidate lists for the rest of that depth still
+# > come from the frozen snapshot, so the skeleton follows the PC-stable rule and does not
+# > depend on edge order. And it is deliberately minimal: only Meek R1, which is all this
+# > four-node example needs. Real libraries also handle orientation conflicts, the full
+# > rule set, background knowledge, missing data, and numerical edge cases.
 
 # %%
 def pc(data, alpha=0.05, names=VARS):
@@ -990,8 +996,8 @@ plt.show()
 # 1. **Error propagation.** A wrong deletion changes the adjacency sets, which changes
 #    which higher-order tests are even available later.
 # 2. **Order dependence.** The original skeleton can depend on the order edges are visited.
-#    **PC-stable** fixes this by freezing the neighbour sets for a whole depth, running
-#    every eligible test, and applying all removals only once the depth is finished — the
+#    **PC-stable** fixes this by freezing the neighbour sets for a whole depth and
+#    applying all removals only once the depth is finished — the
 #    `stable=True` argument on `run_cdnots`, on by default. It is also what we did by hand
 #    in Sections 3–5.
 #
@@ -1090,7 +1096,8 @@ plt.show()
 # |---|---|
 # | See the *other* family solve the same problem | [How Score-Based Discovery Works](score_based_step_by_step.ipynb) |
 # | Get the conceptual background | [Beginner's Guide](beginners_guide.ipynb) |
-# | Run all four algorithms on real data | [Getting Started Tutorial](../tutorial.ipynb) |
+# | Run the library's discovery algorithms end to end on synthetic data | [Getting Started Tutorial](../tutorial.ipynb) |
+# | See discovery on real river-discharge data | [Elbe river](elbe_river.ipynb) |
 # | Pick a CI test for nonlinear data | [CI test comparison](ci_test_comparison.ipynb) |
 # | Tell the algorithm what you already know | [Background knowledge](background_knowledge.ipynb) |
 # | Diagnose hidden confounding | [Latent confounder detection](latent_confounder_detection.ipynb) |

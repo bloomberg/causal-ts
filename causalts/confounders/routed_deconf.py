@@ -12,33 +12,38 @@ correction.
 
 Pipeline (per dataset):
 
-  1. Route by a data-only statistic into a regime:
-       - "sparse"     : full-rank residual covariance (local latent forks)
-       - "pervasive"  : one or more dominant latent factors (e.g. GARCH factors)
-       ("sf" is an intermediate hub/scale-free regime; see routing below.)
-  2. Run skeleton discovery. Both branches use the *same* base engine (plain
-     ``run_cdnots``), so the regime affects only the correction that follows -- which
-     isolates the contribution of routing from any change in the search itself, and
-     means an already-discovered graph can be reused (``run_lucid(discovery=...)``).
-  3. Apply the regime-matched correction:
-       - sparse    : a post-double-selection (PDS) edge filter over observed controls.
-                     Granger-style at lags >= 1; at lag 0 the corresponding
-                     contemporaneous partial regression with lagged controls.
-       - pervasive : lagged edges are kept as discovered and the lag-0 slice is
-                     *reconstructed* by S-L -- attenuate the factor-dominated spectral
-                     directions, then recover sparse conditional-dependence candidates
-                     from the residual innovations against an edge-free null, with a
-                     persistence gate to limit moralization.
+1. Route by a data-only statistic into a regime:
+
+   - ``"sparse"``: full-rank residual covariance (local latent forks).
+   - ``"pervasive"``: one or more dominant latent factors (e.g. GARCH factors).
+
+   (``"sf"`` is an intermediate hub/scale-free regime; see routing below.)
+2. Run skeleton discovery. Both branches use the *same* base engine (plain
+   ``run_cdnots``), so the regime affects only the correction that follows -- which
+   isolates the contribution of routing from any change in the search itself, and
+   means an already-discovered graph can be reused (``run_lucid(discovery=...)``).
+3. Apply the regime-matched correction:
+
+   - sparse: a post-double-selection (PDS) edge filter over observed controls.
+     Granger-style at lags >= 1; at lag 0 the corresponding contemporaneous
+     partial regression with lagged controls.
+   - pervasive: lagged edges are kept as discovered and the lag-0 slice is
+     *reconstructed* by S-L -- attenuate the factor-dominated spectral
+     directions, then recover sparse conditional-dependence candidates from the
+     residual innovations against an edge-free null, with a persistence gate to
+     limit moralization.
 
 Routers:
-  - router="auto" (default): parameter-free; the sparse<->pervasive boundary is derived
-    from the Marchenko-Pastur no-factor null (adapts to d/T), with a robust sub-regime
-    split.
-  - router="spectral": spectral-gap statistic with calibrated thresholds (ablation;
-    expert users may override the thresholds).
-  - router="mp": Marchenko-Pastur factor count (ablation).
 
-Public API:
+- ``router="auto"`` (default): parameter-free; the sparse<->pervasive boundary is
+  derived from the Marchenko-Pastur no-factor null (adapts to d/T), with a robust
+  sub-regime split.
+- ``router="spectral"``: spectral-gap statistic with calibrated thresholds
+  (ablation; expert users may override the thresholds).
+- ``router="mp"``: Marchenko-Pastur factor count (ablation).
+
+Public API::
+
   run_lucid(df_obs, max_lag, ...)      -> LucidResult  [graph + router diagnostics]
   routed_deconfound(df_obs, max_lag, ...) -> (d, d, max_lag+1) graph  [low-level]
   deconfound(graph, df_obs, max_lag, regime, ...)     -> graph  [post-hoc layer]
@@ -885,17 +890,20 @@ def orient_lag0_pair(xa, xb, ua, ub, rule=None):
     """Orientation score for a contemporaneous (lag-0) edge between two variables.
 
     ``rule`` selects the statistic (default ``_ORIENT_RULE`` = "llcca"):
-      "llcca"   : pairwise lead-lag correlation asymmetry on the raw series. THE DEFAULT --
-                  see "WHICH RULE SHIPS" below.
-      "leadlag" : block-bootstrap-median joint bivariate VAR(1) asymmetry + 0.5 * pairwise
-                  cross-lag score (research-loop ideas 008/014/015). A FORMER default;
-                  kept as an ablation arm, and described at length below because the
-                  per-edge validation history is still the clearest statement of what each
-                  term was meant to buy.
-      "bivar"   : idea-008 alone (one joint VAR(1) fit, no bootstrap, no fusion). ABLATION.
-      "boot"    : idea-014 (blockboot median of "bivar", no fusion). ABLATION.
-      "lingam"  : pairwise LiNGAM likelihood ratio on the deconfounded residuals; needs
-                  non-Gaussianity, at chance without it. ABLATION ARM (Appendix app:orient).
+
+    - ``"llcca"``: pairwise lead-lag correlation asymmetry on the raw series. THE
+      DEFAULT -- see "WHICH RULE SHIPS" below.
+    - ``"leadlag"``: block-bootstrap-median joint bivariate VAR(1) asymmetry + 0.5 *
+      pairwise cross-lag score (research-loop ideas 008/014/015). A FORMER default;
+      kept as an ablation arm, and described at length below because the per-edge
+      validation history is still the clearest statement of what each term was
+      meant to buy.
+    - ``"bivar"``: idea-008 alone (one joint VAR(1) fit, no bootstrap, no fusion).
+      ABLATION.
+    - ``"boot"``: idea-014 (blockboot median of "bivar", no fusion). ABLATION.
+    - ``"lingam"``: pairwise LiNGAM likelihood ratio on the deconfounded residuals;
+      needs non-Gaussianity, at chance without it. ABLATION ARM (Appendix
+      app:orient).
 
     WHICH RULE SHIPS: "llcca", as of 2026-08-19, confirmed on the shipped pipeline with
     every unit's producing commit stamped in the saved record (``s3_utils.code_version``).
@@ -944,7 +952,7 @@ def orient_lag0_pair(xa, xb, ua, ub, rule=None):
     NOTE an all-lag F1 compresses any orientation difference to ~0.002: 158 of the suite's
     167 lag-0 ground-truth cross edges live in pervasive_dense. Read the dense row.
 
-    >0 => a->b, <0 => b->a, ~0 (|.|<1e-6) => unorientable (kept undirected).
+    >0 => a->b, <0 => b->a, ~0 (``abs(score) < 1e-6``) => unorientable (kept undirected).
 
     ``xa, xb``: the RAW observed series (retain AR / temporal structure -- needed for any
     lead-lag / cross-lag statistic). ``ua, ub``: the deconfounded VAR(1) innovation residuals
@@ -1309,23 +1317,26 @@ def routed_deconfound(
     different base engine (CD-NOTS+ with a tetrad deconfounding filter) instead; this
     is a research configuration, not the shipped default.
 
-    profile="adaptive" (DEFAULT):
-      sparse                          -> CD-NOTS + PDS-Granger.
-      pervasive, volatility clustering present (heteroskedastic latent factor):
-        scale-free sub-regime -> PDS + lead-lag-asymmetry (LLCCA);
-        pervasive  sub-regime -> volatility-invariance.
-      pervasive, NO volatility clustering (homoskedastic latent factor):
-        lead-lag-asymmetry + factor-augmented PDS (conditions on the PCA-estimated
-        factor itself, not on other equally-confounded observed vars); then drop
-        undirectable lag-0 edges (a shared same-period confounder's footprint).
-      Gating the volatility-based filters on actual heteroskedasticity keeps the
-      strong heteroskedastic-factor performance without over-pruning true edges on
-      homoskedastic factors. Fully parameter-free (conventional 0.05 levels).
+    ``profile="adaptive"`` (default):
 
-    profile="unconditional" applies the full deconfounding stack on every pervasive
-      route without the heteroskedasticity gate — stronger on heteroskedastic
-      (volatility-clustering) confounding, weaker on homoskedastic; provided for
-      users who know their confounding is volatility-clustering, and for ablations.
+    - sparse: CD-NOTS + PDS-Granger.
+    - pervasive, volatility clustering present (heteroskedastic latent factor):
+      the scale-free sub-regime gets PDS + lead-lag-asymmetry (LLCCA); the
+      pervasive sub-regime gets volatility-invariance.
+    - pervasive, NO volatility clustering (homoskedastic latent factor):
+      lead-lag-asymmetry + factor-augmented PDS (conditions on the PCA-estimated
+      factor itself, not on other equally-confounded observed vars); then drop
+      undirectable lag-0 edges (a shared same-period confounder's footprint).
+
+    Gating the volatility-based filters on actual heteroskedasticity keeps the
+    strong heteroskedastic-factor performance without over-pruning true edges on
+    homoskedastic factors. Fully parameter-free (conventional 0.05 levels).
+
+    ``profile="unconditional"`` applies the full deconfounding stack on every
+    pervasive route without the heteroskedasticity gate — stronger on
+    heteroskedastic (volatility-clustering) confounding, weaker on homoskedastic;
+    provided for users who know their confounding is volatility-clustering, and for
+    ablations.
 
     Parameters
     ----------
@@ -1363,7 +1374,12 @@ def routed_deconfound(
 
     Returns
     -------
-    graph : ndarray (d, d, max_lag+1) in [cause, effect, lag]. (graph, info) if return_info.
+    graph : ndarray
+        Edge array of shape ``(d, d, max_lag+1)`` indexed
+        ``[cause, effect, lag]``.
+    info : dict
+        Routing/gate diagnostics; returned (as ``(graph, info)``) only when
+        ``return_info=True``.
     """
     X = df_obs.values
     if ci is None:
@@ -1596,7 +1612,7 @@ def run_lucid(df_obs, max_lag, ci=None, discovery=None, **kwargs):
         Observed time series.
     max_lag : int
         Maximum lag to consider.
-    ci : CIT_Base, optional
+    ci : ~causalts.ci_tests.cit_test.CIT_Base, optional
         Conditional-independence test for the base skeleton search. Defaults to
         :class:`ParCorrGPU` on ``df_obs``.
     discovery : CausalResult | ndarray | callable, optional

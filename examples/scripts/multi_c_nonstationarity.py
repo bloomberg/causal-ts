@@ -30,12 +30,12 @@
 # | `'step'` | `[1_{t≥T/2}]` | Sudden regime change at midpoint |
 # | `'step+linear'` | `[1_{t≥T/2}, t]` | Regime change + gradual drift |
 # | `'linear+sin'` | `[t, sin(2πt/T)]` | Drift + periodic seasonal effect |
-# | `'linear+exp'` | `[t, eˢᵗ/ᵀ−1]` | Drift + accelerating change |
+# | `'linear+exp'` | `[t, exp(t/T)−1]` | Drift + accelerating change |
 # | `'linear+quad'` | `[t, t²/T]` | Quadratic drift |
 #
 # Or supply any `(T, k)` array via `c_array=...` for full control.
 #
-# Sections 7–8 add **CEDAR** results alongside CDNOTS for both datasets, with a side-by-side comparison bar chart.
+# Sections 5 and 8 add **CEDAR** results alongside CDNOTS for both datasets, with side-by-side comparison bar charts.
 
 # %%
 import warnings
@@ -71,8 +71,9 @@ from causalts.synthetic_data.synthetic_datasets import confounded_trends, ex1_no
 # | Temp | self-lag | — (root, no trend) |
 # | Energy | none | Temp(t-2) — the only genuine causal link |
 #
-# Without C, the algorithm links the trend-driven variables spuriously.
-# With  C, all spurious edges vanish and only Temp→Energy remains.
+# Without C, the algorithm links the trend-driven variables spuriously. A C basis
+# that matches the quadratic trend (`linear+quad`) removes most, but not all, of
+# these edges (sections 2–3).
 #
 
 # %%
@@ -140,7 +141,7 @@ fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 c_highlight = {('C_lin', 0): 'orange', ('C_quad', 0): 'orange'}
 pos = res_lq.plot(
     arrow_linewidth=3,
-    node_layout='sfdp',
+    node_layout='fdp',
     fig_ax=(fig, axes[0]),
     node_label_size=7,
     node_size=0.2,
@@ -255,8 +256,13 @@ print("  Chocolate, IceCream, Sunburn, Airline, Fuel")
 
 
 # %% [markdown]
+# Only `C_lin → Fuel` is found with `linear+sin`: a linear and a sinusoidal column
+# cannot represent the quadratic trend, so the CI tests do not attribute it to C for
+# the other four trend-driven variables.
+
+# %% [markdown]
 # ---
-# ## 7. CEDAR on Confounded Trends
+# ## 5. CEDAR on Confounded Trends
 #
 # Running the same C-preset sweep with CEDAR alongside CDNOTS.
 #
@@ -270,10 +276,18 @@ print("  Chocolate, IceCream, Sunburn, Airline, Fuel")
 # > to separate true causal edges from trend-driven spurious associations.
 #
 # > **Evaluation:** self-loops excluded (`exclude_self_loops=True`) — both algorithms
-# > are judged on the same cross-variable target set.
+# > are judged on the same cross-variable target set. CEDAR adds a lag-1 self-loop
+# > for every variable by default; the `spurious` column counts only cross-variable
+# > false positives.
 
 # %%
 cedar_results = {}   # (metrics, graph[:d,:d,:]) keyed by preset
+
+
+def offdiag(g):
+    """Copy of a (d, d, L) graph with self-loops removed."""
+    return g * (1 - np.eye(g.shape[0], dtype=g.dtype))[:, :, None]
+
 
 # Baseline: no C
 cit = ParCorrGPU(np.zeros((2, 2)))
@@ -287,7 +301,7 @@ for _lag in range(gt_cross.shape[2]):
     np.fill_diagonal(gt_cross[:, :, _lag], 0)
 m_nc_s = evaluate_graph(g_nc_s, gt_cross, exclude_self_loops=True) # CEDAR assumes autoregressive edges by design but does not test for them. Therefore, we exclude self-loops from evaluation.
 cedar_results['no C'] = (m_nc_s, g_nc_s)
-spur_s = int(g_nc_s.sum()) - m_nc_s['TP']
+spur_s = int(offdiag(g_nc_s).sum()) - m_nc_s['TP']
 print(f"{'no C':<18} F1={m_nc_s['F1']:.3f}  Prec={m_nc_s['Precision']:.3f}  "
       f"Rec={m_nc_s['TPR']:.3f}  SHD={m_nc_s['SHD']}  spurious={spur_s}")
 
@@ -298,7 +312,7 @@ for preset in presets:
     g_s = res_s.cg_tig[:d, :d, :]
     m_s = evaluate_graph(g_s, gt_cross, exclude_self_loops=True)
     cedar_results[preset] = (m_s, g_s)
-    spur_s = int(g_s.sum()) - m_s['TP']
+    spur_s = int(offdiag(g_s).sum()) - m_s['TP']
     print(f"{preset:<18} F1={m_s['F1']:.3f}  Prec={m_s['Precision']:.3f}  "
           f"Rec={m_s['TPR']:.3f}  SHD={m_s['SHD']}  spurious={spur_s}  (k={n_c_s})")
 
@@ -343,12 +357,21 @@ plt.show()
 
 
 # %% [markdown]
+# With raw `dcor` lag selection, CEDAR adds 5–6 spurious cross-variable edges without C
+# or with a basis that cannot represent the quadratic trend (`linear`, `step`,
+# `step+linear`, `linear+sin`). With `linear+exp` or `linear+quad` it recovers the
+# single cross-variable edge Temp(t-2) → Energy with no false positives. CDNOTS with
+# `linear+quad` keeps one spurious cross-variable edge, IceCream(t-1) → Chocolate.
+
+# %% [markdown]
 # ---
-# ## 5. Mechanism nonstationarity — variable-strength causal effects
+# ## 6. Time-dependent drift in individual variables
 #
 # The previous example used C to absorb an **unobserved confounder** (population
-# growth). Here we look at what CDNOTS was primarily designed for: causal
-# **mechanisms that change over time**.
+# growth) shared by several variables. Here each nonstationary variable has its own
+# time-dependent term: the causal coefficients are constant, but an additive drift
+# makes the distribution of X0, X1 and X2 given their parents change over time. In
+# the CDNOTS model this is an edge C → X.
 #
 # The `ex1_nonstationary` system has 5 variables with the following structure:
 #
@@ -387,7 +410,7 @@ plt.show()
 
 
 # %% [markdown]
-# ## 6. C basis comparison on mechanism nonstationarity
+# ## 7. C basis comparison on ex1_nonstationary
 #
 # We evaluate each preset against only the X-to-X edges (first 5 variables),
 # since the number of C columns varies by preset. We then separately check which
@@ -456,12 +479,20 @@ print("  C -> X2  (sinusoidal drift)")
 
 
 # %% [markdown]
+# C → X0 and C → X2 are recovered, each through the matching column (quadratic and
+# sinusoidal). C → X1 is missed; it is also missed with the `linear` and `linear+quad`
+# presets. Given X1(t-1), the remaining time effect on X1 is the drift term itself,
+# which grows only to 1.35 by t=300 against unit-variance noise, so at T=300 the test
+# does not have the power to separate it from noise. The X-to-X graph is still
+# recovered exactly (F1=1.000 above).
+
+
+# %% [markdown]
 # ---
 # ## 8. CEDAR on ex1_nonstationary
 #
 # This dataset has X0/X1 drifting quadratically and X2 oscillating sinusoidally.
-# CDNOTS's Phase 3 uses nonstationarity explicitly to orient edges, which is its
-# primary purpose. CEDAR treats C as a plain variable — helpful for absorbing
+# CDNOTS's Phase 3 uses nonstationarity explicitly to orient edges. CEDAR treats C as a plain variable — helpful for absorbing
 # confounding, but it lacks the Phase 3 nonstationarity-based orientation step.
 #
 # For a fair comparison we evaluate cross-variable edges only (3 true edges:
@@ -480,7 +511,7 @@ cedar2_nc = run_cedar(df2, cit, max_lag=max_lag2, include_C=False)
 g_nc2_s = cedar2_nc.cg_tig[:d2, :d2, :]
 m_nc2_s = evaluate_graph(g_nc2_s, gt2_cross, exclude_self_loops=True)
 cedar_results2['no C'] = (m_nc2_s, g_nc2_s)
-spur = int(g_nc2_s.sum()) - m_nc2_s['TP']
+spur = int(offdiag(g_nc2_s).sum()) - m_nc2_s['TP']
 print(f"{'no C':<22} F1={m_nc2_s['F1']:.3f}  Prec={m_nc2_s['Precision']:.3f}  "
       f"Rec={m_nc2_s['TPR']:.3f}  SHD={m_nc2_s['SHD']}  spurious={spur}")
 
@@ -491,7 +522,7 @@ for preset in presets2:
     g2_s = res2_s.cg_tig[:d2, :d2, :]
     m2_s = evaluate_graph(g2_s, gt2_cross, exclude_self_loops=True)
     cedar_results2[preset] = (m2_s, g2_s)
-    spur = int(g2_s.sum()) - m2_s['TP']
+    spur = int(offdiag(g2_s).sum()) - m2_s['TP']
     # Which C edges detected?
     c_edges = [
         f"{cn}→X{j}" for ci_i, cn in enumerate(res2_s.c_node_names)
@@ -510,7 +541,7 @@ n_c_s = len(res2_cust_s.c_node_names)
 g2_cust_s = res2_cust_s.cg_tig[:d2, :d2, :]
 m2_cust_s = evaluate_graph(g2_cust_s, gt2_cross, exclude_self_loops=True)
 cedar_results2['custom (quad+sin)'] = (m2_cust_s, g2_cust_s)
-spur = int(g2_cust_s.sum()) - m2_cust_s['TP']
+spur = int(offdiag(g2_cust_s).sum()) - m2_cust_s['TP']
 c_edges = [
     f"{cn}→X{j}" for ci_i, cn in enumerate(res2_cust_s.c_node_names)
     for j in range(d2) if res2_cust_s.cg_tig[d2 + ci_i, j, :].any()
@@ -518,6 +549,14 @@ c_edges = [
 print(f"{'custom (lin+quad+sin)':<22} F1={m2_cust_s['F1']:.3f}  Prec={m2_cust_s['Precision']:.3f}  "
       f"Rec={m2_cust_s['TPR']:.3f}  SHD={m2_cust_s['SHD']}  spurious={spur}  k={n_c_s}  "
       f"C→X: {c_edges or ['none']}")
+
+# %% [markdown]
+# CEDAR recovers the three cross-variable edges in every configuration, including
+# without C: its default `partial_dcor` lag selection residualises each target on its
+# own lag 1, which removes most of the slow drift before lags are scored. The C basis
+# only changes which C → X edges are reported. Any basis with a linear column gives
+# C → X0 and C → X1; C → X2 appears only with the custom basis that includes
+# sin(t/20) (the `linear+sin` preset uses sin(2πt/T), a different period).
 
 # %%
 # Side-by-side: CDNOTS vs CEDAR on ex1_nonstationary (cross-variable)
@@ -612,10 +651,13 @@ plt.show()
 # **Two roles for C:**
 #
 # 1. **Shared-trend confounder** (`confounded_trends`): variables driven by the
-#    same unobserved trend appear correlated without C; the right basis removes all
-#    spurious edges.
-# 2. **Mechanism nonstationarity** (`ex1_nonstationary`): causal coefficients shift
-#    over time; C lets CI tests assess independence under the shifting mechanism.
+#    same unobserved trend appear dependent without C. The matching basis
+#    (`linear+quad`) removes 21 of the 24 spurious edges; mismatched bases remove far
+#    fewer.
+# 2. **Per-variable drift** (`ex1_nonstationary`): each nonstationary variable has an
+#    additive time-dependent term while the causal coefficients stay constant. With
+#    C in the conditioning sets the drift no longer creates spurious X-to-X edges; a
+#    custom basis matching both drift shapes recovers the X-to-X graph exactly.
 #
 # **Power tradeoff**: each additional C column grows the conditioning set, reducing
 # CI test power for fixed T. Prefer the smallest basis that captures the pattern.

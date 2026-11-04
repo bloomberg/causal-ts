@@ -15,20 +15,30 @@
 # %% [markdown]
 # # Missing Values
 #
-#
-# `causal-ts` supports three strategies for time series with NaN entries. All strategies work across all algorithms (CDNOTS, CEDAR, GRACE) via the `impute` parameter.
+# `causal-ts` handles NaN entries in the input DataFrame through the `impute` parameter. There are three strategies:
 #
 # | Strategy | `impute=` | When to use |
 # |---|---|---|
-# | Pairwise-complete | `None` (default) | Sparse missingness (<5%), no systematic pattern |
-# | VAR-EM | `"var_em"` | Moderate missingness, symmetric fill using multivariate temporal structure |
-# | Causal iterative | `"causal_iterative"` | Moderate missingness, iteratively refine imputation using the discovered graph (CDNOTS only) |
+# | Pairwise-complete | `None` (default) or `"pairwise_complete"` | Light, random missingness: each CI test only loses the rows it touches |
+# | VAR-EM | `"var_em"` | Heavier missingness, or algorithms that need complete data |
+# | Causal iterative | `"causal_iterative"` | As VAR-EM, then refines the fill using the discovered graph (CDNOTS / CDNOTS+ only) |
 #
-# **Pairwise-complete** (default): each CI test drops rows where any of X, Y, or Z is NaN for that specific triple. Statistically safe but wastes cross-variable information.
+# **Pairwise-complete**: each CI test drops the rows where any of X, Y or Z is NaN for that test. No values are invented, but every lagged copy of a missing entry costs a row, so the effective sample size shrinks quickly as missingness and `max_lag` grow.
 #
-# **VAR-EM**: fits a VAR(p) model via EM, imputes NaN positions with fitted values, repeats until convergence. Symmetric — no directional prior assumed.
+# **VAR-EM**: fits a VAR(p) model by EM, fills the NaN positions with fitted values and repeats until convergence. It assumes no causal direction.
 #
-# **Causal iterative**: warm-starts with VAR-EM, then alternates between running CDNOTS to get the graph and re-imputing each variable using only its Markov blanket (parents ∪ children ∪ parents-of-children) via Ridge regression. Only available with CDNOTS; CEDAR and GRACE fall back to VAR-EM.
+# **Causal iterative**: starts from the VAR-EM fill, then alternates between running CDNOTS to get a graph and re-imputing each variable from its Markov blanket (parents, children and parents of children) with Ridge regression.
+#
+# Not every algorithm accepts every strategy:
+#
+# | Algorithm | `None` / `"pairwise_complete"` | `"var_em"` | `"causal_iterative"` |
+# |---|---|---|---|
+# | CDNOTS, CDNOTS+ | yes | yes | yes |
+# | CEDAR | yes | yes | raises `ValueError` |
+# | GRACE | raises `ValueError` if NaNs are present (the neural gates need complete data) | yes | falls back to VAR-EM with a warning |
+# | REAP | raises `ValueError` if NaNs are present (the regression refinement needs complete data) | yes | falls back to VAR-EM with a warning |
+#
+# The examples below compare the three strategies for CDNOTS and CDNOTS+ after removing each entry independently with probability 0.10 (missing completely at random), so about 10% of the values are missing.
 
 # %%
 import numpy as np
@@ -167,6 +177,9 @@ for key, sc in scenarios_ex2.items():
         print(f"  {col:<12} {mp['F1']:>11.3f} {mp['SHD']:>12} {mb['F1']:>10.3f} {mb['SHD']:>11}")
     print()
 
+# %% [markdown]
+# On the linear VAR, pairwise deletion reproduces the clean-data result at both sample sizes. VAR-EM and causal-iterative imputation do no better and sometimes worse: at T=500 CDNOTS+ drops from F1 0.952 to 0.870 (VAR-EM) and 0.833 (causal iterative). Imputed entries are fitted values without noise, which slightly distorts the partial correlations, while at this level of random missingness pairwise deletion loses little information.
+
 # %%
 for key in scenarios_ex2:
     plot_scenario(key, scenarios_ex2)
@@ -215,8 +228,9 @@ for t_label in ["T=200", "T=500"]:
             print(f"  {col:<12} {method:<9} {mp['F1']:>11.3f} {mp['SHD']:>12} {ms['F1']:>12.3f} {ms['SHD']:>13}")
         print()
 
+# %% [markdown]
+# On the Hénon chain no strategy is consistently best. The ranking changes with T, method and CI test: causal-iterative imputation gives the best ParCorr result for CDNOTS+ at both sample sizes but the worst SplitKCI result for CDNOTS+ at T=200 (0.300), and VAR-EM is the best SplitKCI strategy for CDNOTS+ at T=200 but the worst at T=500. With 16 true edges and a single seed, one or two edges more or less move F1 by 0.05–0.10, so read these as single runs rather than a ranking. The CI test matters more than the strategy: CDNOTS with SplitKCI is the strongest combination on clean data at both sample sizes (F1 0.720 and 0.769), and stays at or above 0.52 under every strategy.
+
 # %%
 for t_label in ["T=200", "T=500"]:
     plot_scenario(f"{hc_name} {t_label} SplitKCI", scenarios_hc)
-
-# %%

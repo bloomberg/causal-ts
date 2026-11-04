@@ -22,7 +22,7 @@
 # | **CDNOTS+** | Constraint-based (MCI) | O(d^k) — exponential in conditioning depth | High recall, MCI conditioning reduces FPs vs CDNOTS |
 # | **CEDAR** | Pairwise minimum-lag | O(d²) — two tests per pair | Fast, precise, scales well |
 #
-# Benchmark: sparse mixed linear/nonlinear SCP, T=300, max_lag=2, 2 seeds, CPU only.
+# Benchmark: sparse mixed linear/nonlinear SCP, T=300, max_lag=2, 4 seeds, CPU only.
 
 # %%
 import warnings; warnings.filterwarnings('ignore')
@@ -41,9 +41,11 @@ from causalts.utils.helpers import precision_recall_3d, shd_3d
 import causalts.plotting as tp
 
 def eval_graph(est, gt):
-    """Evaluate estimated vs ground-truth graph.
+    """Evaluate an estimated graph against the ground truth.
 
-    Strips self-loops from both graphs (SCP GT has none;
+    The generator's ground truth contains autoregressive self-loops; they are
+    removed from both graphs so the scores count cross-variable edges only.
+    The estimated graph's lag axis is padded or truncated to match the ground truth.
     """
     gt = gt.copy()
     est = est.copy()
@@ -178,7 +180,7 @@ for algo in ALGOS:
     axes[1].plot(sub.index, sub['Time'], marker=markers[algo], color=colors[algo],
                  label=algo, linewidth=2, markersize=7)
 
-axes[0].set_xlabel('d (variables)'); axes[0].set_ylabel('F1 (mean over 2 seeds)')
+axes[0].set_xlabel('d (variables)'); axes[0].set_ylabel('F1 (mean over 4 seeds)')
 axes[0].set_title('F1 vs Dimensionality'); axes[0].legend(); axes[0].set_ylim(0, 1)
 axes[0].set_xticks(D_VALUES)
 
@@ -193,17 +195,21 @@ plt.show()
 # %% [markdown]
 # ## Key Takeaways
 #
-# - **CEDAR maintains high, stable F1 with the lowest and most stable runtime** —
-#   its O(d²) complexity means lag-selection cost grows linearly with pairs, not
-#   combinatorially with conditioning-set size.
-# - **The F1 gap between CEDAR and CDNOTS+ is narrow** near parity at most d
-#   (e.g. d=40: CEDAR 0.764 vs CDNOTS+ 0.766; d=15: CDNOTS+ slightly ahead). CEDAR still
-#   wins clearly at d=10 and d=35.
-# - **For large d, CEDAR remains the recommended default on runtime grounds** — it's
-#   still 4-5x faster than CDNOTS+ at d=40, even though the two are now close on F1.
-#   Switch to `CDNOTS+` when the data is not autoregressive, or when its constraint-based
-#   search is preferred for other reasons (e.g. explicit nonstationarity handling).
+# These are findings from this benchmark (sparse SCP, PartialCorr, T=300, max_lag=2,
+# 4 seeds), not a general recommendation.
 #
-
-# %% [markdown]
-#
+# - **Runtime.** In the sweep, CEDAR is 3-5x faster than CDNOTS+ at every d
+#   (d=40: 0.56 s vs 2.50 s). Its pairwise design uses O(d²) CI tests, while
+#   CDNOTS+'s cost grows with the conditioning-set size. The single d=20 run above
+#   shows the opposite (CEDAR 2.26 s vs CDNOTS+ 0.45 s) because it is the first CEDAR
+#   call in the session and includes one-off setup cost; the sweep's d=20 mean for
+#   CEDAR is 0.16 s.
+# - **Accuracy.** Mean F1 is close at most d (d=20: 0.815 for both; d=40: CEDAR
+#   0.764 vs CDNOTS+ 0.766; d=15: CDNOTS+ slightly ahead). CEDAR is ahead at d=10
+#   (0.824 vs 0.762) and d=35 (0.805 vs 0.780). With only 4 seeds per d, differences
+#   of a few hundredths should not be over-read.
+# - **Scope.** The generator produces autoregressive data, which matches CEDAR's
+#   design assumption. On data without that structure, this comparison may not hold.
+#   For general use, the library's recommended workflow is CDNOTS with a CI test
+#   matched to the data, optionally refined by REAP or GRACE (see
+#   `causalts.inspection.recommend_config`).

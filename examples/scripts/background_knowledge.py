@@ -265,6 +265,10 @@ plt.show()
 # Since the skeleton does not contain X2(t-1)→X5 (it was pruned by CI tests),
 # no skeleton path or bridge exists — the algorithm falls back to force-adding
 # the edge at the best AR-residualized lag.
+#
+# The output below shows which lag was chosen. When it differs from the true
+# lag, the forced edge is a false positive and F1 drops even though the
+# constraint itself is satisfied.
 
 # %%
 ak_anc = AncestralKnowledge()
@@ -282,7 +286,7 @@ g_anc = res_anc.cg_tig[:d, :d, :]
 m_anc = evaluate_graph(g_anc, gt)
 print(f"Required ancestor X2→X5: F1={m_anc['F1']:.3f}, "
       f"Precision={m_anc['Precision']:.3f}, TPR={m_anc['TPR']:.3f}, SHD={m_anc['SHD']}")
-print(f"Improvement: F1 {m['F1']:.3f} -> {m_anc['F1']:.3f}")
+print(f"Change: F1 {m['F1']:.3f} -> {m_anc['F1']:.3f}")
 
 # Check if X2 is now an ancestor of X5 in the result
 x2, x5 = var_names.index("X2"), var_names.index("X5")
@@ -320,15 +324,25 @@ plt.tight_layout()
 plt.subplots_adjust(bottom=0.12)
 plt.show()
 
-print("No skeleton path from X2 to X5 existed — the algorithm force-added the direct edge")
-print("at the lag with the highest AR-residualized correlation (lag-2 here, not the true lag-1).")
-print("This introduces a false-positive lag-2 edge, explaining the F1 drop.")
+# Which X2 -> X5 edges did the constraint add, and are they real?
+added = [l for l in range(g.shape[2]) if g_anc[x2, x5, l] and not g[x2, x5, l]]
+for l in added:
+    status = "true positive" if gt[x2, x5, l] else "false positive"
+    print(f"Added X2 -> X5 at lag {l}: {status}")
+true_lags = [l for l in range(gt.shape[2]) if gt[x2, x5, l]]
+print(f"True X2 -> X5 lag(s): {true_lags}")
+other_changes = int(((g_anc != g).sum()) - len(added))
+print(f"Other edges that changed: {other_changes}")
 
 # %% [markdown]
 # ## Example 5: Forbidden Ancestor (Path Constraint)
 #
 # The baseline has false-positive edges. With `forbidden_ancestor(A, D)` we
-# express: *no directed path from A to D may exist in the final graph*.
+# express: *no directed path from A to D may exist in the final graph*. We add
+# one constraint per cross-variable false positive. A self-lag false positive
+# (a variable driving itself at the wrong lag) cannot be written as an
+# ancestral constraint between two variables, so it is left out here; use
+# `add_forbidden_edge` for that case.
 #
 # **Enforcement (two-pass + proactive):**
 #
@@ -353,8 +367,11 @@ print("This introduces a false-positive lag-2 edge, explaining the F1 drop.")
 # > that form indirect A→X→D paths.
 
 # %%
+# A forbidden ancestor needs two different variables: a self-lag FP such as
+# X5(t-2) -> X5 cannot be expressed this way (use add_forbidden_edge for it).
+forb_pairs = sorted({(var_names[c], var_names[e]) for c, e, l in fps if c != e})
 ak_forb = AncestralKnowledge()
-for cause, effect, lag in [(var_names[c], var_names[e], int(l)) for c, e, l in fps]:
+for cause, effect in forb_pairs:
     ak_forb.add_forbidden_ancestor(cause, effect)
 print("Constraints:", ak_forb)
 
@@ -378,7 +395,7 @@ print("This can lower F1 if X->D is a true-positive edge shared by another genui
 print("Use add_forbidden_edge() to remove only the direct connection without affecting other paths.")
 compare_graphs(
     gt, g_forb, var_names=var_names,
-    title=f"forbidden_ancestors=[('X0', 'X4'), ('X3', 'X5'), ('X5', 'X5')]",
+    title=f"forbidden_ancestors={forb_pairs}",
     node_pos=pos_anc, node_label_size=11, node_size=0.2,
     arrow_linewidth=3, show_legend=False,
 );
@@ -461,7 +478,7 @@ g_cedar3 = res_cedar3.cg_tig[:d, :d, :]
 m_cedar3 = evaluate_graph(g_cedar3, gt)
 print(f"CEDAR with knowledge= API: F1={m_cedar3['F1']:.3f}, "
       f"Precision={m_cedar3['Precision']:.3f}, TPR={m_cedar3['TPR']:.3f}, SHD={m_cedar3['SHD']}")
-print("(Both APIs give identical results — knowledge= extracts forbidden/required automatically)")
+print(f"Both APIs give the same graph: {np.array_equal(g_cedar2, g_cedar3)}")
 
 # %%
 fig, axes = plt.subplots(1, 2, figsize=(10, 5))
@@ -532,6 +549,3 @@ plt.show()
 # - `forbidden_ancestor` — forbid any path from A to D. Will also remove true-positive intermediary edges (e.g. X→D in A→X→D) if they form part of a forbidden path.
 #
 # **CEDAR note:** only edge constraints are enforced in CEDAR. Path constraints (`required_ancestor`, `forbidden_ancestor`) are ignored when passed via `knowledge=` to `run_cedar`.
-
-# %% [markdown]
-#

@@ -135,8 +135,8 @@ def _detect_seasonal_period(
 def _fit_auto_ets(y: np.ndarray, seasonal_period: int | None = None):
     """Fit the best model from AR and ETS candidates.
 
-    Model selection uses held-out multi-step MSE on the last ~15% of the
-    series so that AR and ETS candidates are compared on the same metric.
+    Model selection uses held-out multi-step MSE on the last
+    ``min(30, max(5, T // 6))`` observations so that AR and ETS candidates are compared on the same metric.
     AIC cannot be used directly because statsmodels AR and ETS report AIC
     on different scales (incomparable log-likelihood normalizations).
 
@@ -222,9 +222,13 @@ class CausalForecaster:
     (lag-0) features to every causal model and must be supplied at predict /
     forecast time.
 
-    Variables with no causal parents fall back to an auto-selected AR or ETS
-    model (chosen by AIC). This fallback is skipped when ``exog`` is provided --
-    all variables then receive a regression model with the exog features.
+    Variables with no causal parents fall back to a univariate model chosen
+    among AR(1)-AR(3) and ETS candidates (simple, additive-trend, damped-trend,
+    and additive-seasonal when a seasonal period is detected) by multistep MSE
+    on a held-out tail of the series; AIC is not used because statsmodels' AR
+    and ETS AICs are not on a comparable scale. This fallback is skipped when
+    ``exog`` is provided -- all variables then receive a regression model with
+    the exog features.
 
     Parameters
     ----------
