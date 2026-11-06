@@ -8,9 +8,6 @@ Note that by _not_ including a description, you are asking reviewers to do extra
 work to understand the context of this change, which may lead to your PR taking
 much longer to review, or result in it not being reviewed at all.
 
-If AI tools were used for a significant part of this change, please say so here
-and name the tool.
-
 ## Type of Change
 
 - [ ] Bugfix
@@ -29,3 +26,4 @@ and name the tool.
 - [ ] All code style checks pass
 - [ ] New code contribution is covered by automated tests
 - [ ] All new and existing tests pass
+- [ ] If AI tools generated a significant part of this change, I have said so in the description
