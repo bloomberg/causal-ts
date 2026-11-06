@@ -261,6 +261,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   mirror mark of a string (edge-mark) graph, `"<--"` at `[j, i, 0]`, as a second edge
   `j -> i`. A reversed lag-0 edge was drawn as a true positive and a correct one as a
   true positive plus a false positive. Numeric graphs are unchanged.
+* `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` failed on a
+  single-variable graph: squeezing the input collapsed `(1, 1, n_lags)` to 1-D (or 0-D),
+  and the per-lag indexing then raised. Inputs are now reshaped to `(N, N, n_lags)`
+  without dropping the variable axes.
 
 ## [0.27.0]
 
