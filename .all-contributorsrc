@@ -119,6 +119,15 @@
         "test",
         "doc"
       ]
+    },
+    {
+      "login": "jmes2build",
+      "name": "James Lee",
+      "avatar_url": "https://avatars.githubusercontent.com/u/156470182",
+      "profile": "https://github.com/jmes2build",
+      "contributions": [
+        "doc"
+      ]
     }
   ]
 }
