@@ -26,3 +26,4 @@ much longer to review, or result in it not being reviewed at all.
 - [ ] All code style checks pass
 - [ ] New code contribution is covered by automated tests
 - [ ] All new and existing tests pass
+- [ ] If AI tools generated a significant part of this change, I have said so in the description
