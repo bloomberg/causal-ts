@@ -257,6 +257,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   found. With `A -> B, A -> C, B -> C, B -> D, C -> E, D -> E`, `A` required and `B`
   forbidden as ancestors of `E`, it cut `C -> E` and reported `B => E` violated; it now
   cuts `B -> C` and `B -> D`. Results where the cleanup succeeds are unchanged.
+* `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` read the lag-0
+  mirror mark of a string (edge-mark) graph, `"<--"` at `[j, i, 0]`, as a second edge
+  `j -> i`. A reversed lag-0 edge was drawn as a true positive and a correct one as a
+  true positive plus a false positive. Numeric graphs are unchanged.
+* `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` failed on a
+  single-variable graph: squeezing the input collapsed `(1, 1, n_lags)` to 1-D (or 0-D),
+  and the per-lag indexing then raised. A single-variable graph now keeps its variable
+  axes; other shapes are squeezed as before.
 
 ## [0.27.0]
 

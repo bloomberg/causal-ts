@@ -167,6 +167,112 @@ def test_compare_graphs_smoke():
     compare_graphs(g, g2, var_names=["X", "Y", "Z"])
 
 
+def _marks(edges, d=3, n_lags=2):
+    """Tigramite edge-mark graph: lag-0 links are written with their mirror."""
+    marks = np.full((d, d, n_lags), "", dtype="<U3")
+    for i, j, tau in edges:
+        marks[i, j, tau] = "-->"
+        if tau == 0:
+            marks[j, i, 0] = "<--"
+    return marks
+
+
+def test_plot_lag_metrics_string_graph_mirror_is_not_an_edge():
+    from causalts.plotting import plot_lag_metrics
+
+    edges = [(0, 1, 0), (2, 1, 1)]
+    binary = np.zeros((3, 3, 2), dtype=np.int8)
+    for i, j, tau in edges:
+        binary[i, j, tau] = 1
+
+    _, ax = plot_lag_metrics(binary, _marks(edges))
+    # Rows: Precision, Recall, F1; columns: lag 0, lag 1.
+    np.testing.assert_allclose(ax.images[0].get_array(), np.ones((3, 2)))
+
+
+def test_compare_graphs_string_graph_reversed_lag0_edge_is_not_tp():
+    from matplotlib.colors import to_rgba
+    from matplotlib.patches import FancyArrowPatch
+
+    from causalts.plotting import compare_graphs
+
+    _, ax = compare_graphs(_marks([(0, 1, 0)]), _marks([(1, 0, 0)]), tp_color="#00ff00")
+    arrows = [a for a in ax.get_children() if isinstance(a, FancyArrowPatch)]
+    assert arrows
+    assert not any(a.get_facecolor() == to_rgba("#00ff00") for a in arrows)
+
+
+@pytest.mark.parametrize("mirror", ["<--", "<-o"])
+def test_plot_lag_metrics_one_sided_lag0_mirror_is_reversed_edge(mirror):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_lag_metrics
+
+    # Only the mirror half of 1 -> 0 is stored, at [0, 1, 0]: still the edge 1 -> 0.
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[1, 0, 0] = 1
+    marks = np.full((2, 2, 1), "", dtype="<U3")
+    marks[0, 1, 0] = mirror
+
+    _, ax = plot_lag_metrics(gt, marks)
+    np.testing.assert_allclose(ax.images[0].get_array(), np.ones((3, 1)))
+    plt.close("all")
+
+
+@pytest.mark.parametrize("n_lags", [1, 3])
+@pytest.mark.parametrize("as_marks", [False, True])
+def test_compare_functions_single_variable_graph(n_lags, as_marks):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import (
+        compare_graphs,
+        plot_lag_metrics,
+        plot_pvalue_distribution,
+    )
+
+    # A (1, 1, n_lags) graph must not be squeezed down to 1-D or 0-D.
+    if as_marks:
+        g = np.full((1, 1, n_lags), "", dtype="<U3")
+        g[0, 0, n_lags - 1] = "-->"
+    else:
+        g = np.zeros((1, 1, n_lags), dtype=np.int8)
+        g[0, 0, n_lags - 1] = 1
+    pvals = np.full((1, 1, n_lags), 0.5)
+
+    compare_graphs(g, g)
+    _, ax = plot_lag_metrics(g, g)
+    assert ax.images[0].get_array().shape == (3, n_lags)
+    plot_pvalue_distribution(pvals, g, graph_discovered=g)
+    plt.close("all")
+
+
+@pytest.mark.parametrize(
+    "n_lags, wrap",
+    [
+        (1, lambda g: g[:, :, 0]),
+        (1, lambda g: g[None]),
+        (1, lambda g: g[..., None]),
+        (2, lambda g: g[None]),
+        (2, lambda g: g[..., None]),
+        (2, lambda g: g[:, None]),
+    ],
+)
+def test_plot_lag_metrics_squeezes_extra_singleton_axes(n_lags, wrap):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_lag_metrics
+
+    rng = np.random.default_rng(0)
+    gt = rng.integers(0, 2, size=(3, 3, n_lags))
+    disc = rng.integers(0, 2, size=(3, 3, n_lags))
+
+    _, ax = plot_lag_metrics(gt, disc)
+    expected = ax.images[0].get_array()
+    _, ax = plot_lag_metrics(wrap(gt), wrap(disc))
+    np.testing.assert_array_equal(ax.images[0].get_array(), expected)
+    plt.close("all")
+
+
 def _make_frame():
     import pandas as pd
 
