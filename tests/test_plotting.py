@@ -202,6 +202,33 @@ def test_compare_graphs_string_graph_reversed_lag0_edge_is_not_tp():
     assert not any(a.get_facecolor() == to_rgba("#00ff00") for a in arrows)
 
 
+@pytest.mark.parametrize("n_lags", [1, 3])
+@pytest.mark.parametrize("as_marks", [False, True])
+def test_compare_functions_single_variable_graph(n_lags, as_marks):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import (
+        compare_graphs,
+        plot_lag_metrics,
+        plot_pvalue_distribution,
+    )
+
+    # A (1, 1, n_lags) graph must not be squeezed down to 1-D or 0-D.
+    if as_marks:
+        g = np.full((1, 1, n_lags), "", dtype="<U3")
+        g[0, 0, n_lags - 1] = "-->"
+    else:
+        g = np.zeros((1, 1, n_lags), dtype=np.int8)
+        g[0, 0, n_lags - 1] = 1
+    pvals = np.full((1, 1, n_lags), 0.5)
+
+    compare_graphs(g, g)
+    _, ax = plot_lag_metrics(g, g)
+    assert ax.images[0].get_array().shape == (3, n_lags)
+    plot_pvalue_distribution(pvals, g, graph_discovered=g)
+    plt.close("all")
+
+
 def _make_frame():
     import pandas as pd
 

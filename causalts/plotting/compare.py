@@ -29,16 +29,36 @@ def _to_bool(graph):
     Numeric graphs: any nonzero entry is an edge. String (tigramite edge-mark)
     graphs: any non-empty mark is an edge, except at lag 0, where a link is
     stored at both ``[i, j, 0]`` and ``[j, i, 0]``. There ``"<--"`` and
-    ``"<-o"`` are the mirror of ``j -> i`` and not an edge ``i -> j``. A 2-D
-    graph is a single lag-0 slice.
+    ``"<-o"`` are the mirror of ``j -> i`` and not an edge ``i -> j``.
     """
+    graph = _as_3d(graph)
     if graph.dtype.kind in ("U", "S"):  # string dtype
         marks = np.char.strip(graph.astype(str))
         edges = marks != ""
-        lag0 = (slice(None), slice(None), 0) if marks.ndim == 3 else Ellipsis
-        edges[lag0] &= ~np.isin(marks[lag0], _MIRROR_MARKS)
+        edges[:, :, 0] &= ~np.isin(marks[:, :, 0], _MIRROR_MARKS)
         return edges
     return graph.astype(bool)
+
+
+def _as_3d(graph, dtype=None):
+    """Return *graph* as an ``(N, N, n_lags)`` array.
+
+    A 2-D graph is a single lag-0 slice. Extra singleton axes (a trailing
+    ``1`` or a leading batch axis) are dropped, but the two variable axes are
+    kept, so a single-variable ``(1, 1, n_lags)`` graph stays 3-D.
+    """
+    arr = np.asarray(graph, dtype=dtype)
+    while arr.ndim > 3 and arr.shape[-1] == 1:
+        arr = arr[..., 0]
+    while arr.ndim > 3 and arr.shape[0] == 1:
+        arr = arr[0]
+    if arr.ndim == 2:
+        arr = arr[:, :, np.newaxis]
+    if arr.ndim != 3:
+        raise ValueError(
+            f"Expected an (N, N) or (N, N, n_lags) graph, got shape {np.shape(graph)}"
+        )
+    return arr
 
 
 def compare_graphs(
@@ -149,13 +169,8 @@ def compare_graphs(
     -------
     fig, ax   or   fig, ax, node_pos_dict
     """
-    graph_true = np.asarray(graph_true).squeeze()
-    graph_discovered = np.asarray(graph_discovered).squeeze()
-
-    if graph_true.ndim == 2:
-        graph_true = np.expand_dims(graph_true, axis=2)
-    if graph_discovered.ndim == 2:
-        graph_discovered = np.expand_dims(graph_discovered, axis=2)
+    graph_true = _as_3d(graph_true)
+    graph_discovered = _as_3d(graph_discovered)
 
     gt = _to_bool(graph_true)
     disc = _to_bool(graph_discovered)
@@ -631,12 +646,8 @@ def plot_lag_metrics(
     -------
     fig, ax
     """
-    gt = _to_bool(np.asarray(graph_true).squeeze())
-    disc = _to_bool(np.asarray(graph_discovered).squeeze())
-    if gt.ndim == 2:
-        gt = np.expand_dims(gt, axis=2)
-    if disc.ndim == 2:
-        disc = np.expand_dims(disc, axis=2)
+    gt = _to_bool(graph_true)
+    disc = _to_bool(graph_discovered)
 
     N = gt.shape[0]
     tau_max = gt.shape[2] - 1
@@ -769,12 +780,8 @@ def plot_pvalue_distribution(
     # Accept CausalGraph object with .pvalue_matrix attribute
     if hasattr(pvalue_matrix, "pvalue_matrix"):
         pvalue_matrix = pvalue_matrix.pvalue_matrix
-    pvals = np.asarray(pvalue_matrix, dtype=float).squeeze()
-    gt = _to_bool(np.asarray(graph_true).squeeze())
-    if pvals.ndim == 2:
-        pvals = np.expand_dims(pvals, axis=2)
-    if gt.ndim == 2:
-        gt = np.expand_dims(gt, axis=2)
+    pvals = _as_3d(pvalue_matrix, dtype=float)
+    gt = _to_bool(graph_true)
 
     N = gt.shape[0]
 
@@ -786,10 +793,7 @@ def plot_pvalue_distribution(
     # If discovered graph provided, restrict to discovered edges only
     masked = graph_discovered is not None
     if masked:
-        disc = _to_bool(np.asarray(graph_discovered).squeeze())
-        if disc.ndim == 2:
-            disc = np.expand_dims(disc, axis=2)
-        valid &= disc
+        valid &= _to_bool(graph_discovered)
 
     pvals_true = pvals[valid & gt]
     pvals_non = pvals[valid & ~gt]
