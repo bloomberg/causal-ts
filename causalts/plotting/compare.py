@@ -29,13 +29,17 @@ def _to_bool(graph):
     Numeric graphs: any nonzero entry is an edge. String (tigramite edge-mark)
     graphs: any non-empty mark is an edge, except at lag 0, where a link is
     stored at both ``[i, j, 0]`` and ``[j, i, 0]``. There ``"<--"`` and
-    ``"<-o"`` are the mirror of ``j -> i`` and not an edge ``i -> j``.
+    ``"<-o"`` at ``[i, j, 0]`` are the edge ``j -> i``, not ``i -> j``, as in
+    ``tigramite_graph_to_binary``.
     """
     graph = _as_3d(graph)
     if graph.dtype.kind in ("U", "S"):  # string dtype
         marks = np.char.strip(graph.astype(str))
         edges = marks != ""
-        edges[:, :, 0] &= ~np.isin(marks[:, :, 0], _MIRROR_MARKS)
+        mirror = np.isin(marks[:, :, 0], _MIRROR_MARKS)
+        # Render a mirror at [i, j, 0] as j -> i rather than only dropping it,
+        # so a graph holding just one half of a lag-0 pair keeps the edge.
+        edges[:, :, 0] = (edges[:, :, 0] & ~mirror) | mirror.T
         return edges
     return graph.astype(bool)
 

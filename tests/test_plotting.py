@@ -202,6 +202,23 @@ def test_compare_graphs_string_graph_reversed_lag0_edge_is_not_tp():
     assert not any(a.get_facecolor() == to_rgba("#00ff00") for a in arrows)
 
 
+@pytest.mark.parametrize("mirror", ["<--", "<-o"])
+def test_plot_lag_metrics_one_sided_lag0_mirror_is_reversed_edge(mirror):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_lag_metrics
+
+    # Only the mirror half of 1 -> 0 is stored, at [0, 1, 0]: still the edge 1 -> 0.
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[1, 0, 0] = 1
+    marks = np.full((2, 2, 1), "", dtype="<U3")
+    marks[0, 1, 0] = mirror
+
+    _, ax = plot_lag_metrics(gt, marks)
+    np.testing.assert_allclose(ax.images[0].get_array(), np.ones((3, 1)))
+    plt.close("all")
+
+
 @pytest.mark.parametrize("n_lags", [1, 3])
 @pytest.mark.parametrize("as_marks", [False, True])
 def test_compare_functions_single_variable_graph(n_lags, as_marks):
