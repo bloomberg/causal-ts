@@ -20,11 +20,24 @@ from matplotlib.patches import Ellipse, FancyArrowPatch
 
 from ._core import compute_node_positions
 
+_MIRROR_MARKS = ("<--", "<-o")
+
 
 def _to_bool(graph):
-    """Convert a graph array to boolean, treating any nonzero / non-empty as True."""
+    """Convert a graph array to a boolean ``[cause, effect, lag]`` array.
+
+    Numeric graphs: any nonzero entry is an edge. String (tigramite edge-mark)
+    graphs: any non-empty mark is an edge, except at lag 0, where a link is
+    stored at both ``[i, j, 0]`` and ``[j, i, 0]``. There ``"<--"`` and
+    ``"<-o"`` are the mirror of ``j -> i`` and not an edge ``i -> j``. A 2-D
+    graph is a single lag-0 slice.
+    """
     if graph.dtype.kind in ("U", "S"):  # string dtype
-        return graph != ""
+        marks = np.char.strip(graph.astype(str))
+        edges = marks != ""
+        lag0 = (slice(None), slice(None), 0) if marks.ndim == 3 else Ellipsis
+        edges[lag0] &= ~np.isin(marks[lag0], _MIRROR_MARKS)
+        return edges
     return graph.astype(bool)
 
 
