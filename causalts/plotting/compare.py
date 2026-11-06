@@ -168,9 +168,6 @@ def compare_graphs(
     -------
     fig, ax   or   fig, ax, node_pos_dict
     """
-    graph_true = _as_3d(graph_true)
-    graph_discovered = _as_3d(graph_discovered)
-
     gt = _to_bool(graph_true)
     disc = _to_bool(graph_discovered)
 
