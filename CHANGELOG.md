@@ -263,8 +263,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   true positive plus a false positive. Numeric graphs are unchanged.
 * `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` failed on a
   single-variable graph: squeezing the input collapsed `(1, 1, n_lags)` to 1-D (or 0-D),
-  and the per-lag indexing then raised. Inputs are now reshaped to `(N, N, n_lags)`
-  without dropping the variable axes.
+  and the per-lag indexing then raised. A single-variable graph now keeps its variable
+  axes; other shapes are squeezed as before.
 
 ## [0.27.0]
 

@@ -229,6 +229,33 @@ def test_compare_functions_single_variable_graph(n_lags, as_marks):
     plt.close("all")
 
 
+@pytest.mark.parametrize(
+    "n_lags, wrap",
+    [
+        (1, lambda g: g[:, :, 0]),
+        (1, lambda g: g[None]),
+        (1, lambda g: g[..., None]),
+        (2, lambda g: g[None]),
+        (2, lambda g: g[..., None]),
+        (2, lambda g: g[:, None]),
+    ],
+)
+def test_plot_lag_metrics_squeezes_extra_singleton_axes(n_lags, wrap):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_lag_metrics
+
+    rng = np.random.default_rng(0)
+    gt = rng.integers(0, 2, size=(3, 3, n_lags))
+    disc = rng.integers(0, 2, size=(3, 3, n_lags))
+
+    _, ax = plot_lag_metrics(gt, disc)
+    expected = ax.images[0].get_array()
+    _, ax = plot_lag_metrics(wrap(gt), wrap(disc))
+    np.testing.assert_array_equal(ax.images[0].get_array(), expected)
+    plt.close("all")
+
+
 def _make_frame():
     import pandas as pd
 

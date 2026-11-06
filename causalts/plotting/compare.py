@@ -43,22 +43,17 @@ def _to_bool(graph):
 def _as_3d(graph, dtype=None):
     """Return *graph* as an ``(N, N, n_lags)`` array.
 
-    A 2-D graph is a single lag-0 slice. Extra singleton axes (a trailing
-    ``1`` or a leading batch axis) are dropped, but the two variable axes are
-    kept, so a single-variable ``(1, 1, n_lags)`` graph stays 3-D.
+    Singleton axes are squeezed and a 2-D graph becomes a single lag-0 slice.
+    A single-variable ``(1, 1, n_lags)`` graph would squeeze to 1-D or 0-D, so
+    its variable axes are restored instead.
     """
     arr = np.asarray(graph, dtype=dtype)
-    while arr.ndim > 3 and arr.shape[-1] == 1:
-        arr = arr[..., 0]
-    while arr.ndim > 3 and arr.shape[0] == 1:
-        arr = arr[0]
-    if arr.ndim == 2:
-        arr = arr[:, :, np.newaxis]
-    if arr.ndim != 3:
-        raise ValueError(
-            f"Expected an (N, N) or (N, N, n_lags) graph, got shape {np.shape(graph)}"
-        )
-    return arr
+    squeezed = arr.squeeze()
+    if squeezed.ndim < 2 and arr.ndim >= 2 and arr.shape[:2] == (1, 1):
+        return squeezed.reshape(1, 1, -1)
+    if squeezed.ndim == 2:
+        squeezed = squeezed[:, :, np.newaxis]
+    return squeezed
 
 
 def compare_graphs(
