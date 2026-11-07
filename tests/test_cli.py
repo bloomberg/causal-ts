@@ -84,6 +84,19 @@ def test_ci_test_info_invalid_choice():
     assert "Invalid value for '--test'" in result.output
 
 
+def test_generate_seed_zero_is_kept(tmp_path):
+    """-s 0 was replaced by the default seed 42."""
+    import json
+
+    res = CliRunner().invoke(
+        main,
+        ["-o", str(tmp_path), "-s", "0", "generate", "--dataset", "ex1", "-T", "50"],
+    )
+    assert res.exit_code == 0, res.output
+    (meta,) = tmp_path.glob("*/meta.json")
+    assert json.loads(meta.read_text())["seed"] == 0
+
+
 def test_generate_ex1(tmp_path):
     runner = CliRunner()
     result = runner.invoke(
@@ -172,6 +185,106 @@ def test_evaluate(tmp_path):
     assert "F1" in result.output or "f1" in result.output.lower()
 
 
+def _evaluate_metrics(tmp_path, gt, pred):
+    import json
+
+    np.save(tmp_path / "true.npy", gt)
+    np.save(tmp_path / "est.npy", pred)
+    result = CliRunner().invoke(
+        main,
+        [
+            "-o",
+            str(tmp_path),
+            "evaluate",
+            str(tmp_path / "true.npy"),
+            str(tmp_path / "est.npy"),
+            "--no-plot",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    (path,) = tmp_path.glob("evaluate_*/metrics.json")
+    return json.loads(path.read_text())
+
+
+def test_evaluate_counts_false_positives_beyond_true_max_lag(tmp_path):
+    """Extra lags in the prediction were trimmed away, hiding their FPs."""
+    gt = np.zeros((3, 3, 2), dtype=int)
+    gt[0, 1, 1] = 1
+    pred = np.zeros((3, 3, 6), dtype=int)
+    pred[0, 1, 1] = 1
+    pred[1, 2, 3] = pred[2, 0, 4] = pred[0, 2, 5] = 1
+    m = _evaluate_metrics(tmp_path, gt, pred)
+    assert (m["TP"], m["FP"], m["FN"]) == (1, 3, 0)
+    assert m["Precision"] == 0.25
+
+
+def test_evaluate_counts_missed_edges_beyond_predicted_max_lag(tmp_path):
+    gt = np.zeros((3, 3, 4), dtype=int)
+    gt[0, 1, 1] = gt[1, 2, 3] = 1
+    pred = np.zeros((3, 3, 2), dtype=int)
+    pred[0, 1, 1] = 1
+    m = _evaluate_metrics(tmp_path, gt, pred)
+    assert (m["TP"], m["FP"], m["FN"]) == (1, 0, 1)
+
+
+def test_evaluate_drops_extra_c_variable(tmp_path):
+    gt = np.zeros((3, 3, 2), dtype=int)
+    gt[0, 1, 1] = 1
+    pred = np.zeros((4, 4, 2), dtype=int)
+    pred[0, 1, 1] = pred[3, 0, 0] = 1
+    m = _evaluate_metrics(tmp_path, gt, pred)
+    assert (m["TP"], m["FP"], m["FN"]) == (1, 0, 0)
+
+
+def test_evaluate_counts_true_edges_on_variables_the_prediction_lacks(tmp_path):
+    """Cutting the ground truth to the prediction's variables hid these FNs."""
+    gt = np.zeros((4, 4, 2), dtype=int)
+    gt[0, 1, 1] = gt[1, 3, 1] = gt[3, 2, 0] = 1
+    pred = np.zeros((3, 3, 2), dtype=int)
+    pred[0, 1, 1] = 1
+    m = _evaluate_metrics(tmp_path, gt, pred)
+    assert (m["TP"], m["FP"], m["FN"]) == (1, 0, 2)
+
+
+def test_discover_ground_truth_pads_lags(tmp_path):
+    """discover --ground-truth must not trim the prediction's extra lags."""
+    import json
+
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal((300, 3))
+    x[1:, 1] += 0.9 * x[:-1, 0]
+    csv_path = tmp_path / "data.csv"
+    pd.DataFrame(x, columns=["A", "B", "D"]).to_csv(csv_path, index=False)
+    gt = np.zeros((3, 3, 1), dtype=int)
+    np.save(tmp_path / "gt.npy", gt)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "-o",
+            str(tmp_path),
+            "discover",
+            str(csv_path),
+            "--ci-test",
+            "parcorr-gpu",
+            "--max-lag",
+            "1",
+            "--no-c",
+            "--ground-truth",
+            str(tmp_path / "gt.npy"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    (outdir,) = (p.parent for p in tmp_path.glob("*/metrics.json"))
+    pred = np.load(outdir / "estimated_graph.npy")
+    assert pred[0, 1, 1]
+    m = json.loads((outdir / "metrics.json").read_text())
+    # GT is empty, so every scored edge (all but lag-0 self-loops) is an FP;
+    # the old lag-0-only trimming could never reach this count.
+    p = pred.astype(bool)
+    assert m["FP"] == int(p.sum() - np.trace(p[:, :, 0]))
+
+
 def _validate_fixture(tmp_path, max_lag):
     """A small AR chain plus a graph with the requested lag depth."""
     rng = np.random.default_rng(0)
@@ -227,6 +340,40 @@ def test_dowhy_validate_history_skips_a_contemporaneous_only_graph(tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert "contemporaneous-only" in result.output
+
+
+def test_generate_henon_bounded_start_keeps_a_diverging_seed_finite(tmp_path):
+    """Seed 3 diverges with the default start; --bounded-start keeps it finite."""
+    import json
+
+    runner = CliRunner()
+
+    def generate(*flags):
+        out = tmp_path / ("bounded" if flags else "default")
+        result = runner.invoke(
+            main,
+            ["-o", str(out), "-s", "3", "generate", "--dataset", "henon", *flags],
+        )
+        assert result.exit_code == 0, result.output
+        (csv,) = out.glob("generate_*/data.csv")
+        meta = json.loads((csv.parent / "meta.json").read_text())
+        assert meta.get("bounded_start", False) == bool(flags)
+        return result.output, pd.read_csv(csv).to_numpy(dtype=float)
+
+    output, data = generate()
+    assert not np.isfinite(data).all()  # default unchanged
+    assert "non-finite" in output and "--bounded-start" in output
+    output, data = generate("--bounded-start")
+    assert np.isfinite(data).all()
+    assert "non-finite" not in output
+
+
+def test_generate_bounded_start_is_ignored_with_a_warning_without_henon(tmp_path):
+    result = CliRunner().invoke(
+        main, ["-o", str(tmp_path), "generate", "-n", "3", "--bounded-start"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "--bounded-start has no effect with random generation" in result.output
 
 
 def test_discover_alpha_defaults_per_algorithm(tmp_path):

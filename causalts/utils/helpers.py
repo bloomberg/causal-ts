@@ -308,13 +308,35 @@ def shd_2d(s1, s2, double_for_anticausal=True):
     int
         The Structural Hamming Distance between the two adjacency matrices.
     """
-    diff = np.abs(s1 - s2)
+    diff = _entry_mismatch(s1, s2)
     if double_for_anticausal:
-        return np.sum(diff)
+        return int(np.count_nonzero(diff))
     else:
-        diff = diff + diff.transpose()
-        diff[diff > 1] = 1  # Ignoring the double edges.
-        return np.sum(diff) / 2
+        return _shd_undirected_pairs(diff)
+
+
+def _entry_mismatch(s1, s2):
+    """Boolean mask of entries where two graphs differ.
+
+    Compares with ``!=`` rather than subtracting, so bool and unsigned input
+    work. Shapes that cannot broadcast raise ``ValueError`` as the old
+    subtraction did (NumPy 1.24's ``!=`` would return a scalar instead).
+    """
+    s1, s2 = np.asarray(s1), np.asarray(s2)
+    np.broadcast_shapes(s1.shape, s2.shape)
+    return s1 != s2
+
+
+def _shd_undirected_pairs(diff):
+    """Count a square difference matrix with each unordered pair at most once.
+
+    An off-diagonal pair (i, j) counts once whether one or both of ``[i, j]``
+    and ``[j, i]`` differ; a diagonal entry (self-loop) has no mirror and
+    counts once on its own.
+    """
+    diff = np.asarray(diff) != 0
+    pairs = np.triu(diff | diff.T, k=1).sum()
+    return int(pairs + np.trace(diff))
 
 
 def shd_3d(s1, s2, double_for_anticausal=True):
@@ -336,7 +358,9 @@ def shd_3d(s1, s2, double_for_anticausal=True):
         A 3D binary adjacency matrix representing the second graph.
     double_for_anticausal : bool
         If True, counts both mistakes for edges in the wrong direction.
-        If False, adjusts the calculation to avoid double counting.
+        If False, a contemporaneous (lag-0) pair counts once however its two
+        directions differ; lagged links, which have no reverse direction, each
+        count once.
 
     Returns
     -------
@@ -344,13 +368,16 @@ def shd_3d(s1, s2, double_for_anticausal=True):
         The Structural Hamming Distance between the two graphs.
     """
 
-    diff = np.abs(s1 - s2)
+    diff = _entry_mismatch(s1, s2)
     if double_for_anticausal:
-        return np.sum(diff)
+        return int(np.count_nonzero(diff))
     else:
-        diff = diff + diff.transpose((1, 0, 2))
-        diff[diff > 1] = 1  # Ignoring the double edges.
-        return np.sum(diff) / 2
+        # Only lag 0 has a reverse direction: at lag >= 1, [i, j, tau] and
+        # [j, i, tau] are different links and each counts on its own.
+        if diff.shape[2] == 0:
+            return 0
+        lag0 = _shd_undirected_pairs(diff[:, :, 0])
+        return int(lag0 + np.count_nonzero(diff[:, :, 1:]))
 
 
 def precision_recall_3d(g_true_3d, g_est_3d):

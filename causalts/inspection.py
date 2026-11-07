@@ -181,6 +181,10 @@ def merge_lag0(refined, candidate):
     return g
 
 
+class NoNumericColumnsError(ValueError):
+    """:func:`inspect_df` was given a frame with no numeric column."""
+
+
 def numeric_frame(df):
     """Return ``df`` with Boolean columns as 0/1 floats.
 
@@ -226,9 +230,15 @@ def _data_block(df):
     }
 
 
-def _warnings(df, data):
+def _warnings(df, data, non_numeric=()):
     """Deterministic data-health flags (the Q1 pre-flight surface)."""
     warns = []
+    if non_numeric:
+        warns.append(
+            f"Non-numeric column(s) were left out of the inspection and must be "
+            f"dropped or encoded before discovery: "
+            f"{list(non_numeric)}."
+        )
     for col, frac in data["missing_by_col"].items():
         if frac >= 0.2:
             warns.append(
@@ -430,7 +440,20 @@ def recommend_config(facts, data):
         reasons.append("nonlinear → raft (fast; conditional-mean dependence)")
     else:
         ci_test = "parcorr-gpu"
-        reasons.append("approximately linear → parcorr-gpu")
+        if data.get("n_vars", 2) < 2:
+            # No pairs, so nothing to test; not a failed test.
+            reasons.append(
+                "fewer than two numeric columns → pairwise linearity not tested; "
+                "parcorr-gpu by default"
+            )
+        elif facts["linearity"].get("n_tested", 1) == 0:
+            # Same choice as before, but not evidence of linearity.
+            reasons.append(
+                "linearity could not be tested → parcorr-gpu by default (check "
+                "linearity, or pick a nonlinear test such as raft)"
+            )
+        else:
+            reasons.append("approximately linear → parcorr-gpu")
 
     # --- refinement of the CDNOTS graph (optional second step) ---
     # Both refinements refine lagged edges only. REAP can re-add lag-0 edges
@@ -528,8 +551,27 @@ def inspect_df(df, max_lag=None):
     dict
         ``{schema_version, data, facts, recommendation, cost_class, warnings}``
         (see module docstring / DESIGN Q5 for the contract).
+
+    Raises
+    ------
+    NoNumericColumnsError
+        If no numeric column is left once non-numeric columns (dates, labels,
+        timedeltas) are dropped. Subclass of ``ValueError``.
     """
+    # Booleans become 0/1 (numeric_frame). Any other non-numeric column (a
+    # date, a label) is left out of everything, since discrete detection fails
+    # on strings and discovery cannot read it either, and named in a warning.
     df = numeric_frame(df)
+    keep = df.select_dtypes(include=[np.number], exclude=["timedelta"]).columns
+    non_numeric = [str(c) for c in df.columns if c not in keep]
+    if non_numeric:
+        df = df[keep]
+    if df.shape[1] == 0:
+        raise NoNumericColumnsError(
+            f"inspect found no numeric columns (non-numeric, left out: "
+            f"{non_numeric}). Encode or convert them (e.g. strip thousands "
+            f"separators)."
+        )
     data = _data_block(df)
 
     # Facts are measured on the numeric, non-constant columns.
@@ -545,6 +587,7 @@ def inspect_df(df, max_lag=None):
         "linearity": {
             "fraction_nonlinear": float(lin["fraction_nonlinear"]),
             "is_nonlinear": bool(lin["fraction_nonlinear"] > 0.2),
+            "n_tested": int(lin["n_tested"]),
         },
         "stationarity": {
             "fraction_nonstationary": float(stat["fraction_nonstationary"]),
@@ -572,7 +615,17 @@ def inspect_df(df, max_lag=None):
         "facts": facts,
         "recommendation": recommendation,
         "cost_class": cost_class,
-        "warnings": _warnings(df, data),
+        "warnings": _warnings(df, data, non_numeric)
+        + (
+            [
+                "Linearity could not be tested (no RESET test gave a p-value), so "
+                "the data were not checked for nonlinearity."
+            ]
+            # With fewer than two columns there is no pair to test (the
+            # rationale says so); this warning is for tests that failed.
+            if lin["n_tested"] == 0 and data["n_vars"] >= 2
+            else []
+        ),
     }
 
 

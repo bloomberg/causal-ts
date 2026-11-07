@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from causalts.utils.helpers import evaluate_graph
+from causalts.utils.helpers import evaluate_graph, shd_2d, shd_3d
 from causalts.utils.linearity import check_linearity
 
 
@@ -177,3 +177,49 @@ def test_check_linearity_on_nonlinear_data():
     assert isinstance(result, dict)
     assert "fraction_nonlinear" in result
     assert result["fraction_nonlinear"] > 0
+
+
+def test_shd_3d_single_counting_keeps_lagged_links_apart():
+    """Lagged slices were symmetrised and halved like lag 0."""
+    true = np.zeros((2, 2, 2), dtype=int)
+    true[0, 1, 1] = true[1, 0, 1] = true[0, 0, 1] = 1  # two cross links, a self-loop
+    est = np.zeros_like(true)
+    for double in (True, False):
+        got = shd_3d(true, est, double_for_anticausal=double)
+        assert got == 3 and type(got) is int
+    # A mismatch counts once whatever the dtype (uint8 1 - 0 vs 0 - 1 wraps to 255).
+    assert shd_3d(true.astype(np.uint8), est.astype(np.uint8)) == 3
+    assert shd_3d(est.astype(np.uint8), true.astype(np.uint8)) == 3
+    # Boolean graphs: numpy has no boolean subtract, which used to raise.
+    for double in (True, False):
+        assert shd_3d(true.astype(bool), est.astype(bool), double) == 3
+    # One 2-D slice: X0<->X1 is one pair in single mode, two links in double mode.
+    t2, e2 = true[:, :, 1].astype(bool), est[:, :, 1].astype(bool)
+    assert shd_2d(t2, e2, True) == 3 and shd_2d(t2, e2, False) == 2
+    # Shapes that cannot broadcast raise, as the old subtraction did.
+    with pytest.raises(ValueError):
+        shd_3d(true, np.zeros((2, 2, 3), dtype=int))
+    with pytest.raises(ValueError):
+        shd_2d(t2, np.zeros((3, 3), dtype=bool))
+
+
+def test_shd_3d_single_counting_merges_lag0_directions():
+    true = np.zeros((3, 3, 2), dtype=int)
+    true[0, 1, 0] = 1
+    reversed_ = np.zeros_like(true)
+    reversed_[1, 0, 0] = 1
+    assert shd_3d(true, reversed_, double_for_anticausal=True) == 2
+    assert shd_3d(true, reversed_, double_for_anticausal=False) == 1
+    both = true.copy()
+    both[1, 0, 0] = 1
+    assert shd_3d(true, both, double_for_anticausal=False) == 1
+    # A lag-0 self-loop has no mirror: it counts once, not half.
+    loop = np.zeros((3, 3), dtype=int)
+    loop[2, 2] = 1
+    assert shd_2d(np.zeros((3, 3), dtype=int), loop, double_for_anticausal=False) == 1
+
+
+def test_shd_3d_empty_lag_axis():
+    empty = np.zeros((2, 2, 0), dtype=int)
+    assert shd_3d(empty, empty, double_for_anticausal=False) == 0
+    assert shd_3d(empty, empty, double_for_anticausal=True) == 0

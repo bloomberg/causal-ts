@@ -184,6 +184,33 @@ def _make_ci_test(name, data, device, seed=None, alpha=None):
                 kwargs.pop(k)
 
 
+def _align_graphs(gt, pred, ctx=None):
+    """Bring a ground-truth and a discovered graph to one shape for scoring.
+
+    The variable axis follows the ground truth: a discovered graph's extra
+    variables (e.g. C rows and columns) are cut, and variables it lacks are
+    zero-padded, so their true edges count as false negatives. The lag axis is
+    zero-padded to the larger count, so an edge at a lag the other graph does not
+    have still counts as a false positive or a false negative.
+    """
+    n = gt.shape[0]
+    tau = max(gt.shape[2], pred.shape[2])
+    if pred.shape[0] < n and ctx is not None:
+        _log(
+            ctx,
+            f"Warning: the discovered graph has {pred.shape[0]} variables, the "
+            f"ground truth {n}; true edges on the missing variables count as "
+            "false negatives.",
+        )
+
+    def _fit(g):
+        g = g[:n, :n]
+        k = n - g.shape[0]
+        return np.pad(g, ((0, k), (0, k), (0, tau - g.shape[2])))
+
+    return _fit(gt), _fit(pred)
+
+
 def _make_output_dir(base, prefix):
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = os.path.join(base, f"{prefix}_{ts}")
@@ -314,14 +341,17 @@ def inspect(data, var_names, max_lag):
     """
     import json as _json
 
-    from .inspection import inspect_df
+    from .inspection import NoNumericColumnsError, inspect_df
     from .utils.io import read_dataframe
 
     df = read_dataframe(data)
     var_name_list = _parse_comma_list(var_names)
     if var_name_list:
         df.columns = var_name_list
-    report = inspect_df(df, max_lag=max_lag)
+    try:
+        report = inspect_df(df, max_lag=max_lag)
+    except NoNumericColumnsError as e:
+        raise click.ClickException(str(e))
     click.echo(_json.dumps(report, indent=2, default=str))
 
 
@@ -1320,11 +1350,7 @@ def discover(
         gt = np.load(ground_truth)
         graph_path = os.path.join(outdir, "estimated_graph.npy")
         pred = np.load(graph_path)
-        if gt.shape != pred.shape:
-            n = min(gt.shape[0], pred.shape[0])
-            tau = min(gt.shape[2], pred.shape[2])
-            gt = gt[:n, :n, :tau]
-            pred = pred[:n, :n, :tau]
+        gt, pred = _align_graphs(gt, pred, ctx)
         metrics = evaluate_graph(pred, gt)
         _save_json(
             {k: round(v, 6) if isinstance(v, float) else v for k, v in metrics.items()},
@@ -1379,17 +1405,31 @@ def discover(
     default="lin,lin,nl1,nl2",
     help="Comma-separated dependency functions.",
 )
+@click.option(
+    "--bounded-start",
+    is_flag=True,
+    default=False,
+    help="henon only: start from U(-0.1, 0.1) so the series stays finite. The "
+    "default standard-normal start diverges to -inf for some seeds.",
+)
 @click.pass_context
-def generate(ctx, dataset, n_vars, n_links, max_lag, samples, density, dep_funcs):
+def generate(
+    ctx, dataset, n_vars, n_links, max_lag, samples, density, dep_funcs, bounded_start
+):
     """Generate synthetic time series data with known causal structure."""
     outdir = _make_output_dir(ctx.obj["output_dir"], "generate")
-    seed = ctx.obj["seed"] or 42
+    seed = 42 if ctx.obj["seed"] is None else ctx.obj["seed"]
 
+    if bounded_start and dataset != "henon":
+        what = dataset or "random generation"
+        _log(ctx, f"Warning: --bounded-start has no effect with {what}; ignoring.")
+        bounded_start = False
     if dataset is not None:
         _log(ctx, f"Loading built-in dataset: {dataset}")
         from .synthetic_data.synthetic_datasets import load_dataset
 
-        result = load_dataset(dataset, seed=seed, T=samples)
+        extra = {"bounded_start": True} if bounded_start else {}
+        result = load_dataset(dataset, seed=seed, T=samples, **extra)
         df = result["df"]
         gt = result["ground_truth"]
         meta = {
@@ -1399,6 +1439,7 @@ def generate(ctx, dataset, n_vars, n_links, max_lag, samples, density, dep_funcs
             "n_vars": df.shape[1],
             "max_lag": result["max_lag"],
             "var_names": list(df.columns),
+            **extra,
         }
     else:
         _log(
@@ -1430,6 +1471,12 @@ def generate(ctx, dataset, n_vars, n_links, max_lag, samples, density, dep_funcs
             "attempts": result["meta"]["attempt"],
         }
 
+    if not np.isfinite(df.to_numpy(dtype=float)).all():
+        _log(
+            ctx,
+            "Warning: the generated data contains non-finite values"
+            + (" (use --bounded-start for henon)." if dataset == "henon" else "."),
+        )
     df.to_csv(os.path.join(outdir, "data.csv"), index=False)
     np.save(os.path.join(outdir, "ground_truth.npy"), gt)
     _save_json(meta, os.path.join(outdir, "meta.json"))
@@ -1488,16 +1535,10 @@ def evaluate(
     gt = np.load(graph_true)
     pred = np.load(graph_discovered)
 
-    # If shapes differ (e.g. discovered includes C variable), trim to match
     if gt.shape != pred.shape:
-        n = min(gt.shape[0], pred.shape[0])
-        tau = min(gt.shape[2], pred.shape[2])
-        _log(
-            ctx,
-            f"Shape mismatch (gt={gt.shape}, pred={pred.shape}), trimming to ({n},{n},{tau})",
-        )
-        gt = gt[:n, :n, :tau]
-        pred = pred[:n, :n, :tau]
+        shapes = f"gt={gt.shape}, pred={pred.shape}"
+        gt, pred = _align_graphs(gt, pred, ctx)
+        _log(ctx, f"Shape mismatch ({shapes}), aligned to {gt.shape}")
 
     _log(ctx, f"Ground truth shape: {gt.shape}, Discovered shape: {pred.shape}")
 

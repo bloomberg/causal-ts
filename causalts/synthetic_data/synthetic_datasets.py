@@ -465,7 +465,7 @@ def ex3(seed=42, T=300):
     }
 
 
-def henon_chain(seed=42, T=200, Q=0.5, M=5):
+def henon_chain(seed=42, T=200, Q=0.5, M=5, bounded_start=False):
     """Coupled (Henon-style) chain with nearest-neighbor nonlinear coupling.
 
     Parameters
@@ -478,6 +478,13 @@ def henon_chain(seed=42, T=200, Q=0.5, M=5):
         Coupling strength (as in the provided equations).
     M : int
         Number of variables in the chain.
+    bounded_start : bool, default False
+        False (default) starts from a standard-normal state, as earlier
+        releases did, so output is unchanged for every seed; that start lies
+        outside the map's basin for about 20% of seeds, and those runs diverge
+        to -inf. True starts at U(-0.1, 0.1), inside the basin, and redraws the
+        start (up to 100 times, then raises) if a value escapes past 1e6, so
+        the data stays finite.
 
     Returns
     -------
@@ -494,21 +501,45 @@ def henon_chain(seed=42, T=200, Q=0.5, M=5):
     """
     max_lag = 2
     rng = np.random.default_rng(seed)
-    x = rng.standard_normal((T + max_lag, M))
 
-    for t in range(max_lag, T + max_lag):
-        for m in range(M):
-            if m in (0, M - 1):
-                # boundaries: self-only nonlinear at lag 1 + linear AR at lag 2
-                x[t, m] = 1.4 - x[t - 1, m] ** 2 + 0.3 * x[t - 2, m]
-            else:
-                # interior: nonlinear mix of neighbors + self at lag 1, plus linear AR at lag 2
-                mix = (
-                    0.5
-                    * Q
-                    * (x[t - 1, m - 1] + x[t - 1, m + 1] + (1 - Q) * x[t - 1, m])
-                )
-                x[t, m] = 1.4 - mix**2 + 0.3 * x[t - 2, m]
+    def _simulate(x, check_escape):
+        for t in range(max_lag, T + max_lag):
+            for m in range(M):
+                if m in (0, M - 1):
+                    # boundaries: self-only nonlinear at lag 1 + linear AR at lag 2
+                    x[t, m] = 1.4 - x[t - 1, m] ** 2 + 0.3 * x[t - 2, m]
+                else:
+                    # interior: nonlinear mix of neighbors + self at lag 1, plus
+                    # linear AR at lag 2
+                    mix = (
+                        0.5
+                        * Q
+                        * (x[t - 1, m - 1] + x[t - 1, m + 1] + (1 - Q) * x[t - 1, m])
+                    )
+                    x[t, m] = 1.4 - mix**2 + 0.3 * x[t - 2, m]
+                if check_escape and abs(x[t, m]) > 1e6:  # diverges to inf
+                    return False
+        return True
+
+    if not bounded_start:
+        # Legacy start: the whole array is drawn, as earlier releases did, so
+        # the output is byte-identical for every seed (including the ~20% that
+        # diverge to -inf).
+        x = rng.standard_normal((T + max_lag, M))
+        _simulate(x, check_escape=False)
+    else:
+        # The map is deterministic, so start near 0, inside the attractor's
+        # basin, and redraw the start in the unlikely case it escapes.
+        for _ in range(100):
+            x = np.zeros((T + max_lag, M))
+            x[:max_lag] = rng.uniform(-0.1, 0.1, size=(max_lag, M))
+            if _simulate(x, check_escape=True):
+                break
+        else:
+            raise RuntimeError(
+                f"henon_chain diverged from 100 initial states "
+                f"(seed={seed}, Q={Q}, M={M})"
+            )
 
     var_names = [f"X{i}" for i in range(M)]
     df = pd.DataFrame(x[max_lag:], columns=var_names)
@@ -1066,6 +1097,7 @@ def topology_scp(
     er_p: float = 0.08,
     ws_k: int = 4,
     ws_p: float = 0.3,
+    coef_pools: str = "legacy",
 ) -> dict:
     """Generate SCP time-series data with a structured graph topology.
 
@@ -1099,14 +1131,39 @@ def topology_scp(
         WS nearest neighbours (small_world density control).
     ws_p : float
         WS rewiring probability.
+    coef_pools : {'legacy', 'fixed'}, default 'legacy'
+        How the coefficient pools are built from ``auto_range``,
+        ``dep_pos_range`` and ``dep_neg_range``. ``'legacy'`` (default) keeps
+        earlier releases' ``np.arange(lo, hi + 0.005, 0.01)``, so data is
+        byte-identical for every seed; with the default downward
+        ``dep_neg_range`` that pool is empty and **every cross edge is
+        positive**, and a descending ``auto_range`` / ``dep_pos_range`` gives an
+        empty pool. ``'fixed'`` builds all three pools inclusively in either
+        direction, as ``SCPGraphGenerator.sample()`` does, so cross edges draw
+        negative coefficients too. The wrappers (``scale_free``,
+        ``erdos_renyi``, ``small_world`` and the ``_dense`` variants) forward it.
     """
     import networkx as nx
 
     rng = np.random.default_rng(seed)  # noqa: F841
 
-    auto_coeffs = np.arange(auto_range[0], auto_range[1] + 0.005, 0.01).tolist()
-    pos_coeffs = np.arange(dep_pos_range[0], dep_pos_range[1] + 0.005, 0.01).tolist()
-    neg_coeffs = np.arange(dep_neg_range[0], dep_neg_range[1] + 0.005, 0.01).tolist()
+    if coef_pools == "legacy":
+        # Earlier releases' pools, kept byte-identical. dep_neg_range runs
+        # downwards (-0.40 to -0.89), so its pool is empty: all cross edges > 0.
+        auto_coeffs = np.arange(auto_range[0], auto_range[1] + 0.005, 0.01).tolist()
+        pos_coeffs = np.arange(
+            dep_pos_range[0], dep_pos_range[1] + 0.005, 0.01
+        ).tolist()
+        neg_coeffs = np.arange(
+            dep_neg_range[0], dep_neg_range[1] + 0.005, 0.01
+        ).tolist()
+    elif coef_pools == "fixed":
+        # Inclusive in either direction, as SCPGraphGenerator.sample() does.
+        auto_coeffs = SCPGraphGenerator._arange_inclusive(*auto_range, 0.01).tolist()
+        pos_coeffs = SCPGraphGenerator._arange_inclusive(*dep_pos_range, 0.01).tolist()
+        neg_coeffs = SCPGraphGenerator._arange_inclusive(*dep_neg_range, 0.01).tolist()
+    else:
+        raise ValueError(f"coef_pools must be 'legacy' or 'fixed', got {coef_pools!r}")
     dep_coeffs = pos_coeffs + neg_coeffs
     func_list = list(dependency_funcs)
 

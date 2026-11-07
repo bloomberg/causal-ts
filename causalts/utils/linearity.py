@@ -34,7 +34,10 @@ def check_linearity(data, alpha=0.05, max_lag=1, pairs=None):
         Dict with keys:
 
         - results: list of dicts with x, y, lag, reset_pvalue, is_nonlinear
-        - fraction_nonlinear: fraction of tests rejecting linearity
+        - fraction_nonlinear: fraction of tests rejecting linearity, among those
+          that gave a p-value (rows with a missing value are dropped per test);
+          0.0 when none did, so check n_tested
+        - n_tested: number of tests that gave a p-value
         - summary: human-readable recommendation string
     """
     # Imported here rather than at module scope: statsmodels costs ~0.25s to
@@ -58,10 +61,15 @@ def check_linearity(data, alpha=0.05, max_lag=1, pairs=None):
             # Align X_i(t-lag) with Y_j(t), always keeping Y_j(t-1) as a control.
             # Using t=1..T-lag so that Y_j(t-1) is always available.
             start = max(lag, 1)
+            if T - start < 10:  # too few rows; also avoids misaligned slices
+                continue
             x = data[start - lag : T - lag, i]  # X_i(t-lag), t = start..T-1
             y = data[start:, j]  # Y_j(t),     t = start..T-1
             y_lag1 = data[start - 1 : T - 1, j]  # Y_j(t-1),   t = start..T-1
 
+            # Drop rows with a missing value; OLS on them gives a NaN p-value.
+            ok = np.isfinite(x) & np.isfinite(y) & np.isfinite(y_lag1)
+            x, y, y_lag1 = x[ok], y[ok], y_lag1[ok]
             if len(x) < 10:
                 continue
 
@@ -83,11 +91,18 @@ def check_linearity(data, alpha=0.05, max_lag=1, pairs=None):
                 }
             )
 
+    # A test that still failed (p is NaN) is untested, not linear: leave it out
+    # of the denominator so it cannot dilute the fraction towards zero.
     n_nonlinear = sum(r["is_nonlinear"] for r in results)
-    n_total = len(results)
+    n_total = sum(np.isfinite(r["reset_pvalue"]) for r in results)
     fraction = n_nonlinear / n_total if n_total > 0 else 0.0
 
-    if fraction > 0.2:
+    if n_total == 0:
+        summary = (
+            "Linearity could not be tested: no RESET test gave a p-value (too "
+            "few columns or complete rows, or singular regressions)."
+        )
+    elif fraction > 0.2:
         summary = (
             f"{n_nonlinear}/{n_total} pairs show significant nonlinearity "
             f"(alpha={alpha}). Consider a nonlinear CI test (raft; rcot if the "
@@ -107,5 +122,6 @@ def check_linearity(data, alpha=0.05, max_lag=1, pairs=None):
     return {
         "results": results,
         "fraction_nonlinear": fraction,
+        "n_tested": int(n_total),
         "summary": summary,
     }
