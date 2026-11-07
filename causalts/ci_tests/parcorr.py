@@ -15,6 +15,7 @@ import warnings
 import numpy as np
 from scipy import stats
 
+from .cit_test import reject_inf
 from .independence_tests_base import CondIndTest
 
 
@@ -340,6 +341,9 @@ class ParCorr(CondIndTest):
 
 
 class PartialCorr(ParCorr):
+
+    rejects_inf = True  # an infinite tested value raises ValueError
+
     def __init__(
         self,
         data=None,
@@ -387,6 +391,7 @@ class PartialCorr(ParCorr):
         if condition_set is None:
             condition_set = []
         data = self._data
+        reject_inf(data, X, Y, condition_set, type(self).__name__)
         if self._has_nan:
             cols = [X, Y] + list(condition_set)
             mask = ~np.isnan(data[:, cols]).any(axis=1)

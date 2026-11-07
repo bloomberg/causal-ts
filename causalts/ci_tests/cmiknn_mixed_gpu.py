@@ -171,6 +171,10 @@ class CMIknnMixedGPU(CMIknnGPU):
         """Override to record the global column ordering before CMI estimation."""
         if condition_set is None:
             condition_set = []
+        # With order_independent=True, canonical order first, so the columns
+        # recorded here match the order CMIknnGPU.__call__ computes in (it
+        # canonicalises the same way); a no-op otherwise.
+        X, Y, condition_set = self._canonical_query(X, Y, condition_set)
         x_cols = [X] if isinstance(X, (int, np.integer)) else list(X)
         y_cols = [Y] if isinstance(Y, (int, np.integer)) else list(Y)
         z_cols = list(condition_set)

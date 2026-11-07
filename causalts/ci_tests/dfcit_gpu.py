@@ -6,22 +6,33 @@
 # Test with Applications to Causal Discovery", JMLR 23(152):1-34, 2022.
 # Reference implementation: https://github.com/zhanruicai/CItest (MIT license)
 
+import warnings
+
 import numpy as np
 import torch
 
 from .cit_test import CIT_Base
 
 
-def _silverman_bandwidth(z):
-    """Silverman's rule of thumb for kernel bandwidth."""
-    n = z.shape[0]
+def _standardize_columns(z):
+    """Centre each column of z and scale it to unit sd (a constant column to 0)."""
     if z.dim() == 1:
-        std = z.std().item()
-    else:
-        std = z.std(dim=0).mean().item()
-    if std < 1e-10:
-        std = 1.0
-    return 1.06 * std * (4.0 / (3.0 * n)) ** 0.2
+        z = z.unsqueeze(1)
+    sd = z.std(dim=0, keepdim=True)
+    sd = torch.where(sd < 1e-10, torch.ones_like(sd), sd)
+    return (z - z.mean(dim=0, keepdim=True)) / sd
+
+
+def _multivariate_silverman_bandwidth(n, d):
+    """Silverman's normal-reference rule for a d-dimensional Gaussian kernel on
+    standardized data: h = (4 / ((d + 2) n)) ** (1 / (d + 4)).
+
+    For d = 1 it is the textbook 1-D rule (1.06 n^(-1/5)); the rule it replaced
+    multiplied in the 1.06 twice, so |Z| = 1 bandwidths are about 6% narrower
+    than before. For larger d it shrinks more slowly with n, as the
+    d-dimensional NW smoother needs.
+    """
+    return (4.0 / ((d + 2) * n)) ** (1.0 / (d + 4))
 
 
 def _pca_whiten(z, var_threshold=0.999):
@@ -68,8 +79,21 @@ def _gaussian_kernel_weights(z, h):
     return torch.exp(-sq_dist / (2 * h**2)) / ((2 * torch.pi) ** (d / 2.0))
 
 
-def _estimate_conditional_cdfs(x, z, h):
+# Share of rows falling back to the marginal CDF above which the test warns.
+_SPARSE_FALLBACK_FRAC = 0.1
+
+
+def _estimate_conditional_cdfs(x, z, h, leave_one_out=False, return_n_fallback=False):
     """Estimate F(x_i | z_i) for each observation i using NW kernel smoothing.
+
+    With ``leave_one_out`` the point's own weight is dropped from its sum. Its
+    self-weight is the largest in the row and always counts x_i <= x_i, which
+    pulls U_i towards 1 by an amount that depends on how isolated z_i is, so U
+    stays dependent on Z and the permutation null over-rejects as |Z| grows.
+    A point with no neighbour weight left falls back to the marginal CDF of x,
+    which ignores Z for that point; ``return_n_fallback`` also returns how many
+    did (without ``leave_one_out``: how many have only their own weight, which
+    pins U_i to 1, also ignoring Z).
 
     Returns vector of length n with CDF values.
     """
@@ -77,10 +101,23 @@ def _estimate_conditional_cdfs(x, z, h):
         z = z.unsqueeze(1)
     K = _gaussian_kernel_weights(z, h)
     indicator = (x.unsqueeze(0) <= x.unsqueeze(1)).float()
+    if leave_one_out:
+        K.fill_diagonal_(0.0)  # K is freshly built above, so in place is safe
+        K_raw = K.sum(dim=1)
+        U = (K * indicator).sum(dim=1) / K_raw.clamp(min=1e-30)
+        has_weight = K_raw > 1e-30
+        U = torch.where(has_weight, U, indicator.mean(dim=1))
+        if return_n_fallback:
+            return U, int((~has_weight).sum().item())
+        return U
     weighted_ind = K * indicator
     K_sum = K.sum(dim=1).clamp(min=1e-10)
     U = weighted_ind.sum(dim=1) / K_sum
-    return U
+    if not return_n_fallback:
+        return U
+    # Rows whose only weight is their own: U_i is pinned to 1 whatever Z is.
+    n_isolated = int(((K.sum(dim=1) - K.diagonal()) <= 1e-30).sum().item())
+    return U, n_isolated
 
 
 def _estimate_marginal_cdf(z):
@@ -151,7 +188,10 @@ def _permutation_test(
         If > 1, use block shuffle (permute contiguous blocks of rows) instead of
         fully random permutation. Preserves short-range temporal autocorrelation
         in the null distribution. Recommended for unconditional tests (Z empty)
-        on autocorrelated time series. Set adaptively as max(3, int(T**0.5)).
+        on autocorrelated time series. DFCITGPU's ``sig_blocklength="auto"`` uses
+        ``_auto_block_length(n, _min_blocks(min(alpha, 0.01)))`` (sqrt(n),
+        shortened to keep enough blocks to reach p < alpha; row shuffling if
+        that is under 2 rows) for the n rows a test actually uses.
     """
     gen = torch.Generator(device="cpu")
     rng_block = None
@@ -254,6 +294,8 @@ def citest_cind(
     early_stop=True,
     whiten_z=False,
     residualize=False,
+    leave_one_out=True,
+    on_sparse=None,
 ):
     """Distribution-free conditional independence test.
 
@@ -269,6 +311,23 @@ def citest_cind(
         PCA-whiten Z before NW bandwidth computation (used only when
         residualize=False). Removes collinearity in the conditioning set.
         Disabled by default as it can hurt recall on nonlinear data.
+
+    leave_one_out : bool (default True)
+        Leave each point out of its own Nadaraya-Watson sum, with the automatic
+        or a numeric ``h``. The self-included estimator biases U towards 1
+        where Z is sparse, which over-rejects as |Z| grows.
+
+    on_sparse : callable or None
+        Called as ``on_sparse(frac, h)`` when more than 10% of rows have no
+        neighbour weight left (it underflows) and fall back to the marginal CDF,
+        so Z is ignored for them: a numeric ``h`` far below Z's scale. Rows
+        with only one or two effective neighbours are not counted, so the
+        automatic rule practically never triggers it, including at large |Z|
+        where the test still over-rejects. By default a ``UserWarning`` is
+        issued.
+
+    With ``h=None`` each Z column is standardized and ``h`` follows the
+    d-dimensional Silverman rule; a numeric ``h`` is used on Z as given.
     """
     device = x.device
     n = x.shape[0]
@@ -283,12 +342,30 @@ def citest_cind(
     if whiten_z and z.dim() > 1 and z.shape[1] > 1:
         z = _pca_whiten(z)
 
-    if h is None:
-        h = _silverman_bandwidth(z)
-
-    U = _estimate_conditional_cdfs(x, z, h)
-    V = _estimate_conditional_cdfs(y, z, h)
+    # The marginal CDFs W are rank-based, so they are the same on scaled Z.
     W = _estimate_marginal_cdf(z)
+    if h is None:
+        # Automatic rule: standardize each column and use the d-dimensional
+        # Silverman bandwidth. The 1-D rule on the mean sd under-smoothed for
+        # |Z| >= 2 (FPR 0.76 at |Z| = 3, T = 200).
+        z = _standardize_columns(z)
+        h = _multivariate_silverman_bandwidth(n, z.shape[1])
+
+    U, n_fb = _estimate_conditional_cdfs(
+        x, z, h, leave_one_out=leave_one_out, return_n_fallback=True
+    )
+    V = _estimate_conditional_cdfs(y, z, h, leave_one_out=leave_one_out)
+    # x and y share the kernel, so U and V fall back on the same rows.
+    if n_fb > _SPARSE_FALLBACK_FRAC * n:
+        if on_sparse is not None:
+            on_sparse(n_fb / n, h)
+        else:
+            warnings.warn(
+                "DFCIT: over 10% of rows have no kernel neighbour and ignore Z; "
+                "the bandwidth is too small for Z's scale.",
+                UserWarning,
+                stacklevel=3,  # past @torch.no_grad()'s wrapper to the caller
+            )
 
     uu = _build_uu_matrix(U)
     vv = _build_uu_matrix(V)
@@ -341,11 +418,49 @@ def citest_uind(
     return p_val, stat.cpu().item()
 
 
+def _min_blocks(alpha):
+    """Fewest whole blocks a block length may leave in a test's rows.
+
+    With b blocks the shuffle null has b! orderings, one of them the identity,
+    so p cannot fall below about 1/b!: b is the smallest count with
+    b! >= 1/alpha (4 at alpha 0.05, 5 at 0.01, 7 at 0.001). A fixed floor of 10
+    blocks was tried and dropped: it shortened the blocks below what the
+    autocorrelation needs, roughly doubling the false-positive rate on short
+    series (two independent AR(0.9) series, T=36: 0.12 with sqrt(n) blocks,
+    0.21 with 10). The floor makes p < alpha reachable, not reliable: near it,
+    identity draws alone keep some strongly dependent pairs above alpha.
+    """
+    if not alpha or alpha <= 0:
+        alpha = 0.01  # alpha <= 0 only switches early stopping off
+    b, orderings = 2, 2
+    while orderings * alpha < 1:
+        b += 1
+        orderings *= b
+    return b
+
+
+def _auto_block_length(n, min_blocks=5):
+    """Automatic block length for n rows: sqrt(n) blocks of sqrt(n) rows.
+
+    Below ``min_blocks**2`` rows that leaves too few blocks, so the length is
+    shortened to keep ``min_blocks`` of them; rows are shuffled (``None``)
+    only when that is under 2 rows.
+    """
+    bl = min(int(n**0.5), n // min_blocks)
+    return bl if bl > 1 else None
+
+
 class DFCITGPU(CIT_Base):
     """GPU-accelerated Distribution-Free Conditional Independence Test.
 
     Implements Cai, Li, Zhang (JMLR 2022) using empirical conditional CDFs
     with Nadaraya-Watson kernel smoothing and permutation-based p-values.
+
+    ``bandwidth="silverman"`` standardizes each conditioning column and uses the
+    d-dimensional Silverman rule; a number is used as the kernel width on Z as
+    given. ``leave_one_out`` (default True) drops each point from its own kernel
+    sum with either bandwidth; ``False`` restores the self-included estimator,
+    which over-rejects as |Z| grows.
     """
 
     def __init__(
@@ -360,6 +475,7 @@ class DFCITGPU(CIT_Base):
         residualize=False,
         seed=42,
         sig_blocklength="auto",
+        leave_one_out=True,
         **kwargs,
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -373,16 +489,14 @@ class DFCITGPU(CIT_Base):
         self.early_stop = early_stop
         self.whiten_z = whiten_z
         self.residualize = residualize
+        self.leave_one_out = leave_one_out
+        self._warned_sparse = False
+        self._last_sparse = False
         self._seed = seed
-        T = data.shape[0]
-        if sig_blocklength == "auto":
-            self.sig_blocklength = max(3, int(T**0.5))
-        else:
-            self.sig_blocklength = sig_blocklength  # int or None
-        self.param_hash = (
-            f"T{T}-nperm{n_perm}-bw_{bandwidth}"
-            f"-whiten{whiten_z}-resid{residualize}-bl{self.sig_blocklength}"
-        )
+        self._sig_blocklength_arg = sig_blocklength  # "auto", int or None
+        self._warned_short_blocks = False
+        self._hash_min_samples = kwargs.get("min_samples", 30)
+        self._set_sig_blocklength(data.shape[0])
         super().__init__(data, method="dfcit", seed=seed, **kwargs)
         self.n_actual_tests = 0
         self.n_tests = 0
@@ -390,11 +504,72 @@ class DFCITGPU(CIT_Base):
     def get_data(self):
         return self._data
 
+    def _bw_tag(self):
+        """The bandwidth part of ``param_hash``.
+
+        "silverman-mv2" (d-dimensional rule) and "-loo2" (leave-one-out NW sums
+        whose sparse results stay off the disk cache): results cached
+        under an older estimator or rule must miss.
+        """
+        tag = "silverman-mv2" if self.bandwidth == "silverman" else self.bandwidth
+        return f"{tag}-loo2" if self.leave_one_out else tag
+
+    def _warn_sparse(self, frac, h):
+        """Warn once per instance that rows fall back to the marginal CDF."""
+        self._last_sparse = True
+        if self._warned_sparse:
+            return
+        self._warned_sparse = True
+        warnings.warn(
+            f"DFCITGPU: {frac:.0%} of rows in a conditional test have no kernel "
+            f"neighbour at bandwidth {h:.3g} and ignore Z, so a "
+            f"confounded pair can be rejected. The bandwidth is too small for "
+            f"Z's scale (bandwidth={self.bandwidth!r}).",
+            UserWarning,
+            # _warn_sparse <- citest_cind <- no_grad wrapper <- __call__ <- caller
+            stacklevel=5,
+        )
+
     def set_data(self, d):
         self._data = d
         self._has_nan = bool(np.isnan(d).any())
         self.data_torch = torch.tensor(np.asarray(d).copy(), dtype=torch.float32).to(
             self.device
+        )
+        # The CLI builds the test on a placeholder and assigns the data later,
+        # so the automatic block length must follow the data actually tested.
+        self._set_sig_blocklength(d.shape[0])
+
+    def _min_blocks(self):
+        """Block floor for this test, sized for the stricter of ``alpha`` and
+        0.01 (at least 5 blocks). The CLI and ``discover_df`` pass the run's
+        threshold as ``alpha``; the 0.01 clamp covers a test built directly
+        for a ``run_*`` call, whose discovery alpha never reaches it."""
+        return _min_blocks(min(self.alpha, 0.01) if self.alpha else 0.01)
+
+    def _set_sig_blocklength(self, T):
+        """Resolve the block length for T rows and refresh ``param_hash``."""
+        if self._sig_blocklength_arg == "auto":
+            # Exact when no values are missing; with missing values each
+            # unconditional test sizes its own blocks from its complete rows.
+            self.sig_blocklength = _auto_block_length(T, self._min_blocks())
+            # Auto sizes blocks per test from the rows it uses, so the hash
+            # records the rule rather than the full-T length (which an explicit
+            # block length, or an older auto entry, could share).
+            bl = "auto-n-sqrt-minalpha"  # rule changed: older entries miss
+        else:
+            self.sig_blocklength = self._sig_blocklength_arg
+            bl = self.sig_blocklength
+            if bl is not None and bl > 1:
+                # Such a length is shortened when it leaves fewer than
+                # _min_blocks(alpha) blocks, so entries cached before that rule
+                # miss (alpha is in the key too).
+                bl = f"{bl}-minalpha"
+        self.param_hash = (
+            f"T{T}-nperm{self.n_perm}-bw_{self._bw_tag()}"
+            f"-whiten{self.whiten_z}-resid{self.residualize}-bl{bl}"
+            f"-es{self.early_stop}-a{self.alpha}-seed{self._seed}"
+            f"-ms{self._hash_min_samples}"
         )
 
     data = property(get_data, set_data)
@@ -415,6 +590,7 @@ class DFCITGPU(CIT_Base):
                 self.n_actual_tests -= 1
             return p, stat
 
+        self._last_sparse = False  # set by _warn_sparse during this test
         data_t = self.data_torch
         if self._has_nan:
             mask = self._pairwise_complete(X, Y, condition_set)
@@ -428,6 +604,32 @@ class DFCITGPU(CIT_Base):
         y = data_t[:, Y]
 
         if condition_set is None or len(condition_set) == 0:
+            block_length = self.sig_blocklength
+            n_rows = x.shape[0]
+            min_blocks = self._min_blocks()
+            if self._sig_blocklength_arg == "auto":
+                # Size the blocks for the rows actually tested: with missing
+                # values that can be far fewer than T, and a full-T block
+                # length could leave no whole block to shuffle.
+                block_length = _auto_block_length(n_rows, min_blocks)
+            elif (
+                block_length is not None
+                and block_length > 1
+                and n_rows // block_length < min_blocks
+            ):
+                # Too few blocks for a usable shuffle null (see _min_blocks):
+                # keep as much of the requested length as the floor allows.
+                if not self._warned_short_blocks:  # once, not once per test
+                    self._warned_short_blocks = True
+                    warnings.warn(
+                        f"DFCITGPU: sig_blocklength={block_length} leaves fewer "
+                        f"than {min_blocks} blocks in some tests' complete rows "
+                        f"(first: {n_rows}); those tests use shorter blocks.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                shorter = n_rows // min_blocks
+                block_length = shorter if shorter > 1 else None
             p, stat = citest_uind(
                 x,
                 y,
@@ -435,7 +637,7 @@ class DFCITGPU(CIT_Base):
                 seed=self._seed,
                 alpha=self.alpha,
                 early_stop=self.early_stop,
-                block_length=self.sig_blocklength,
+                block_length=block_length,
             )
         else:
             z = data_t[:, condition_set]
@@ -453,9 +655,14 @@ class DFCITGPU(CIT_Base):
                 early_stop=self.early_stop,
                 whiten_z=self.whiten_z,
                 residualize=self.residualize,
+                leave_one_out=self.leave_one_out,
+                on_sparse=self._warn_sparse,
             )
 
         self.pvalue_cache[combined_hash] = (p, stat)
         self.pvalue_local[combined_hash] = (p, stat)
-        self.save_incremental_cache(cache_key, self.param_hash, p, stat)
+        if not self._last_sparse:
+            # A result that ignored Z for many rows is kept off the disk cache,
+            # so a later run recomputes it and warns again.
+            self.save_incremental_cache(cache_key, self.param_hash, p, stat)
         return p, stat

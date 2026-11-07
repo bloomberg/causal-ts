@@ -156,12 +156,15 @@ def test_declined_precision_falls_back_to_the_existing_ols_path():
 
     Falling back to ``_compute_parcorr`` (the ``method="ols"`` computation,
     unchanged since before this class supported a precision path at all)
-    sidesteps that entire design problem: for the tests the precision path
-    declines, scalar ``__call__`` returns exactly what every scalar test
-    already returned in production before this class had a precision path,
-    which cannot be a regression by construction. It is not necessarily an
+    sidesteps that entire design problem. The fallback runs
+    ``_compute_parcorr`` in ``_get_array_hash``'s canonical order (sorted X/Y
+    and Z), clipped to [-1, 1] and on CPU, so it equals ``method="ols"`` for a
+    canonically ordered call like the one below; another ordering of the same
+    test may differ from ``method="ols"`` in that ordering (float32 ``lstsq`` is
+    order-sensitive here), and that is intended: every cache-equivalent call
+    then gets one answer. Do not restore caller order. It is not necessarily an
     accurate answer on some of these inputs (float32 OLS has its own numerical
-    limits near collinearity) — only an unchanged one.
+    limits near collinearity).
     """
     data = _near_singular_case()
     ci = ParCorrGPU(data, device=DEVICE)
@@ -378,6 +381,42 @@ def test_precision_decision_invariant_near_boundary_property_sweep():
     assert n_checked >= 20, "sweep should reliably land several cases in the band"
 
 
+def test_data_swap_in_unsampled_column_misses_cache():
+    """The strided fingerprint skipped whole columns (T=30000, d=4 -> step 2).
+
+    Replacing only column 1 kept the fingerprint, so the cached p-value of the
+    old data was returned.
+    """
+    rng = np.random.default_rng(0)
+    T = 30_000
+    old = rng.standard_normal((T, 4))
+    ci = ParCorrGPU(old, device=DEVICE)
+    p_old = ci(0, 1, [])[0]
+    new = old.copy()
+    new[:, 1] = 0.5 * old[:, 0] + rng.standard_normal(T)
+    ci.data = new
+    assert ci(0, 1, []) == ParCorrGPU(new, device=DEVICE)(0, 1, [])
+    assert ci(0, 1, [])[0] < 1e-6 < p_old
+
+
+def test_tigramite_adapter_does_not_reuse_stale_pvalues():
+    """CITestAdapter assigns a fresh array per test with indices 0, 1, ..."""
+    from causalts.tigramite_discovery import CITestAdapter
+
+    rng = np.random.default_rng(1)
+    T = 30_000
+    # Four columns at T=30000: the old stride (2) never read column 1 (Y).
+    x, y, z1, z2 = rng.standard_normal((4, T))
+    adapter = CITestAdapter(ParCorrGPU(np.zeros((2, 2)), device=DEVICE))
+    xyz = np.array([0, 1, 2, 2])
+    adapter.get_dependence_measure(np.vstack([x, y, z1, z2]), xyz)
+    p_indep = adapter.get_analytic_significance(None, T, 4)
+    y_dep = 0.5 * x + rng.standard_normal(T)
+    adapter.get_dependence_measure(np.vstack([x, y_dep, z1, z2]), xyz)
+    p_dep = adapter.get_analytic_significance(None, T, 4)
+    assert p_dep < 1e-6 < p_indep
+
+
 def _fresh_scalar(data, X, Y, Z):
     """``__call__`` on a new instance, so no earlier result is served from cache."""
     return ParCorrGPU(data, device=DEVICE)(X, Y, Z)
@@ -481,6 +520,19 @@ def test_declined_fallback_runs_on_mps():
         assert ParCorrGPU(data, device="mps", **kwargs).batch_test([t]) == [want]
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_declined_fallback_runs_on_cpu_under_cuda():
+    """CUDA's ``gels`` assumes a full-rank Z; declined tests use CPU ``gelsy``."""
+    rng = np.random.default_rng(0)
+    a, b, c = rng.standard_normal((3, 500))
+    data = np.column_stack([a, b, c, c])
+    t = (0, 1, [2, 3])
+    want = ParCorrGPU(data, device="cpu")(*t)
+    assert ParCorrGPU(data, device="cuda")(*t) == want
+    for kwargs in ({}, {"enable_caching": False}):
+        assert ParCorrGPU(data, device="cuda", **kwargs).batch_test([t]) == [want]
+
+
 def test_batch_unconditional_constant_column_falls_back():
     """The k == 2 variance gate must match the scalar path (issue #74 scope).
 
@@ -528,3 +580,38 @@ def test_declined_fallback_is_order_invariant_and_in_range():
                         batch = ParCorrGPU(data, device=DEVICE, **kwargs)
                         assert batch.batch_test([t]) == [want]
     assert n_declined >= 50
+
+
+def test_batch_exactly_singular_conditioning_set_falls_back():
+    """A duplicated Z column made the batched inverse raise LinAlgError.
+
+    Both a duplicated column and a trend with its own lag (exactly collinear
+    with a constant) must give the scalar path's answer instead.
+    """
+    rng = np.random.default_rng(0)
+    T = 500
+    a, b, c = rng.standard_normal((3, T))
+    trend = np.arange(T, dtype=float)
+    for Z in (np.c_[c, c], np.c_[trend, trend - 1.0]):
+        data = np.column_stack([a, b, Z])
+        want = _fresh_scalar(data, 0, 1, [2, 3])
+        for kwargs in ({}, {"enable_caching": False}):
+            got = ParCorrGPU(data, device=DEVICE, **kwargs).batch_test([(0, 1, [2, 3])])
+            assert got == [want]
+
+
+def test_batch_inverse_failure_on_a_trusted_row_falls_back(monkeypatch):
+    """A row the guard trusts but the raw inverse cannot handle must decline
+    to the scalar path, not raise LinAlgError for the whole chunk."""
+    rng = np.random.default_rng(0)
+    a, b, c = rng.standard_normal((3, 300))
+    data = np.column_stack([a, b, c, c])  # exactly singular Z
+    ci = ParCorrGPU(data, device=DEVICE, enable_caching=False)
+    real = ci._batch_conditioning_guard
+
+    def trusting_guard(sub_cov):
+        trust, near = real(sub_cov)
+        return torch.ones_like(trust), near
+
+    monkeypatch.setattr(ci, "_batch_conditioning_guard", trusting_guard)
+    assert ci.batch_test([(0, 1, [2, 3])]) == [_fresh_scalar(data, 0, 1, [2, 3])]

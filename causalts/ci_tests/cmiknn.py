@@ -669,10 +669,12 @@ class CMIKNN(CMIknn):
         self._data = data
         self._has_nan = bool(np.isnan(data).any()) if data is not None else False
         L = 0 if data is None else data.shape[0]
+        seed = kwargs.pop("seed", 42)
         if param_hash is None:
-            param_hash = f"T{L}-k{k}"
+            # The seed only when not the default, so default-seed caches stay valid.
+            param_hash = f"T{L}-k{k}" + ("" if seed == 42 else f"-seed{seed}")
         super().__init__(
-            seed=42,
+            seed=seed,
             knn=k,
             workers=workers,
             sig_samples=sig_samples,

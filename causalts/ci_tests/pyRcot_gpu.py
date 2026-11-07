@@ -374,6 +374,8 @@ class RCOTGPU(CIT_Base):
     GPU-accelerated implementation of the RCOT.
     """
 
+    rejects_inf = True  # an infinite tested value raises ValueError
+
     def __init__(
         self,
         data=None,
@@ -494,6 +496,9 @@ class RCOTGPU(CIT_Base):
         # assigned by position, so [2, 3] and [3, 2] must build the same Z.
         if condition_set is not None and len(condition_set) > 0:
             condition_set = sorted(condition_set)
+        # Before the cache: an entry persisted by an older build must not
+        # answer for an infinite input.
+        self._reject_inf(X, Y, condition_set)
         cache_key = self._get_array_hash(X, Y, condition_set)
         cache_key = f"{self.method}-{cache_key}"
         combined_hash = cache_key, self.param_hash

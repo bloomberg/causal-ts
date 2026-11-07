@@ -93,6 +93,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   orients only unanimous votes, as conservative PC does. On a CDNOTS+ / ParCorr
   simulation grid `0.4` gave F1 +0.003 and SHD −0.35 on held-out seeds; it is untested on
   other CI tests and on plain CDNOTS.
+* `order_independent=True` on `KCIGPU`, `LinSigCIGPU`, `GCMIGPU`, `CMIknnGPU`,
+  `CMIknnMixedGPU`: one p-value per test whatever the call order or X/Y orientation.
 
 ### Changed
 
@@ -138,6 +140,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * Results change (fixes below): CDNOTS and CDNOTS+ lag-0 orientations; with
   `include_C=True`, CDNOTS+ C-node edges and lagged edges whose MCI tests conditioned on C;
   lagged edges under `lag_verify=True`.
+* `DFCITGPU`: conditional p-values change at every |Z| (bandwidth rule scales with |Z|
+  and is ~6% narrower at |Z| = 1; leave-one-out smoothing on by default, also for a
+  numeric `bandwidth`); unconditional p-values change below ~100 rows (blocks of sqrt(n)
+  rows, shortened only to keep enough blocks to reach p < alpha), inside CDNOTS, after
+  `.data` is reassigned, and when an explicit `sig_blocklength` leaves too few blocks
+  (now shortened, with a warning). The CLI and `discover_df` pass their alpha (Cedar:
+  `alpha_cond1`) to `dfcit`.
+* `GCMIGPU`: tie-breaking jitter is drawn per test from `seed`, so p-values on exactly tied
+  data change.
+* `causal-ts -s` now seeds the CI test. Disk-cache keys include every result-shaping
+  setting, so existing cache files miss.
 
 ### Fixed
 
@@ -265,6 +278,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   single-variable graph: squeezing the input collapsed `(1, 1, n_lags)` to 1-D (or 0-D),
   and the per-lag indexing then raised. A single-variable graph now keeps its variable
   axes; other shapes are squeezed as before.
+* `ParCorrGPU`: wrong cached p-values when the data was replaced (e.g. `run_tigramite`
+  PCMCI); declined batched tests use the CPU OLS fallback on CUDA too; a singular raw
+  inverse declines one row instead of failing the batch; works on torch < 2.2.
+* CI tests raise `ValueError` on an infinite tested value instead of returning p = 1 / NaN;
+  `CausalLearnFisherZ` accepts a numpy conditioning set.
+* `GCMIGPU` tests X against Y when X or Y is multivariate.
+* `KCIGPU`, `LinSigCIGPU`, `SplitKCIGPU` permutation/bootstrap nulls honour `seed`; CPU
+  `CMIknn` takes `seed`; `KCIGPU` passes on `nperms` (unconditional) and `lamda`/`thresh`.
+* `LinSigCIGPU` docs state its measured null calibration.
+* `LinSigCIGPU` no longer reuses a result cached (in memory or on disk) under an earlier
+  lag layout.
+* `DFCITGPU` over-rejected with |Z| >= 2, and `causal-ts discover --ci-test dfcit` kept a
+  block length of 3.
 
 ## [0.27.0]
 

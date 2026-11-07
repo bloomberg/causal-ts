@@ -12,17 +12,23 @@ import numpy as np
 import torch
 from scipy import stats
 
-from .cit_test import CIT_Base
+from .cit_test import CIT_Base, _test_columns
 
 
 def _data_fingerprint(data):
-    """Fast dataset identity hash — sampled MD5, not a per-column hash.
+    """Dataset identity hash — MD5 of every value, the shape and the dtype.
 
-    Samples ~50K values so cost stays < 1ms even at d=75 T=2000 (2.4 MB).
-    Used in param_hash so pvalue_cache keys automatically miss when data changes.
+    Used in param_hash so pvalue_cache keys miss when data changes. The cache key
+    is column indices only, so a hash that skips any value can return a p-value
+    computed on other data (a strided sample skipped whole columns whenever the
+    column count divided the stride). Hashing all of it is O(T*d), below the
+    O(T*d^2) covariance the data setter builds anyway (about 1 ms at d=75,
+    T=2000).
     """
-    step = max(1, data.size // 50_000)
-    return hashlib.md5(data.flat[::step].tobytes()).hexdigest()[:12]
+    a = np.ascontiguousarray(data)
+    h = hashlib.md5(f"{a.shape}-{a.dtype.str}".encode())
+    h.update(a.data)
+    return h.hexdigest()[:12]
 
 
 # Distinguishes builds whose cached statistic differs numerically, so a
@@ -97,6 +103,8 @@ class ParCorrGPU(CIT_Base):
         Additional arguments passed to CIT_Base.
     """
 
+    rejects_inf = True  # an infinite tested value raises ValueError
+
     def __init__(
         self,
         data,
@@ -124,9 +132,8 @@ class ParCorrGPU(CIT_Base):
         # setter, which CIT_Base.__init__ triggers via `self.data = data`.
         # Building them here as well would do the O(T*d^2) work twice and hold
         # the first covariance live while the second is formed.
+        # The data setter also sets param_hash (it fingerprints the data).
         super().__init__(data, method="parcorr_gpu", **kwargs)
-        fp = _data_fingerprint(data)
-        self.param_hash = f"T{data.shape[0]}-{self._method}-{_STAT_VERSION}-{fp}"
         self.enable_batching = enable_batching and not self._has_nan
         self.enable_caching = enable_caching
         if not self._has_nan:
@@ -140,6 +147,11 @@ class ParCorrGPU(CIT_Base):
     def data(self, d):
         self._data = d
         self._has_nan = bool(np.isnan(d).any()) if d is not None else False
+        # Per-column inf flags, once per assignment like the covariance below,
+        # so the per-call check stays O(k) rather than O(T * k).
+        self._inf_cols = np.isinf(d).any(axis=0) if d is not None else None
+        # Clean data (the normal case) skips the per-test column checks.
+        self._any_inf = bool(self._inf_cols.any()) if d is not None else False
         if self._has_nan:
             self.enable_batching = False
         if d is not None:
@@ -157,6 +169,18 @@ class ParCorrGPU(CIT_Base):
             self.param_hash = (
                 f"T{d.shape[0]}-{self._method}-{_STAT_VERSION}-{_data_fingerprint(d)}"
             )
+
+    def _reject_inf(self, X, Y, condition_set):
+        """``CIT_Base._reject_inf`` from the flags the data setter caches.
+
+        Like the cached covariance, this assumes ``.data`` is not edited in
+        place after assignment.
+        """
+        if self._inf_cols is None:
+            # .data is None: the cached covariance still holds the old data
+            raise ValueError("Data not set. Assign .data before testing.")
+        if self._any_inf and self._inf_cols[_test_columns(X, Y, condition_set)].any():
+            raise ValueError("ParCorrGPU: the tested columns contain infinite values")
 
     def _update_cov(self, d):
         """Cache the covariance matrix backing the precision path.
@@ -217,6 +241,9 @@ class ParCorrGPU(CIT_Base):
         _check_index(X, "X")
         _check_index(Y, "Y")
         _check_condition_set(condition_set)
+        # Before the cache: an entry persisted by an older build must not
+        # answer for an infinite input.
+        self._reject_inf(X, Y, condition_set)
 
         cache_key = self._get_array_hash(X, Y, condition_set)
         cache_key = f"{self.method}-{cache_key}"
@@ -284,12 +311,14 @@ class ParCorrGPU(CIT_Base):
         ~0.06 in rho between orderings of one test), so ordering like the
         cache key keeps cache-equivalent calls, scalar or batched, on one
         answer. Clipped because float32 rounding can land a near-collinear
-        correlation at 1 + 1.2e-7. Runs on CPU under MPS, which has no
-        ``lstsq``.
+        correlation at 1 + 1.2e-7. Runs on CPU off a CPU device: MPS has no
+        ``lstsq``, and CUDA's only driver (``gels``, QR without pivoting)
+        assumes a full-rank Z, which a declined test never has; CPU's default
+        ``gelsy`` pivots and copes with rank deficiency.
         """
         x, y = sorted((int(X), int(Y)))
         z = sorted(int(i) for i in condition_set)
-        if self.data_torch.device.type == "mps":
+        if self.data_torch.device.type != "cpu":
             cols = self.data_torch[:, [x, y] + z].cpu()
             val = self._compute_parcorr_on(cols, 0, 1, list(range(2, 2 + len(z))))
         else:
@@ -443,6 +472,19 @@ class ParCorrGPU(CIT_Base):
         list of tuples
             Each element is (p_value, statistic) in the same order as input.
         """
+        # One check over every column the batch reads, before the cache. The
+        # constructor's check is skipped when the data has NaN, and data
+        # assigned later is never checked.
+        if self._inf_cols is None:
+            raise ValueError("Data not set. Assign .data before testing.")
+        if self._any_inf:
+            cols = set()
+            for X, Y, cond in tests:
+                cols.update(_test_columns(X, Y, cond))
+            if cols and self._inf_cols[sorted(cols)].any():
+                raise ValueError(
+                    "ParCorrGPU: the tested columns contain infinite values"
+                )
         if not self.enable_caching:
             return self._batch_test_fast(tests)
 
@@ -520,7 +562,8 @@ class ParCorrGPU(CIT_Base):
         """
         k = sub_cov.shape[-1]
         diag = torch.diagonal(sub_cov, dim1=-2, dim2=-1)
-        ok = (diag > 0).all(dim=-1) & torch.isfinite(sub_cov).all(dim=(-1, -2))
+        # flatten(-2) rather than all(dim=(-1, -2)): tuple dims need torch >= 2.2.
+        ok = (diag > 0).all(dim=-1) & torch.isfinite(sub_cov).flatten(-2).all(dim=-1)
         if k == 2:
             return ok, torch.zeros_like(ok)
         eye = torch.eye(k, dtype=sub_cov.dtype, device=sub_cov.device)
@@ -546,8 +589,12 @@ class ParCorrGPU(CIT_Base):
         points return the same statistic for a declined test. A batched OLS
         would not: float32
         batched and single-matrix ``lstsq`` disagree by up to ~0.3 in rho on
-        these rank-deficient inputs. Declines are rare, so the per-test loop
-        costs nothing measurable. Inverting only identity-replaced matrices
+        these rank-deficient inputs. Declines are a small share even on
+        collinear data (a CDNOTS run with a duplicated column, T=1000, d=7:
+        45 of 1931 tests at num_lags=1, 75 of 4287 at 2, in about the time of
+        the same run without the duplicate), so the per-test loop stays
+        cheap; a well-conditioned chunk pays only the guard (about +17% on
+        50k tests at T=1000, d=30). Inverting only identity-replaced matrices
         keeps an exactly singular input from raising inside
         ``torch.linalg.inv``.
 
@@ -589,7 +636,10 @@ class ParCorrGPU(CIT_Base):
                 if bool(trust.all())
                 else torch.where(trust[:, None, None], sub_cov, eye)
             )
-            prec = torch.linalg.inv(safe)
+            # inv_ex reports a failed row instead of raising for the chunk: the
+            # guard approved the correlation-scaled matrix, and the raw one can
+            # still hit an exact zero pivot (e.g. a variance that underflows).
+            prec, info = torch.linalg.inv_ex(safe)
             denom = prec[:, 0, 0] * prec[:, 1, 1]
             rho = -prec[:, 0, 1] / torch.sqrt(denom)
             pre = trust
@@ -597,6 +647,7 @@ class ParCorrGPU(CIT_Base):
             # comparisons read False, so a poisoned row declines as well).
             trust = (
                 trust
+                & (info == 0)
                 & (prec[:, 0, 0] > 0)
                 & (prec[:, 1, 1] > 0)
                 & (denom < float("inf"))

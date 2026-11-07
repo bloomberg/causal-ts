@@ -4,6 +4,8 @@
 """Tests for CDNOTS causal discovery algorithm."""
 
 import numpy as np
+import pandas as pd
+import pytest
 
 from causalts.cdnots.phase3_utils import (
     build_pvalue_matrix,
@@ -215,3 +217,22 @@ def test_phase2_parent_lists_are_ranked_strongest_first_under_a_cap(monkeypatch)
             max_conds_py=cap,
         )
         assert seen[2][:2] == expected
+
+
+@pytest.mark.parametrize("num_lags", [1, 2])
+def test_cdnots_with_a_duplicated_column_completes(num_lags):
+    """Issue #74: the batched ParCorrGPU inverse raised LinAlgError on singular Z."""
+    rng = np.random.default_rng(0)
+    T, d = 1000, 6
+    x = np.zeros((T, d))
+    e = rng.standard_normal((T, d))
+    for t in range(1, T):
+        x[t] = 0.5 * x[t - 1] + e[t]
+        x[t, 1] += 0.6 * x[t, 0]
+        x[t, 2] += 0.6 * x[t, 1]
+        x[t, 3] += 0.5 * x[t - 1, 2]
+        x[t, 4] += 0.5 * x[t, 0]
+    df = pd.DataFrame(x, columns=list("abcdef"))
+    ci = ParCorrGPU(np.zeros((2, 2)), device=DEVICE)
+    res = run_cdnots(df.assign(g=df["a"]), ci, num_lags=num_lags)
+    assert res.cg_tig.shape == (8, 8, num_lags + 1)  # 7 variables + the C node

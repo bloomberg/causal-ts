@@ -88,6 +88,10 @@ class StratifiedCIT(CIT_Base):
         Minimum rows per stratum before falling back.
     """
 
+    @property
+    def rejects_inf(self):
+        return getattr(self.inner_cit, "rejects_inf", False)
+
     def __init__(
         self,
         data,
@@ -120,6 +124,19 @@ class StratifiedCIT(CIT_Base):
         self.n_tests += 1
         if condition_set is None:
             condition_set = []
+
+        # Follow the inner test: if it rejects an infinite value, check the
+        # whole query here, before the cache, since the inner test never sees
+        # the stratified columns nor rows dropped for a missing stratum. A test
+        # that accepts inf (gcmi, cmiknn, dfcit) behaves as it does unwrapped.
+        if self.rejects_inf:
+            # inner_cit.data is self._data here (set_data and _test_stratum keep
+            # it so), and its own check may be cheaper (ParCorrGPU reads flags
+            # cached when the data was assigned).
+            check = getattr(self.inner_cit, "_reject_inf", None)
+            if check is None:  # e.g. the CPU PartialCorr (a CondIndTest)
+                check = self._reject_inf
+            check(X, Y, condition_set)
 
         cache_key = self._get_array_hash(X, Y, condition_set)
         cache_key = f"strat-{cache_key}"
