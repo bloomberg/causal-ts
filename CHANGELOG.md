@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+* `dowhy_latent_confounders` example notebook: latent confounding from discovery to DoWhy
+  effect estimates, with LUCID correction and exported DoWhy artifacts.
 * `check_variance_dependence` (`causalts.utils.heteroskedasticity`): detects lagged
   variance-only parents, which mean-based tools (`raft`, `parcorr`, REAP) cannot see.
   It feeds the `inspect` recommendation; its docstring gives the method and simulation

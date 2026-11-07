@@ -166,6 +166,11 @@ Experiments in the settings of the GRACE paper ([arXiv:2606.23880](https://arxiv
   <span class="ct-gallery-title">Effect Estimation</span>
 </a>
 
+<a href="dowhy_latent_confounders.html" class="ct-gallery-item" data-tooltip="How latent confounding biases DoWhy effect estimates, why correcting the graph with LUCID does not remove that bias on its own, and how to export the graph and aligned data to native DoWhy.">
+  <img src="../_static/img/thumbnails/dowhy_latent_confounders_thumb.png" alt="Latent Confounding and DoWhy" />
+  <span class="ct-gallery-title">Latent Confounding and DoWhy</span>
+</a>
+
 <a href="probabilistic_queries.html" class="ct-gallery-item" data-tooltip="Interventional and observational queries on fitted SCMs — what-if analysis with soft/hard conditioning and distribution visualization.">
   <img src="../_static/img/thumbnails/probabilistic_queries_thumb.png" alt="Probabilistic Queries" />
   <span class="ct-gallery-title">Probabilistic Queries</span>
@@ -293,6 +298,7 @@ mixed_data
 :caption: Effects, Queries & Forecasting
 
 effect_estimation
+dowhy_latent_confounders
 probabilistic_queries
 forecasting
 ```
