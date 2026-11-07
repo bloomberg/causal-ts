@@ -81,7 +81,13 @@ def apply_H(K):
 
 
 def ukci_gpu_no_gamma(
-    x, y, approx="perm", nperms=200, width_x="empirical", width_y="empirical"
+    x,
+    y,
+    approx="perm",
+    nperms=200,
+    width_x="empirical",
+    width_y="empirical",
+    seed=None,
 ):
     """
     Perform an unconditional kernel-based independence test (UKCI) without gamma approximation.
@@ -93,6 +99,7 @@ def ukci_gpu_no_gamma(
         nperms (int, optional): Number of permutations for permutation testing. Defaults to 200.
         width_x (str or float, optional): Kernel bandwidth for X. Defaults to "empirical".
         width_y (str or float, optional): Kernel bandwidth for Y. Defaults to "empirical".
+        seed (int, optional): Seed for the permutations. None leaves them unseeded.
 
     Returns:
         tuple: P-value and test statistic (or additional parameters for non-permutation methods).
@@ -106,8 +113,9 @@ def ukci_gpu_no_gamma(
     stat = torch.einsum("ij,ji->", Kx, Ky)  # Trace(Kx @ Ky)
     stats = []
     if approx == "perm":
+        rng = np.random.default_rng(seed)
         for i in range(nperms):
-            perm = np.random.permutation(T)
+            perm = rng.permutation(T)
             Kx2 = Kx[perm][:, perm]
             stats.append(torch.einsum("ij,ji->", Kx2, Ky).item())  # Trace(Kxz @ Kyz)
         stats = np.array(stats)
@@ -131,7 +139,15 @@ def ukci_gpu_no_gamma(
 
 
 @torch.no_grad()
-def kci_uind(x, y, approx="perm", nperms=200, width_x="empirical", width_y="empirical"):
+def kci_uind(
+    x,
+    y,
+    approx="perm",
+    nperms=200,
+    width_x="empirical",
+    width_y="empirical",
+    seed=None,
+):
     """
     Perform an unconditional kernel-based independence test (KCI).
 
@@ -142,13 +158,20 @@ def kci_uind(x, y, approx="perm", nperms=200, width_x="empirical", width_y="empi
         nperms (int, optional): Number of permutations for permutation testing. Defaults to 200.
         width_x (str or float, optional): Kernel bandwidth for X. Defaults to "empirical".
         width_y (str or float, optional): Kernel bandwidth for Y. Defaults to "empirical".
+        seed (int, optional): Seed for the permutations. None leaves them unseeded.
 
     Returns:
         tuple: P-value and test statistic.
     """
     if approx == "perm":
         p_val, stat = ukci_gpu_no_gamma(
-            x, y, approx="perm", width_x=width_x, width_y=width_y
+            x,
+            y,
+            approx="perm",
+            nperms=nperms,
+            width_x=width_x,
+            width_y=width_y,
+            seed=seed,
         )
         return p_val, stat.cpu().item()
     else:
@@ -172,6 +195,7 @@ def kci_cind(
     width_z="median",
     thresh=1e-5,
     lamda=0.001,
+    seed=None,
 ):
     """
     Perform a kernel-based conditional independence test (KCI).
@@ -187,6 +211,8 @@ def kci_cind(
         width_z (str or float, optional): Kernel bandwidth for Z. Defaults to "median".
         thresh (float, optional): Threshold for eigenvalue filtering. Defaults to 1e-5.
         lamda (float, optional): Regularization parameter. Defaults to 0.001.
+        seed (int, optional): Seed for the permutations / bootstrap draws. None
+            leaves them unseeded.
 
     Returns:
         tuple: P-value and test statistic.
@@ -214,9 +240,10 @@ def kci_cind(
     stat = torch.einsum("ij,ji->", Kxz, Kyz)  # Trace(Kxz @ Kyz)
 
     if approx == "perm":
+        rng = np.random.default_rng(seed)
         stats = []
         for i in range(nperms):
-            perm = np.random.permutation(T)
+            perm = rng.permutation(T)
             Kxz2 = torch.matmul(torch.matmul(P1, Kx[perm][:, perm]), P1.T)
             stats.append(torch.einsum("ij,ji->", Kxz2, Kyz).item())  # Trace(Kxz @ Kyz)
         stats = np.array(stats)
@@ -256,8 +283,22 @@ def kci_cind(
     eig_uu = eig_uu[torch.argwhere(eig_uu > torch.max(eig_uu) * thresh).ravel()]
 
     if approx == "bootstrap":
+        # Drawn on the CPU generator (device generators differ by backend),
+        # then moved, so a seed gives the same draws everywhere.
+        gen = torch.Generator()
+        if seed is None:
+            gen.seed()
+        else:
+            gen.manual_seed(int(seed))
+
+        def _chi2(n):
+            draws = torch.randn(
+                (n, nperms), generator=gen, device="cpu", dtype=eig_uu.dtype
+            )
+            return draws.to(device) ** 2
+
         if len(eig_uu) * T < 1e6:
-            f_rand1 = torch.randn((len(eig_uu), nperms), device=device) ** 2
+            f_rand1 = _chi2(len(eig_uu))
             null_dstr = eig_uu @ f_rand1
         else:  # for Memory
             length = int(np.max([np.floor(1e6 // T), 100]))
@@ -265,7 +306,7 @@ def kci_cind(
             null_dstr = 0
             for i in range(max_iter):
                 sub_eig_uu = eig_uu[i * length : (i + 1) * length]
-                f_rand1 = torch.randn((len(sub_eig_uu), nperms), device=device) ** 2
+                f_rand1 = _chi2(len(sub_eig_uu))
                 null_dstr += sub_eig_uu @ f_rand1
         null_dstr = np.array(torch.tensor(null_dstr).cpu())
         p_val = np.array(null_dstr > stat.item()).mean()
@@ -300,6 +341,8 @@ class KCIGPU(CIT_Base):
     GPU-accelerated implementation of the Kernel-based Conditional Independence Test (KCI).
     """
 
+    rejects_inf = True  # an infinite tested value raises ValueError
+
     def __init__(self, data, device=None, **kwargs):
         """
         Initialize the KCIGPU class.
@@ -322,7 +365,8 @@ class KCIGPU(CIT_Base):
         self.kci_ci_kwargs = {
             k: v
             for k, v in kwargs.items()
-            if k in ["width_xz", "width_y", "width_z", "approx", "nperms"]
+            if k
+            in ["width_xz", "width_y", "width_z", "approx", "nperms", "lamda", "thresh"]
         }
         self.kci_ui_kwargs.setdefault("approx", kwargs.get("approx", "hbe"))
         self.kci_ci_kwargs.setdefault("approx", kwargs.get("approx", "hbe"))
@@ -339,10 +383,23 @@ class KCIGPU(CIT_Base):
         self.width_z = kwargs.get("width_z", "median")
         self.width_x = kwargs.get("width_x", "median")
         self.width_y = kwargs.get("width_y", "median")
+        self.lamda = kwargs.get("lamda", 0.001)
+        self.thresh = kwargs.get("thresh", 1e-5)
+        # The bandwidths each path really uses: kci_uind defaults to
+        # "empirical", kci_cind to "median".
+        ui = {"width_x": "empirical", "width_y": "empirical", **self.kci_ui_kwargs}
+        ci = {"width_xz": "median", "width_y": "median", "width_z": "median"}
+        ci.update(self.kci_ci_kwargs)
         self.param_hash = (
-            f"T{self._data.shape[0]}-{self.approx}-{self.nperms}-"
-            f"{self.width_xz}-{self.width_y}-{self.width_z}"
+            f"T{self._data.shape[0]}-{self.approx}-{self.nperms}"
+            f"-u{ui['width_x']}-{ui['width_y']}"
+            f"-c{ci['width_xz']}-{ci['width_y']}-{ci['width_z']}"
+            f"-lam{self.lamda}-th{self.thresh}-ms{self._min_samples}{self._oi_tag}"
         )
+        if self.approx in ("perm", "bootstrap"):
+            # Only these nulls draw random numbers; analytic p-values stay
+            # shared across seeds.
+            self.param_hash += f"-seed{self._base_seed}"
 
     def get_data(self):
         return self._data
@@ -368,6 +425,9 @@ class KCIGPU(CIT_Base):
         """
         self.n_tests += 1
         self.n_actual_tests += 1
+        # Before the cache: an entry persisted by an older build must not
+        # answer for an infinite input.
+        self._reject_inf(X, Y, condition_set)
 
         cache_key = self._get_array_hash(X, Y, condition_set)
         cache_key = f"{self.method}-{cache_key}"
@@ -390,13 +450,16 @@ class KCIGPU(CIT_Base):
                 return p, stat
             data_t = self.data_torch[torch.from_numpy(mask).to(self.device)]
 
+        X, Y, condition_set = self._canonical_query(X, Y, condition_set)
+        seed = self._test_seed(cache_key)
         p, stat = (
-            kci_uind(data_t[:, X], data_t[:, Y], **self.kci_ui_kwargs)
+            kci_uind(data_t[:, X], data_t[:, Y], seed=seed, **self.kci_ui_kwargs)
             if condition_set is None or len(condition_set) == 0
             else kci_cind(
                 data_t[:, X],
                 data_t[:, Y],
                 data_t[:, condition_set],
+                seed=seed,
                 **self.kci_ci_kwargs,
             )
         )

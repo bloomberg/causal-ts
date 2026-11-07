@@ -178,16 +178,28 @@ def _hbe_pvalue(stat, Ka, Kb):
     return 1 - gamma_distr.cdf(x_stat.cpu().item(), a=k.cpu().item(), scale=2)
 
 
-def _wild_bootstrap_pvalue(stat, K, L, n_samples=500, chunk_size=500):
+def _wild_bootstrap_pvalue(stat, K, L, n_samples=500, chunk_size=500, seed=None):
     n = K.shape[0]
     device = K.device
+    # Signs from a CPU generator, then moved: one seed, same draws everywhere.
+    gen = torch.Generator()
+    if seed is None:
+        gen.seed()
+    else:
+        gen.manual_seed(seed)
     pval_count = 0
     total = 0
 
     for start in range(0, n_samples, chunk_size):
         end = min(start + chunk_size, n_samples)
         batch = end - start
-        Q = 2 * torch.randint(0, 2, (batch, n), device=device).float() - 1
+        Q = (
+            2
+            * torch.randint(0, 2, (batch, n), generator=gen, device="cpu")
+            .to(device)
+            .float()
+            - 1
+        )
         QQ = Q.unsqueeze(2) * Q.unsqueeze(1)
         KQ = QQ * K.unsqueeze(0)
         boot_stats = torch.einsum("bij,ij->b", KQ, L) / (n**2)
@@ -197,20 +209,30 @@ def _wild_bootstrap_pvalue(stat, K, L, n_samples=500, chunk_size=500):
     return pval_count / total
 
 
-def _compute_pvalue(stat, Ka, Kb, pval_method, n_bootstrap=500):
+def _compute_pvalue(stat, Ka, Kb, pval_method, n_bootstrap=500, seed=None):
     if pval_method == "hbe":
         return _hbe_pvalue(stat, Ka, Kb)
     elif pval_method == "gamma":
         return _gamma_pvalue(stat, Ka, Kb)
     else:
-        return _wild_bootstrap_pvalue(stat, Ka, Kb, n_samples=n_bootstrap)
+        return _wild_bootstrap_pvalue(stat, Ka, Kb, n_samples=n_bootstrap, seed=seed)
 
 
 @torch.no_grad()
 def splitkci_uind(
-    x, y, bandwidth="median", pval_method="gamma", n_bootstrap=500, device=None
+    x,
+    y,
+    bandwidth="median",
+    pval_method="gamma",
+    n_bootstrap=500,
+    device=None,
+    boot_seed=None,
 ):
-    """Unconditional independence test using HSIC."""
+    """Unconditional independence test using HSIC.
+
+    ``boot_seed`` seeds the wild-bootstrap signs (pval_method other than
+    "hbe" / "gamma"); None leaves them unseeded.
+    """
     x = normalize_gpu(x.reshape(-1, 1) if x.dim() == 1 else x)
     y = normalize_gpu(y.reshape(-1, 1) if y.dim() == 1 else y)
 
@@ -221,7 +243,7 @@ def splitkci_uind(
     Ky = _center_kernel(_gaussian_kernel(y, sigma2_y))
     stat = _compute_hsic(Kx, Ky)
 
-    p_val = _compute_pvalue(stat, Kx, Ky, pval_method, n_bootstrap)
+    p_val = _compute_pvalue(stat, Kx, Ky, pval_method, n_bootstrap, seed=boot_seed)
     return p_val, stat.cpu().item()
 
 
@@ -267,12 +289,14 @@ def splitkci_cind(
     n_bootstrap=500,
     seed=None,
     use_all_data=False,
+    boot_seed=None,
 ):
     """Conditional independence test with train-test splitting.
 
     When use_all_data=True, fits two KRR models on each half and tests on
     all data using cross-predictions (no double-dipping). More powerful
-    but ~4x slower due to full n×n kernel matrices.
+    but ~4x slower due to full n×n kernel matrices. ``seed`` seeds the split,
+    ``boot_seed`` the wild-bootstrap signs (None leaves either unseeded).
     """
     device = x.device
     T = x.shape[0]
@@ -290,7 +314,7 @@ def splitkci_cind(
     gen = torch.Generator(device="cpu")
     if seed is not None:
         gen.manual_seed(seed)
-    perm = torch.randperm(T, generator=gen)
+    perm = torch.randperm(T, generator=gen, device="cpu")
     n_half = T // 2
     idx_1 = perm[:n_half]
     idx_2 = perm[n_half : 2 * n_half]
@@ -397,7 +421,9 @@ def splitkci_cind(
     Kb_centered = _center_kernel(Kb)
     stat = _compute_hsic(Ka_centered, Kb_centered)
 
-    p_val = _compute_pvalue(stat, Ka_centered, Kb_centered, pval_method, n_bootstrap)
+    p_val = _compute_pvalue(
+        stat, Ka_centered, Kb_centered, pval_method, n_bootstrap, seed=boot_seed
+    )
     return p_val, stat.cpu().item()
 
 
@@ -407,6 +433,8 @@ class SplitKCIGPU(CIT_Base):
     Uses train-test data splitting to control bias from kernel ridge
     regression, following Pogodin et al. (2024).
     """
+
+    rejects_inf = True  # an infinite tested value raises ValueError
 
     def __init__(
         self,
@@ -436,7 +464,7 @@ class SplitKCIGPU(CIT_Base):
         self.param_hash = (
             f"T{data.shape[0]}-split{split_ratio}-lam{ridge_lambda}"
             f"-{pval_method}-{n_bootstrap}-bw_{bandwidth}"
-            f"-alldata{use_all_data}"
+            f"-alldata{use_all_data}-seed{seed}-ms{kwargs.get('min_samples', 30)}"
         )
         super().__init__(data, method="splitkci", seed=seed, **kwargs)
         self.n_actual_tests = 0
@@ -457,6 +485,9 @@ class SplitKCIGPU(CIT_Base):
     def __call__(self, X, Y, condition_set=None):
         self.n_tests += 1
         self.n_actual_tests += 1
+        # Before the cache: an entry persisted by an older build must not
+        # answer for an infinite input.
+        self._reject_inf(X, Y, condition_set)
 
         cache_key = self._get_array_hash(X, Y, condition_set)
         cache_key = f"{self.method}-{cache_key}"
@@ -487,6 +518,7 @@ class SplitKCIGPU(CIT_Base):
                 pval_method=self.pval_method,
                 n_bootstrap=self.n_bootstrap,
                 device=self.device,
+                boot_seed=self._test_seed(cache_key),
             )
         else:
             p, stat = splitkci_cind(
@@ -500,6 +532,7 @@ class SplitKCIGPU(CIT_Base):
                 n_bootstrap=self.n_bootstrap,
                 seed=self._seed,
                 use_all_data=self.use_all_data,
+                boot_seed=self._test_seed(cache_key),
             )
 
         self.pvalue_cache[combined_hash] = (p, stat)

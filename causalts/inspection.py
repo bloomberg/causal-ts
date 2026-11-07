@@ -636,6 +636,19 @@ def discover_df(
     """
     df = numeric_frame(df)
     test_device = device or "cpu"
+    # dfcit sizes its block-shuffle null from alpha (so p < alpha is reachable).
+    # Mirror how each engine resolves its thresholds below (unset: engine default).
+    if algorithm == "cedar":
+        # Cedar's only unconditional tests are Cond1, judged at alpha_cond1.
+        ci_alphas = [kwargs.get("alpha_cond1", alpha if alpha is not None else 0.01)]
+    elif algorithm == "cdnots+":
+        ci_alphas = [alpha if alpha is not None else 0.01, kwargs.get("alpha_mci")]
+    elif algorithm == "grace-ss":
+        ci_alphas = [kwargs.get("ci_alpha", alpha)]
+    else:
+        ci_alphas = [alpha]
+    ci_alphas = [a for a in ci_alphas if a is not None]
+    ci_kw = {"alpha": min(ci_alphas)} if ci_test == "dfcit" and ci_alphas else {}
     if algorithm in ("cdnots", "cdnots+"):
         from .cdnots.phase3_utils import run_cdnots, run_cdnots_plus
         from .ci_tests import create_ci_test
@@ -646,7 +659,7 @@ def discover_df(
         return fn(
             df=df,
             indep_test=create_ci_test(
-                ci_test or "parcorr-gpu", df.values, device=test_device
+                ci_test or "parcorr-gpu", df.values, device=test_device, **ci_kw
             ),
             num_lags=max_lag,
             include_C=include_C,
@@ -666,7 +679,7 @@ def discover_df(
         return run_cedar(
             df=df,
             ci_test=create_ci_test(
-                ci_test or "parcorr-gpu", df.values, device=test_device
+                ci_test or "parcorr-gpu", df.values, device=test_device, **ci_kw
             ),
             max_lag=max_lag,
             include_C=include_C,
@@ -700,7 +713,7 @@ def discover_df(
                 kwargs["use_ci_skeleton"] = True
             name = ci_test
             kwargs["ci_test_class"] = lambda data, **_: create_ci_test(
-                name, data, device=test_device
+                name, data, device=test_device, **ci_kw
             )
         if algorithm in ("grace", "grace-ss") and device is not None:
             kwargs.setdefault("device", device)

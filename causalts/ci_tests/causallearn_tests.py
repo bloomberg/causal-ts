@@ -16,6 +16,8 @@ from .cit_test import CIT_Base
 class CausalLearnFisherZ(CIT_Base):
     """Fisher-Z CI test from causal-learn (Gaussian, analytic p-value)."""
 
+    rejects_inf = True  # an infinite tested value raises ValueError
+
     def __init__(self, data=None, **kwargs):
         kwargs.pop("device", None)
         super().__init__(data=data, method="fisherz", **kwargs)
@@ -36,6 +38,9 @@ class CausalLearnFisherZ(CIT_Base):
         self.n_tests += 1
         if condition_set is None:
             condition_set = []
+        # Before the cache, and as a ValueError: the constructor's
+        # assert_input_data_is_valid is an assert, which python -O drops.
+        self._reject_inf(X, Y, condition_set)
 
         cache_key = self._get_array_hash(X, Y, condition_set)
         param_hash = "fisherz"
@@ -48,7 +53,7 @@ class CausalLearnFisherZ(CIT_Base):
 
         x = self.data[:, X]
         y = self.data[:, Y]
-        if condition_set:
+        if len(condition_set) > 0:
             from numpy.linalg import lstsq
 
             Z = self.data[:, condition_set]

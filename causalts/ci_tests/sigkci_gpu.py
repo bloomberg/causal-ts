@@ -110,6 +110,15 @@ class SigKCIGPU(LinSigCIGPU):
             _warn_lamda(state.get("lamda"))
             self.ridge = 1e-3
             self.__dict__.pop("lamda", None)
-            self.param_hash = f"{self.param_hash}-rr{self.ridge}"
+            # Also the key fields added since 0.27.0 (min_samples; the seed of a
+            # permutation null, unknown here, so the draws stay unseeded).
+            self.param_hash = (
+                f"{self.param_hash}-rr{self.ridge}"
+                f"-ms{state.get('_min_samples', 30)}"
+            )
+            if state.get("approx") == "perm":
+                self.param_hash += "-seedNone"
+            self.__dict__.setdefault("_base_seed", None)
+            self.__dict__.setdefault("_order_independent", False)
             self.pvalue_cache = {}
             self.pvalue_local = {}

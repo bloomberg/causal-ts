@@ -171,6 +171,17 @@ Distribution-free CI using empirical CDFs and permutation p-values with early st
 - Assumes continuous columns: with discrete columns, CDNOTS wraps it in `StratifiedCIT` (or use `cmiknn-mixed-gpu`)
 - Permutation-based — slower than analytic tests
 - False positive rate can rise under near-collinear conditioning at large T
+- Nadaraya-Watson smoothing over Z: calibrated for small conditioning sets (iid
+  Gaussian, T=200: FPR 0.06 at |Z| = 1-2, 0.09 at |Z| = 3), but it over-rejects as
+  |Z| grows at small T (0.28 at |Z| = 5; 0.67 when X and Y both depend on all five).
+  A wide numeric `bandwidth` over-smooths and fails to remove Z (`bandwidth=1.0`: 0.94 at
+  |Z| = 3 when X and Y depend on Z); `leave_one_out=False` restores the self-included
+  estimator, which is worse still
+- A numeric `bandwidth` far below Z's scale leaves rows with no kernel neighbour;
+  they fall back to the marginal CDF and ignore Z, so confounded pairs get rejected.
+  `DFCITGPU` warns once when more than 10% of a test's rows do. The warning does not
+  cover rows left with one or two effective neighbours, so it stays silent for the
+  automatic rule at large |Z|, where the test still over-rejects
 
 ### `rcot`
 Randomized Conditional Correlation via Random Fourier Features.
@@ -211,6 +222,16 @@ the test never solved the RBF signature-kernel PDE the name implied.
 
 **Limitations:**
 - Not designed for standard tabular time-series observations — underperforms vs kernel tests on VAR data
+- Liberal: its paths (overlapping `time_delay_dim`-row windows, or CDNOTS's row paths,
+  which also slide one row at a time) overlap, but the gamma/HBE null treats them as
+  independent. Measured without lag structure on distinct iid Gaussian columns (T=200):
+  14% rejections at alpha 0.05 with no conditioning set, 10% with one variable. A
+  lagged self-test with no lag structure registered (the tigramite adapter does not
+  register one; CDNOTS does) bypasses the same-variable fallback: on white noise
+  (T=400) `X(t-2)` vs `X(t)` rejected in 20 of 20 tests with `time_delay_dim=3`.
+  `time_delay_dim=1` gave 7% and 3% on those iid rows, but it reduces LinSig to a plain
+  RBF kernel test whose null still assumes independent rows, so it does not fix
+  autocorrelated series
 - Computational cost scales with path length
 - Cannot adjust for a conditioning variable with constant increments, such as a linear
   trend or CDNOTS's time-index node C: the linear signature kernel does not see it, so a
@@ -491,6 +512,26 @@ ci_test2 = SplitKCIGPU(df.values, device="cpu", cache_dir="/tmp/myrun_splitkci")
 ```
 
 The cache key is derived from the data hash and test parameters. Caches are safe to share across runs on the same dataset. Delete the directory to invalidate.
+
+### Order independence (`order_independent=True`)
+
+The in-memory p-value cache is always on, and it treats `(X, Y, Z)` and `(Y, X, Z)`
+(and any order within Z) as one test. For a test whose computation is not symmetric
+in X and Y, the orientation queried first therefore decides the value for both; for
+example the conditional `kci` and `linsig` statistics differ between the two
+orientations. `cmiknn-gpu` (and `cmiknn-mixed-gpu`) also draw their permutation null
+from one generator per instance, so a p-value depends on the tests run before it on
+that instance. This is the default, kept so that p-values match earlier releases.
+
+Pass `order_independent=True` to `KCIGPU`, `LinSigCIGPU`, `GCMIGPU`, `CMIknnGPU` or
+`CMIknnMixedGPU` to get one answer per test: each query is computed in one canonical
+order, and `CMIknnGPU` draws each test's randomness from `seed` and the test itself.
+Other tests ignore the flag. It is part of the cache key, so entries computed with and
+without it are kept apart.
+
+```python
+ci_test = KCIGPU(df.values, approx="hbe", order_independent=True)
+```
 
 ## Custom CI Tests
 

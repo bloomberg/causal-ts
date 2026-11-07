@@ -709,7 +709,7 @@ for name, test in tests.items():
 # <dt><strong>residualize</strong> : <em>bool, default=False</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">OLS-residualize X and Y against Z, then run unconditional test on residuals. Effective only for purely linear Z effects; destroys nonlinear signal so disabled by default.</dd>
 # <dt><strong>sig_blocklength</strong> : <em>int or 'auto', default='auto'</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Block length for unconditional (Z-empty) permutation test. <code>'auto'</code> computes <code>max(3, int(T**0.5))</code>, which gives ≈17 at T=300. Block shuffle preserves short-range autocorrelation and avoids 8× type-I error inflation on AR(1) data compared to random permutation. Conditional tests (non-empty Z) use OLS residuals and always use random permutation.</dd>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Block length for unconditional (Z-empty) permutation test. <code>'auto'</code> uses about <code>sqrt(n)</code> for the n complete rows a test uses (≈17 at n=300), shortened below 25 rows so at least 5 blocks remain (fewer give too coarse a null to reach p &lt; 0.01). An explicit length that leaves fewer than 5 blocks is shortened the same way for that test, with a warning. Block shuffle preserves short-range autocorrelation and avoids 8× type-I error inflation on AR(1) data compared to random permutation. Conditional tests (non-empty Z) use OLS residuals and always use random permutation.</dd>
 # </dl>
 # </div>
 #

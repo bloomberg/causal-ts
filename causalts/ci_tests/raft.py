@@ -351,6 +351,8 @@ class RAFTCI(CIT_Base):
     True
     """
 
+    rejects_inf = True  # an infinite tested value raises ValueError
+
     inferential_target = "conditional_mean"
 
     def __init__(
@@ -1120,6 +1122,9 @@ class RAFTCI(CIT_Base):
             return sorted({int(c) for c in arr})
 
         xi, yi, zi = canon(X), canon(Y), canon(condition_set)
+        # Before the cache, as in the other tests: an entry persisted by an
+        # older build must not answer for an infinite input.
+        self._reject_inf(xi, yi, zi)
         cache_key = self._get_array_hash(xi, yi, zi)
         param_hash = self._param_hash()
         cached = self.pvalue_cache.get((cache_key, param_hash))

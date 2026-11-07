@@ -424,6 +424,16 @@ def _embed_as_paths(
     return paths
 
 
+def _perm_generator(seed):
+    """CPU generator for permutations (device generators differ by backend)."""
+    gen = torch.Generator()
+    if seed is None:
+        gen.seed()
+    else:
+        gen.manual_seed(seed)
+    return gen
+
+
 @torch.no_grad()
 def linsig_uind(
     x,
@@ -434,8 +444,13 @@ def linsig_uind(
     time_delay_dim=3,
     approx="gamma",
     nperms=200,
+    seed=None,
 ):
-    """Unconditional independence test using the linear signature kernel."""
+    """Unconditional independence test using the linear signature kernel.
+
+    ``seed`` seeds the permutations (``approx="perm"``); None leaves them
+    unseeded.
+    """
     device = x.device
     T = x.shape[0]
 
@@ -460,9 +475,10 @@ def linsig_uind(
     stat = torch.einsum("ij,ji->", Kx, Ky)
 
     if approx == "perm":
+        gen = _perm_generator(seed)
         stats = []
         for _ in range(nperms):
-            perm = torch.randperm(T, device=device)
+            perm = torch.randperm(T, generator=gen, device="cpu").to(device)
             Kx2 = Kx[perm][:, perm]
             stats.append(torch.einsum("ij,ji->", Kx2, Ky).item())
         p_val = (np.array(stats) >= stat.item()).mean()
@@ -499,10 +515,13 @@ def linsig_cind(
     approx="gamma",
     nperms=200,
     ridge=1e-3,
+    seed=None,
 ):
     """Conditional independence test using the linear signature kernel.
 
     Uses the classic KCI framework with linear-signature-kernel matrices.
+    ``seed`` seeds the permutations (``approx="perm"``); None leaves them
+    unseeded.
     """
     device = x.device
     T = x.shape[0]
@@ -542,9 +561,10 @@ def linsig_cind(
     stat = torch.einsum("ij,ji->", Kxz, Kyz)
 
     if approx == "perm":
+        gen = _perm_generator(seed)
         stats = []
         for _ in range(nperms):
-            perm = torch.randperm(T, device=device)
+            perm = torch.randperm(T, generator=gen, device="cpu").to(device)
             Kxz2 = P1 @ Kx[perm][:, perm] @ P1.T
             stats.append(torch.einsum("ij,ji->", Kxz2, Kyz).item())
         p_val = (np.array(stats) >= stat.item()).mean()
@@ -564,8 +584,23 @@ class LinSigCIGPU(CIT_Base):
     When called from CDNOTS (which provides lag structure metadata via
     set_lag_structure), builds proper temporal paths from consecutive
     rows — making the signature kernel genuinely different from KCI.
-    Without lag structure, falls back to RBF kernel (time_delay_dim=1
-    equivalent) for backward compatibility.
+    Without lag structure (a direct call, the tigramite adapter, Cedar) each
+    column is embedded as overlapping windows of ``time_delay_dim`` consecutive
+    rows. With lag structure the row paths also slide one row at a time. Either
+    way adjacent paths overlap, while the gamma/HBE null treats them as
+    independent, so the null is liberal: on iid Gaussian data without lag
+    structure (T=200, 100 repetitions) the default ``time_delay_dim=3``
+    rejected at alpha 0.05 in 14% of tests with no conditioning set and 10%
+    with one conditioning variable, testing distinct columns (the CDNOTS
+    row-path case was not measured). A lagged self-test with no lag structure
+    registered (``set_lag_structure``, which CDNOTS calls and the tigramite
+    adapter does not) bypasses the same-variable fallback and can be far worse:
+    on white noise (T=400, 20 repetitions, ``time_delay_dim=3``) ``X(t-2)``
+    against ``X(t)`` rejected in 20 of 20 tests, against 1, 2 and 4 of 20 at
+    lags 1, 3 and 4.
+    ``time_delay_dim=1`` gave 7% and 3% on those iid rows, but it is no longer a
+    signature test (one-point paths, a plain RBF kernel) and the null still
+    assumes independent rows, so it does not help on autocorrelated series.
 
     This is NOT the published SigKCI method of Manten et al. (2024): it uses a
     linear (not RBF) static kernel and a KCI projection (not the authors'
@@ -585,6 +620,11 @@ class LinSigCIGPU(CIT_Base):
     above ``10 * sqrt(T) * eps * max|Gz|`` (see :func:`_centered_spectrum`), is
     likewise not residualized.
     """
+
+    #: set_lag_structure puts the layout in param_hash, so cached results stay valid.
+    _cache_keyed_on_layout = True
+
+    rejects_inf = True  # an infinite tested value raises ValueError
 
     def __init__(
         self,
@@ -619,8 +659,13 @@ class LinSigCIGPU(CIT_Base):
         self.param_hash = (
             f"T{data.shape[0]}-sig{sigma}-do{dyadic_order}"
             f"-{path_transform}-td{time_delay_dim}-{approx}-{nperms}-n{normalize}"
-            f"-rr{ridge}"
+            f"-rr{ridge}-ms{kwargs.get('min_samples', 30)}"
+            f"{'-oi' if kwargs.get('order_independent', False) else ''}"
         )
+        if approx == "perm":
+            # Only the permutation null draws random numbers; analytic
+            # p-values stay shared across seeds.
+            self.param_hash += f"-seed{seed}"
         self._has_lag_structure = False
         self._n_vars = None
         self._lags = None
@@ -654,6 +699,10 @@ class LinSigCIGPU(CIT_Base):
         self._n_vars = n_vars
         self._lags = lags
         self._has_lag_structure = True
+        # Results depend on the layout, and re-embedding keeps the leading columns
+        # byte-identical: key the in-memory and disk caches on it.
+        base = self.__dict__.setdefault("_layout_free_hash", self.param_hash)
+        self.param_hash = f"{base}-lay{n_vars}x{'.'.join(map(str, lags))}"
 
     def _col_to_var(self, col):
         """Map lag-embedded column index to original variable index."""
@@ -731,6 +780,9 @@ class LinSigCIGPU(CIT_Base):
     def __call__(self, X, Y, condition_set=None):
         self.n_tests += 1
         self.n_actual_tests += 1
+        # Before the cache: an entry persisted by an older build must not
+        # answer for an infinite input.
+        self._reject_inf(X, Y, condition_set)
 
         cache_key = self._get_array_hash(X, Y, condition_set)
         cache_key = f"{self.method}-{cache_key}"
@@ -744,6 +796,7 @@ class LinSigCIGPU(CIT_Base):
                 self.n_actual_tests -= 1
             return p, stat
 
+        X, Y, condition_set = self._canonical_query(X, Y, condition_set)
         data_t = self.data_torch
         rows = slice(None)
         if self._has_nan:
@@ -809,6 +862,7 @@ class LinSigCIGPU(CIT_Base):
                     time_delay_dim=self.time_delay_dim,
                     approx=self.approx,
                     nperms=self.nperms,
+                    seed=self._test_seed(cache_key),
                 )
             else:
                 z = data_t[:, condition_set]
@@ -823,6 +877,7 @@ class LinSigCIGPU(CIT_Base):
                     approx=self.approx,
                     nperms=self.nperms,
                     ridge=self.ridge,
+                    seed=self._test_seed(cache_key),
                 )
 
         p, stat = result

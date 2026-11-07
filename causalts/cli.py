@@ -8,6 +8,7 @@ matplotlib.use("Agg")
 import json  # noqa: E402
 import os  # noqa: E402
 import time as _time  # noqa: E402
+import warnings  # noqa: E402
 from datetime import datetime  # noqa: E402
 
 import click  # noqa: E402
@@ -146,10 +147,41 @@ LAG_PVALUE_CHOICES = ["t_test", "circular_shift"]
 DENSITY_CHOICES = ["sparse", "dense"]
 
 
-def _make_ci_test(name, data, device):
-    # create_ci_test drops device for CPU-only tests and fills discrete_cols
-    # for cmiknn-mixed-gpu.
-    return create_ci_test(name, data, device=device)
+def _make_ci_test(name, data, device, seed=None, alpha=None):
+    """Build a CI test, passing ``device`` and the global ``-s`` seed when given.
+
+    ``dfcit`` also gets the run's ``alpha``: it sizes its block-shuffle null so
+    that p-values below it are reachable.
+
+    A test whose constructor does not take one of them (CPU-only tests take no
+    device; some tests have no seed or fix it themselves) is built without it.
+    """
+    kwargs = {"device": device}
+    if seed is not None:
+        kwargs["seed"] = seed
+    if name == "dfcit" and alpha is not None:
+        kwargs["alpha"] = alpha
+    while True:
+        try:
+            return create_ci_test(name, data, **kwargs)
+        except TypeError as e:
+            # Not taken at all, or already fixed by the class (CPU ParCorr's seed).
+            bad = [
+                k
+                for k in kwargs
+                if f"unexpected keyword argument '{k}'" in str(e)
+                or f"multiple values for keyword argument '{k}'" in str(e)
+            ]
+            if not bad:
+                raise
+            if "seed" in bad:
+                warnings.warn(
+                    f"CI test '{name}' does not take a seed; -s {seed} is not "
+                    "applied to it.",
+                    stacklevel=2,
+                )
+            for k in bad:
+                kwargs.pop(k)
 
 
 def _make_output_dir(base, prefix):
@@ -638,6 +670,9 @@ def discover(
     if alpha is None:
         # Each engine's own default: CDNOTS+ runs at 0.01, like run_cdnots_plus.
         alpha = 0.01 if algorithm == "cdnots+" else 0.05
+    # dfcit sizes its shuffle null for the threshold its unconditional tests
+    # face; in Cedar those are Cond1 only (Cond2 accepts on p >= alpha_cond2).
+    ci_alpha = alpha_cond1 if algorithm == "cedar" else alpha
     if do_validate and algorithm in ("grace", "grace-ss", "reap"):
         raise click.BadParameter(
             "--validate is not supported for GRACE or REAP (re-running the "
@@ -782,10 +817,18 @@ def discover(
                 param_hint="--ci-test",
             )
         # Discrete columns are detected from the real data.
-        ci = _make_ci_test(ci_test, df.to_numpy(dtype=float), device)
+        ci = _make_ci_test(
+            ci_test,
+            df.to_numpy(dtype=float),
+            device,
+            seed=ctx.obj["seed"],
+            alpha=ci_alpha,
+        )
     else:
         placeholder = np.zeros((2, 2))
-        ci = _make_ci_test(ci_test, placeholder, device)
+        ci = _make_ci_test(
+            ci_test, placeholder, device, seed=ctx.obj["seed"], alpha=ci_alpha
+        )
 
     import json as _json
 
@@ -820,7 +863,7 @@ def discover(
             summary["ci_test"] = "auto (parcorr-gpu on CUDA, else parcorr)"
         else:
             grace_ci_kw["ci_test_class"] = lambda data, **_: _make_ci_test(
-                ci_test, data, device
+                ci_test, data, device, seed=ctx.obj["seed"], alpha=ci_alpha
             )
 
     if impute is not None and algorithm not in (
@@ -1185,7 +1228,9 @@ def discover(
             def _disc(sub):
                 # Fresh CI test per window; mirror the main run's exact config
                 # by closing over this command's parameters.
-                _ci = _make_ci_test(ci_test, sub.values, device)
+                _ci = _make_ci_test(
+                    ci_test, sub.values, device, seed=ctx.obj["seed"], alpha=ci_alpha
+                )
                 if algorithm in ("cdnots", "cdnots+"):
                     from .cdnots.phase3_utils import run_cdnots, run_cdnots_plus
 

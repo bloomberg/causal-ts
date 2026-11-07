@@ -815,6 +815,11 @@ class ResidualScoreCIT(CIT_Base):
         and is reproducible; changing ``seed`` does not change them.
     """
 
+    #: _cache_hash includes the layout-derived gap, so cached results stay valid.
+    _cache_keyed_on_layout = True
+
+    rejects_inf = True  # an infinite tested value raises ValueError
+
     #: What the test's null hypothesis actually is. Surfaced so callers can
     #: tell a full-CI test from a conditional-mean one without reading source.
     inferential_target = "residual_moment"
@@ -949,6 +954,9 @@ class ResidualScoreCIT(CIT_Base):
             condition_set = []
         # Same order the cache key uses, so one cache entry has one answer.
         condition_set = sorted(condition_set)
+        # Before the cache: an entry persisted by an older build must not
+        # answer for an infinite input.
+        self._reject_inf(X, Y, condition_set)
 
         cache_key = self._get_array_hash(X, Y, condition_set)
         param_hash = self._param_hash()

@@ -174,6 +174,9 @@ class PCM(ResidualScoreCIT):
             condition_set = []
         # Same order the cache key uses, so one cache entry has one answer.
         condition_set = sorted(condition_set)
+        # Before the cache: an entry persisted by an older build must not
+        # answer for an infinite input.
+        self._reject_inf(X, Y, condition_set)
 
         # The base hash is symmetric in X and Y, but PCM's statistic is not:
         # it projects E[Y | X, Z]. Tag the key with the X side so the two

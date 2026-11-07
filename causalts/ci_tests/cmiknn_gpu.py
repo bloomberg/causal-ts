@@ -85,10 +85,24 @@ class CMIknnGPU(CIT_Base):
             condition_set = []
 
         cache_key = self._get_array_hash(X, Y, condition_set)
-        param_hash = f"cmiknn_gpu-k{self.k}"
+        param_hash = (
+            f"cmiknn_gpu-k{self.k}-sn{self.shuffle_neighbors}-ss{self.sig_samples}"
+            f"-{self.transform}-es{self.early_stop}-q{self.target_quantile}"
+            f"-bl{self.sig_blocklength}-seed{self._base_seed}-ms{self._min_samples}"
+            f"{self._oi_tag}"
+        )
         cached = self.pvalue_cache.get((cache_key, param_hash))
         if cached is not None:
             return cached[0], cached[1]
+
+        # order_independent=True: one cache key, one answer. Run in the key's
+        # canonical order, with jitter, neighbour shuffles and block orders drawn
+        # for this test from seed + test (the helpers, and subclasses' overrides,
+        # read random_state). By default they draw from the instance generator,
+        # as in earlier releases.
+        if self._order_independent:
+            X, Y, condition_set = self._canonical_query(X, Y, condition_set)
+            self.random_state = np.random.default_rng(self._test_seed(cache_key))
 
         data = self.data
         if self._has_nan:
