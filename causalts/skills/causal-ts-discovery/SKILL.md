@@ -61,7 +61,8 @@ warnings}`. Read it — do **not** re-derive these facts yourself.
     (§5). Read the negatives narrowly: `false` only rules out factor structure this
     test can see — a latent cause touching just two or three variables produces no
     dominant eigenvalue and stays invisible — and `null` means the check could not run
-    (missing values, `d < 2`, too few rows). **Never report either as "no
+    (missing values, `d < 3`, or too few rows for the threshold to be
+    reachable -- common for d = 3-4 unless the series are long). **Never report either as "no
     confounding".**
 - **`recommendation`** — `{algorithm, ci_test, refine, refine_params, include_C,
   c_preset, max_lag, params, rationale}`. `algorithm` is always `cdnots`; `refine`

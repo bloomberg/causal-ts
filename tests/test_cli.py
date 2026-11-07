@@ -120,6 +120,41 @@ def test_discover_cdnots(tmp_path):
     assert result.exit_code == 0, result.output
 
 
+def test_discover_cedar_json_pvalues_are_valid_json(tmp_path):
+    """Untested Cedar self-loops emit pvalue null, not 1.0 (or bare NaN)."""
+    import json
+
+    rng = np.random.default_rng(0)
+    x = np.zeros((300, 3))
+    for t in range(1, 300):
+        x[t] = 0.6 * x[t - 1] + rng.standard_normal(3)
+        x[t, 1] += 0.8 * x[t - 1, 0]
+    csv_path = tmp_path / "data.csv"
+    pd.DataFrame(x, columns=["A", "B", "D"]).to_csv(csv_path, index=False)
+    res = CliRunner().invoke(
+        main,
+        [
+            "-o",
+            str(tmp_path),
+            "discover",
+            str(csv_path),
+            "--algorithm",
+            "cedar",
+            "--ci-test",
+            "parcorr-gpu",
+            "--max-lag",
+            "1",
+            "--no-c",
+            "--pvalues",
+            "--json",
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    summary = json.loads(res.output[res.output.index("{") :])
+    loops = [e for e in summary["edges"] if e["source"] == e["target"]]
+    assert loops and all(e["pvalue"] is None for e in loops)
+
+
 def test_evaluate(tmp_path):
     g = np.zeros((3, 3, 2), dtype=int)
     g[0, 1, 1] = 1

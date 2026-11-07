@@ -151,7 +151,7 @@ a supplied candidate graph too.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--impute` | — | `pairwise_complete`, `var_em`, or `causal_iterative` |
-| `--impute-kwargs JSON` | — | Extra imputer kwargs, e.g. `'{"p": 2, "n_iter": 5}'` |
+| `--impute-kwargs JSON` | — | Extra imputer kwargs, e.g. `'{"p": 2, "max_iter": 5}'` for `var_em`; `causal_iterative` takes e.g. `'{"n_iter": 3}'` |
 
 Not every strategy works with every algorithm:
 

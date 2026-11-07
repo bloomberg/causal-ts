@@ -176,6 +176,54 @@ def test_old_sypi_still_works(small_df, tmp_path):
 # to silently fall back to Pearson. The tests below would have caught that.
 
 
+def test_max_prune_path_is_deprecated(small_df, ci_test):
+    """max_prune_path was stored but never read."""
+    import warnings
+
+    with pytest.warns(DeprecationWarning, match="max_prune_path") as rec:
+        Cedar(df=small_df, ci_test=ci_test, max_lag=1, max_prune_path=2)
+    hits = [w for w in rec if "max_prune_path" in str(w.message)]
+    assert len(hits) == 1 and hits[0].filename == __file__  # points at the caller
+    with pytest.warns(DeprecationWarning, match="max_prune_path") as rec:
+        run_cedar(small_df, ci_test, max_lag=1, n_permutations=20, max_prune_path=2)
+    hits = [w for w in rec if "max_prune_path" in str(w.message)]
+    assert len(hits) == 1 and hits[0].filename == __file__
+    from causalts.algorithms import run_algorithm
+
+    with pytest.warns(DeprecationWarning, match="max_prune_path") as rec:
+        run_algorithm(
+            "cedar", small_df, ci_test, max_lag=1, n_permutations=20, max_prune_path=4
+        )
+    hits = [w for w in rec if "max_prune_path" in str(w.message)]
+    assert len(hits) == 1 and hits[0].filename == __file__
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "error", message="max_prune_path", category=DeprecationWarning
+        )
+        Cedar(df=small_df, ci_test=ci_test, max_lag=1)
+        run_cedar(small_df, ci_test, max_lag=1, n_permutations=20)
+
+
+def test_impute_kwargs_docstring_example_runs(small_df, ci_test):
+    """The run_cedar docstring example must use max_iter, which var_em accepts."""
+    import ast
+    import re
+
+    example = re.search(r"``(\{\"p\".*?\})``", " ".join(run_cedar.__doc__.split()))
+    kwargs = ast.literal_eval(example.group(1))
+    df = small_df.copy()
+    df.iloc[5:8, 1] = np.nan
+    result = run_cedar(
+        df,
+        ci_test,
+        max_lag=1,
+        n_permutations=20,
+        impute="var_em",
+        impute_kwargs=kwargs,
+    )
+    assert result.cg_tig.shape == (3, 3, 2)
+
+
 def test_partial_dcor_unknown_method_raises():
     """_compute_one_pair must reject unknown method names, not silently fall back."""
     data = np.random.default_rng(0).standard_normal((50, 2))
@@ -243,6 +291,26 @@ def test_partial_dcor_regression_f1(ci_test):
         f"partial_dcor F1={mean_f1:.3f} is below threshold 0.75 — "
         "likely a silent regression in lag_selection.py"
     )
+
+
+def test_autoreg_self_loops_have_no_pvalue(ar_df, ci_test):
+    """Self-loops added without a test report p = NaN, not 1.0 ("no evidence")."""
+    from causalts.inspection import edges_from_graph
+
+    result = run_cedar(ar_df, ci_test, max_lag=1, n_permutations=50)
+    g, pv = result.cg_tig, result.pvalue_matrix
+    loops = [(i, j, k) for i, j, k in zip(*np.nonzero(g)) if i == j]
+    assert loops
+    for i, j, k in loops:
+        assert np.isnan(pv[i, j, k])
+    # Edges found by the Cond1 test keep their p-value.
+    cross = g.astype(bool) & ~np.eye(3, dtype=bool)[:, :, None]
+    assert cross.any() and np.isfinite(pv[cross]).all()
+    for e in edges_from_graph(g, result.var_names, pv):
+        if e["source"] == e["target"]:
+            assert e["pvalue"] is None
+        else:
+            assert e["pvalue"] is not None and e["pvalue"] < 0.05
 
 
 if __name__ == "__main__":

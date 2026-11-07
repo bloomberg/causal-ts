@@ -23,7 +23,8 @@ class CedarResult(CausalResult):
     val_matrix : np.ndarray, shape (d, d, max_lag+1)
         CI test statistic (strength) per edge.
     pvalue_matrix : np.ndarray, shape (d, d, max_lag+1)
-        P-value from Cond1 test for each candidate edge.
+        P-value from Cond1 test for each candidate edge. NaN for an edge added
+        without passing that test (autoregressive self-loops, required edges).
     lag_importance : np.ndarray, shape (d, d, max_lag+1)
         Distance correlation scores used for lag selection.
     lag_pvalues : np.ndarray, shape (d, d, max_lag+1)
@@ -219,7 +220,7 @@ class CedarResult(CausalResult):
         return ak
 
     def make_background_knowledge(self, forbidden=None, required=None):
-        """Normalize edge constraints for re-use with run_cedar.
+        """Normalize edge constraints for reuse with run_cedar.
 
         Accepts 3-tuples ``(cause, effect, lag)`` or 4-tuples
         ``(cause, effect, cause_lag, effect_lag)`` — the 4th element is dropped

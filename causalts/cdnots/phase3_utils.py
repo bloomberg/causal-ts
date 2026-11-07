@@ -896,6 +896,7 @@ def cdnots_discovery(
     orient_margin=0.0,
     collider_search="full",
     majority_gamma=0.5,
+    _skeleton_only=False,
 ):
     """Discover a CDNOTS causal graph.
 
@@ -932,9 +933,22 @@ def cdnots_discovery(
         non-collider in at least ``1 - majority_gamma``; shares in between
         leave the triple ambiguous. ``0.5`` is the plain majority rule.
         Ignored when ``contemp_collider_rule`` is None.
+    _skeleton_only : bool, default False
+        Private. Stop after the skeleton and the time ordering of lagged edges:
+        no collider, Meek or C-node orientation. The binary graph's lagged slices
+        depend only on lagged adjacencies, which those steps never change, so they
+        are identical; lag-0 and C cells are unoriented. Path-level ``knowledge``
+        (required/forbidden ancestors) can add or remove lagged edges after this
+        point, so it is rejected here. Used by LUCID's factor-adjusted lagged
+        search, which keeps only lagged slices.
     """
     validate_priority(priority)
     validate_majority_gamma(majority_gamma)
+    if _skeleton_only and knowledge is not None and knowledge.has_path_constraints:
+        raise ValueError(
+            "_skeleton_only cannot honour path-level knowledge (required or "
+            "forbidden ancestors); run the full discovery instead"
+        )
     if contemp_collider_rule not in ("majority", None):
         raise ValueError(
             "contemp_collider_rule must be 'majority' or None, "
@@ -1087,6 +1101,34 @@ def cdnots_discovery(
         background_knowledge=background_knowledge,
         forbidden_ancestor_pairs=_forb_ancestor_pairs,
     )
+    if _skeleton_only:
+        cg_tig = cdnots_to_tigramite_graph(
+            cg_skel_cnst,
+            num_lags=num_lags,
+            include_C=include_C,
+            num_c_cols=num_c_cols,
+            undirected="bidirected",
+        )
+        result = _build_result(
+            cg_skel_cnst,
+            cg_tig,
+            pvalue_matrix,
+            pvals,
+            _df_orig,
+            _var_names_orig,
+            lags,
+            lag_list,
+            include_C,
+            _lv_stats,
+            num_lags=num_lags,
+            alpha=alpha,
+            priority=priority,
+            stable=stable,
+            num_c_cols=num_c_cols,
+            c_node_names=_c_node_names,
+            undirected_policy="bidirected",
+        )
+        return (result, cg_tig, pvals) if return_pvals else (result, cg_tig)
     # The majority rule searches the window neighbours of both endpoints,
     # lagged ones included, as PC on the window does. Restricting it to
     # contemporaneous neighbours (the old behaviour) means no separating set

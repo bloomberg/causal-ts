@@ -92,7 +92,7 @@ def edges_from_graph(graph, var_names, pvalue_matrix=None):
     Convention matches ``cg_tig``: ``graph[cause, effect, lag] != 0`` means
     ``cause(t-lag) -> effect(t)``.  Returns
     ``[{"source", "target", "lag", "pvalue"}]`` (pvalue is ``None`` when no
-    matrix is supplied).
+    matrix is supplied or the edge has no finite p-value, e.g. it was not tested).
     """
 
     def _name(idx):
@@ -107,6 +107,8 @@ def edges_from_graph(graph, var_names, pvalue_matrix=None):
                 pval = float(pvalue_matrix[i, j, lag])
             except (IndexError, TypeError, ValueError):
                 pval = None
+            if pval is not None and not np.isfinite(pval):
+                pval = None  # JSON has no NaN
         edges.append(
             {
                 "source": _name(i),
@@ -285,14 +287,20 @@ def _latent_factor_block(arr):
     T, d = arr.shape
     # The statistic is built on VAR(1) least-squares residuals, so skip the inputs
     # that would make the fit raise (non-finite) or return a meaningless number
-    # (underdetermined: the design matrix is (T-1) x (d+1); d < 2 has no spectrum).
-    if d < 2 or T < d + 3 or not np.isfinite(arr).all():
+    # (underdetermined: the design matrix is (T-1) x (d+1)). With d < 3 the top-2
+    # eigenvalues are (nearly) the whole trace, so the threshold can never be reached.
+    if d < 3 or T < d + 3 or not np.isfinite(arr).all():
         return unavailable
     try:
         from .confounders.routed_deconf import _route
 
         regime, info = _route(arr, router="auto")
     except Exception:  # a diagnostic must never break the whole report
+        return unavailable
+    # The statistic is the top-2 share of the trace, so it never exceeds 1. When the
+    # threshold (from the residual degrees of freedom, T - d - 2) reaches 1, the test
+    # cannot fire on this panel: report "could not check", not "found nothing".
+    if not info["tau"] < 1.0:
         return unavailable
     return {
         "detected": regime != "sparse",
