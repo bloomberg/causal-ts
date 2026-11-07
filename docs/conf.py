@@ -94,13 +94,13 @@ html_show_sourcelink = False
 # it pointed at examples/examples/... and 404'd. The link target is filled in
 # per page from ``pathto`` in ``_localize_announcement`` below; this literal is
 # the root-relative fallback for the (unused) case where no context is present.
-ANNOUNCEMENT_TARGET = "examples/latent_confounder_detection"
+ANNOUNCEMENT_TARGET = "examples/ci_test_selection"
 ANNOUNCEMENT_LEAD = (
-    "🚀 New in v0.27 — <code>LUCID</code>, regime-adaptive deconfounding for "
-    "causal discovery under latent confounders, plus a DoWhy effects bridge "
-    "for transition validation and refutation."
+    "🚀 New in v0.28 — <code>run_grace</code> / <code>run_reap</code> graph "
+    "refinement, five new CI tests (gcm, wgcm, pcm, raft, rift), and a guide to "
+    "choosing one."
 )
-ANNOUNCEMENT_HTML = ANNOUNCEMENT_LEAD + " <a href='{link}'>See LUCID →</a>"
+ANNOUNCEMENT_HTML = ANNOUNCEMENT_LEAD + " <a href='{link}'>Choosing a CI test →</a>"
 
 html_theme_options = {
     "announcement": ANNOUNCEMENT_HTML.format(link=f"{ANNOUNCEMENT_TARGET}.html"),

@@ -211,8 +211,7 @@ def kci_cind(
         width_z (str or float, optional): Kernel bandwidth for Z. Defaults to "median".
         thresh (float, optional): Threshold for eigenvalue filtering. Defaults to 1e-5.
         lamda (float, optional): Regularization parameter. Defaults to 0.001.
-        seed (int, optional): Seed for the permutations / bootstrap draws. None
-            leaves them unseeded.
+        seed (int, optional): Seed for the permutations / bootstrap draws; None = unseeded.
 
     Returns:
         tuple: P-value and test statistic.
