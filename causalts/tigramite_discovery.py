@@ -896,7 +896,9 @@ def run_tigramite(
         - ``"pcmciplus"`` -- PCMCI+ (contemporaneous + lagged, oriented)
         - ``"pcmci"`` -- PCMCI (lagged links with MCI pruning)
         - ``"pcalg"`` -- PC algorithm adapted for time series
-        - ``"pc_stable"`` -- PC-stable skeleton only (no orientation)
+        - ``"pc_stable"`` -- PC-stable lagged parent sets (no contemporaneous
+          links, no MCI step); edges are the parents selected at ``pc_alpha``
+          (default 0.2), not at ``alpha_level``
         - ``"fullci"`` -- Full conditional independence (all pairs)
         - ``"bivci"`` -- Bivariate CI (pairwise, no conditioning)
     tau_max : int
@@ -919,7 +921,10 @@ def run_tigramite(
         Tuple (G_hat, info):
 
         - G_hat: Binary graph (d, d, tau_max+1).
-        - info: Dict with method, p_matrix, val_matrix, graph_raw.
+        - info: Dict with method, p_matrix, val_matrix, graph_raw, alpha_level
+          (and, for ``"pc_stable"``, pc_alpha: the alpha the parents were
+          selected at, or ``{target: alpha}`` when tigramite chose one per
+          target from ``pc_alpha=None`` or a list).
     """
     _require_tigramite(f"tigramite ({method})")
     from tigramite.pcmci import PCMCI
@@ -976,12 +981,44 @@ def run_tigramite(
         method_kwargs["pc_alpha"] = kwargs.pop("pc_alpha", 0.01)
     if method_key == "pc_stable":
         method_kwargs["pc_alpha"] = kwargs.pop("pc_alpha", 0.2)
+        if kwargs.get("tau_min", 1) == 0:
+            # Zero-lag PC-stable parents are unoriented and found per target, so
+            # they cannot be written as directed lag-0 edges.
+            raise ValueError(
+                "pc_stable does not orient zero-lag links; use tau_min >= 1, or "
+                "method='pcmciplus' for contemporaneous links."
+            )
     method_kwargs.update(kwargs)
 
     result = run_fn(**method_kwargs)
 
-    # pc_stable and others may return different formats
-    if "graph" in result:
+    if method_key == "pc_stable":
+        # run_pc_stable returns the parents dict {j: [(i, -tau), ...]}, not a
+        # results dict; its p_matrix / val_matrix are left on the PCMCI object.
+        # The parents are the result (selected at pc_alpha, not alpha_level).
+        d = df.shape[1]
+        G_hat = np.zeros((d, d, tau_max + 1), dtype=np.int8)
+        for j, parents in result.items():
+            for i, neg_tau in parents:
+                if neg_tau == 0:
+                    # Reachable through kwargs other than tau_min (e.g.
+                    # link_assumptions, depending on the tigramite version).
+                    raise ValueError(
+                        "pc_stable returned a zero-lag parent; it does not orient "
+                        "contemporaneous links. Use method='pcmciplus'."
+                    )
+                G_hat[i, j, -neg_tau] = 1
+        pc_alpha = method_kwargs["pc_alpha"]
+        if pc_alpha is None or np.ndim(pc_alpha) > 0:
+            # tigramite picked one alpha per target from the candidates.
+            pc_alpha = {j: pcmci.iterations[j].get("optimal_pc_alpha") for j in result}
+        result = {
+            "p_matrix": pcmci.p_matrix,
+            "val_matrix": pcmci.val_matrix,
+            "pc_alpha": pc_alpha,
+        }
+        graph_raw = None
+    elif "graph" in result:
         G_hat = _tigramite_graph_to_binary(
             result["graph"], p_matrix=result.get("p_matrix"), alpha_level=alpha_level
         )
@@ -1005,5 +1042,8 @@ def run_tigramite(
         "graph_raw": graph_raw,
         "alpha_level": alpha_level,
     }
+    if "pc_alpha" in result:
+        # pc_stable selects its edges at pc_alpha, not alpha_level.
+        info["pc_alpha"] = result["pc_alpha"]
 
     return G_hat, info

@@ -60,6 +60,48 @@ def test_constant_column_warns():
     assert any("Constant" in w or "constant" in w for w in report["warnings"])
 
 
+def test_non_numeric_column_is_skipped_with_a_warning():
+    """A date column made discrete detection fail on strings."""
+    df = _linear_var()
+    df["date"] = pd.date_range("2020-01-01", periods=len(df)).astype(str)
+    df["label"] = np.where(np.arange(len(df)) % 2, "up", "down")
+    report = inspect_df(df)
+    assert report["data"]["n_vars"] == 4
+    assert any("date" in w and "label" in w for w in report["warnings"])
+    assert report["recommendation"] == inspect_df(_linear_var())["recommendation"]
+
+
+def test_timedelta_column_is_flagged():
+    df = _linear_var()
+    df["dur"] = pd.to_timedelta(np.arange(len(df)), unit="s")
+    report = inspect_df(df)
+    assert report["data"]["n_vars"] == 4
+    assert any("Non-numeric" in w and "dur" in w for w in report["warnings"])
+
+
+def _nonlinear_var(T=400, seed=0):
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal((T, 3))
+    x[1:, 1] += 2.0 * np.sin(2.0 * x[:-1, 0])
+    x[1:, 2] += x[:-1, 1] ** 2
+    return pd.DataFrame(x, columns=["a", "b", "c"])
+
+
+def test_missing_values_keep_nonlinearity_detection():
+    """One NaN per column made every RESET p-value NaN, read as linear."""
+    df = _nonlinear_var()
+    full = inspect_df(df)["facts"]["linearity"]["fraction_nonlinear"]
+    assert full > 0.2
+    rng = np.random.default_rng(1)
+    for c in df.columns:
+        df.loc[rng.choice(len(df), 4, replace=False), c] = np.nan
+    report = inspect_df(df)
+    assert report["facts"]["linearity"]["fraction_nonlinear"] == pytest.approx(
+        full, abs=0.1
+    )
+    assert report["facts"]["linearity"]["is_nonlinear"]
+
+
 def test_max_lag_override():
     report = inspect_df(_linear_var(), max_lag=7)
     assert report["facts"]["suggested_max_lag"] == 7
@@ -197,6 +239,24 @@ def test_variance_check_not_applicable_for_one_variable():
     assert "variance-dependence check" not in out["recommendation"]["rationale"]
 
 
+def test_one_numeric_column_does_not_warn_about_untestable_linearity():
+    """A date + value frame leaves one column: no pair to test, no failure."""
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame(
+        {
+            "date": pd.date_range("2020-01-01", periods=200).astype(str),
+            "x": rng.normal(size=200),
+        }
+    )
+    out = inspect_df(df, max_lag=1)
+    assert out["facts"]["linearity"]["n_tested"] == 0
+    assert not any("Linearity could not be tested" in w for w in out["warnings"])
+    rationale = out["recommendation"]["rationale"]
+    assert "fewer than two numeric columns" in rationale
+    assert "approximately linear" not in rationale
+    assert "linearity could not be tested" not in rationale
+
+
 def _bool_variance_panel(T=600, seed=0):
     """A Boolean b that only moves the noise scale of y one step later."""
     rng = np.random.default_rng(seed)
@@ -268,5 +328,50 @@ def test_latent_factor_block_unavailable_when_threshold_unreachable():
     assert ok["detected"] is False and ok["tau"] < 1
 
 
+def test_no_numeric_columns_raises():
+    """Numbers parsed as strings left a normal-looking report for d=0."""
+    df = pd.DataFrame({"a": ["1,000", "2,000"] * 50, "b": ["3,000", "4,000"] * 50})
+    with pytest.raises(ValueError, match="no numeric columns.*'a', 'b'"):
+        inspect_df(df)
+
+
+def test_untestable_linearity_is_reported():
+    """Columns observed on disjoint rows: no RESET test can run."""
+    df = _linear_var(T=300, d=3)
+    rows = np.arange(len(df))
+    for i, c in enumerate(df.columns):
+        df.loc[rows % 3 != i, c] = np.nan
+    report = inspect_df(df)
+    lin = report["facts"]["linearity"]
+    assert lin["n_tested"] == 0
+    assert any("Linearity could not be tested" in w for w in report["warnings"])
+    rationale = report["recommendation"]["rationale"]
+    assert "approximately linear" not in rationale
+    assert "linearity could not be tested" in rationale
+
+
+def test_cli_inspect_no_numeric_columns_is_a_clean_error(tmp_path):
+    from click.testing import CliRunner
+
+    from causalts.cli import main
+
+    path = tmp_path / "d.csv"
+    pd.DataFrame({"a": ["1,000", "2,000"] * 50}).to_csv(path, index=False)
+    res = CliRunner().invoke(main, ["inspect", str(path)])
+    assert res.exit_code != 0
+    assert "no numeric columns" in res.output
+    assert not isinstance(res.exception, ValueError)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_check_linearity_max_lag_beyond_series_length():
+    """A lag longer than the series leaves nothing to test instead of raising."""
+    from causalts.utils.linearity import check_linearity
+
+    data = np.random.default_rng(0).standard_normal((20, 2))
+    res = check_linearity(data, max_lag=30)
+    assert res["n_tested"] == len(res["results"]) > 0
+    assert all(r["lag"] <= 10 for r in res["results"])

@@ -14,7 +14,7 @@ import pandas as pd
 from .aggregation import aggregate
 from .config import RegimeConfig, RegimeParams
 from .detection import QuantileRegimeDetector, RegimeDetector
-from .result import RegimeResult
+from .result import RegimeResult, count_edges
 from .segments import extract_segments
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,15 @@ def run_regime_discovery(
         Called per segment with regime-specific parameters.
     config : RegimeConfig, optional
         Configuration. Defaults to 3 quantile regimes with OR aggregation.
+        Within a regime, a lagged edge ``i -> j`` (at any lag >= 1) is kept,
+        at every lag any segment found, when enough segments find it: by
+        default ``max(1, int(segment_threshold * n_segments))``, or a share of
+        at least ``segment_threshold`` with ``threshold_rounding="ceil"``. A
+        lag-0 adjacency needs the same count, either orientation counting; it
+        is oriented ``i -> j`` when the segments that orient it that way
+        (unoriented ones excluded) reach the count, and is left unoriented
+        (symmetric 1s) otherwise, including when both directions reach it
+        (possible under the default rounding, e.g. 1 of 3 segments each way).
     detector : RegimeDetector, optional
         Custom regime detector. If None, uses QuantileRegimeDetector.
     regime_labels : np.ndarray, optional
@@ -175,8 +184,8 @@ def run_regime_discovery(
 
         per_regime_results[r] = segment_results
 
-        # Within-regime aggregation: majority vote on 2D (any-lag) summary,
-        # then populate 3D graph at all lags where any segment had the edge.
+        # Within-regime aggregation: a vote across segments, lagged edges and
+        # lag-0 adjacencies voted separately (see below).
         max_lag_r = params.max_lag + 1
         padded = []
         for g in segment_graphs:
@@ -189,32 +198,56 @@ def run_regime_discovery(
 
         stacked = np.stack(padded, axis=0)
         n_seg = len(padded)
-        thresh = max(1, int(config.segment_threshold * n_seg))
+        if config.threshold_rounding == "ceil":
+            # The fewest votes k with k / n_seg >= segment_threshold, i.e. a
+            # share of at least segment_threshold (0.5 of 3 is 2; of 4, a tie of
+            # 2 passes). Comparing the fraction, not ceil(threshold * n_seg),
+            # avoids float artefacts both ways: 0.28 * 25 is 7.000000000000001,
+            # and a threshold given as 5 / 6 must accept 5 of 6.
+            thresh = next(
+                (
+                    k
+                    for k in range(1, n_seg + 1)
+                    if k / n_seg >= config.segment_threshold
+                ),
+                n_seg + 1,  # a threshold above 1 accepts nothing
+            )
+        elif config.threshold_rounding == "floor":  # the default: 0.5 of 3 is 1
+            thresh = max(1, int(config.segment_threshold * n_seg))
+        else:  # set after construction, past RegimeConfig's own check
+            raise ValueError(
+                "threshold_rounding must be 'floor' or 'ceil', got "
+                f"{config.threshold_rounding!r}"
+            )
 
-        # Vote on 2D: edge (i,j) present if any-lag detected in >= thresh segments
-        has_edge_2d = (stacked[:, :, :, 1:] > 0).any(axis=3)  # (n_seg, d, d)
-        edge_counts_2d = has_edge_2d.sum(axis=0)  # (d, d)
-        accepted_2d = edge_counts_2d >= thresh  # (d, d)
-
-        # Build 3D: for accepted edges, include all lags seen in any segment
+        present = stacked > 0
         regime_graph = np.zeros((d, d, max_lag_r), dtype=np.int8)
-        any_lag_union = (stacked > 0).any(axis=0)  # union of all segments' lags
-        for i in range(d):
-            for j in range(d):
-                if i == j:
-                    continue
-                if accepted_2d[i, j]:
-                    regime_graph[i, j, :] = any_lag_union[i, j, :]
-        # Self-loops: keep if present in majority
-        for i in range(d):
-            has_self = (stacked[:, i, i, 1:] > 0).any(axis=1)
-            if has_self.sum() >= thresh:
-                regime_graph[i, i, :] = any_lag_union[i, i, :]
+
+        # Lagged edges (self-loops included): time fixes the direction, so vote
+        # on i -> j at any lag >= 1, then keep every lag any segment found.
+        has_lagged = present[:, :, :, 1:].any(axis=3)  # (n_seg, d, d)
+        accepted_lagged = has_lagged.sum(axis=0) >= thresh  # (d, d)
+        lagged_union = present[:, :, :, 1:].any(axis=0)  # (d, d, max_lag)
+        regime_graph[:, :, 1:] = lagged_union & accepted_lagged[:, :, None]
+
+        # Lag-0 edges: orientation is the least stable thing across segments,
+        # so vote on the adjacency (either orientation, or unoriented as
+        # symmetric 1s), then orient it by direction votes. An adjacency with
+        # no direction reaching the threshold stays unoriented (symmetric 1s).
+        lag0 = present[:, :, :, 0].copy()
+        lag0[:, np.arange(d), np.arange(d)] = False  # a lag-0 self-loop is no edge
+        # Only one-way entries vote for a direction; an unoriented edge votes for
+        # the adjacency alone.
+        dir_votes = (lag0 & ~lag0.transpose(0, 2, 1)).sum(axis=0)  # (d, d)
+        adj_accepted = (lag0 | lag0.transpose(0, 2, 1)).sum(axis=0) >= thresh
+        oriented = adj_accepted & (dir_votes >= thresh)
+        unoriented = adj_accepted & ~oriented & ~oriented.T
+        regime_graph[:, :, 0] = oriented | unoriented
 
         regime_graphs[r] = regime_graph
 
         if verbose:
-            n_edges = int(regime_graph[:, :, 1:].any(axis=2).sum())
+            n_edges = count_edges(regime_graph)
             logger.info(
                 "%s: %d/%d segments succeeded, %d edges",
                 regime_names[r],

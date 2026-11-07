@@ -41,7 +41,8 @@ Backends (choose with ``algo``):
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import warnings
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import pandas as pd
@@ -87,20 +88,29 @@ class Feature:
         Strength of association for the feature, higher = stronger. Used only
         for *ranking* — it is **not** a selection filter, so every feature
         (regardless of score) is a selected predictor and appears in
-        :meth:`FeatureSelectionResult.to_design_matrix`. The metric depends on
-        the role: cross-variable ``parent`` / ``child`` / ``spouse`` /
+        :meth:`FeatureSelectionResult.to_design_matrix` (except a lagged
+        ``child``, whose blanket member is a future value, and a spouse found
+        only through such children; see there). The metric depends on the role: cross-variable ``parent`` / ``child`` / ``spouse`` /
         ``nonstationarity`` carry the discovery backend's CI-test statistic
         (``|partial correlation|``, roughly ``[0, 1]``); ``self`` carries the
         partial distance-correlation of the target with its own past at that lag
         (nonlinear, ``[0, 1]`` — see :func:`_self_dcor_scores`). ``None`` only
         when a score could not be computed (series too short, or ``dcor`` /
         ``val_matrix`` unavailable).
+    via : tuple of (str, int)
+        For a ``spouse``: the shared children ``(variable, lag)`` through which
+        it is in the Markov blanket (a child at lag ``a`` is
+        ``target(t-a) -> child(t)``). Empty for other roles. Not part of
+        equality or the repr. The per-candidate search stops recording once
+        it has a lag-0 child (the spouse is then a usable predictor either
+        way), so ``via`` lists every shared child only when all are lagged.
     """
 
     variable: str
     lag: int
     role: str
     score: float | None = None
+    via: tuple[tuple[str, int], ...] = field(default=(), compare=False, repr=False)
 
 
 @dataclass
@@ -143,7 +153,11 @@ class FeatureSelectionResult:
         """Unique source variables among the predictive features (sorted).
 
         Excludes the nonstationarity (C) flag. Collapses over lags — use
-        :attr:`features` for the full ``(variable, lag)`` granularity.
+        :attr:`features` for the full ``(variable, lag)`` granularity. This is
+        the *discovered* neighbourhood (e.g. to slice the target's blanket out
+        of the full graph), so it includes lagged children and the spouses found
+        only through them, which :meth:`to_design_matrix` leaves out; use that
+        method's columns for the predictors a model can use.
         """
         seen = {f.variable for f in self.features if f.role in _PREDICTIVE_ROLES}
         return sorted(seen)
@@ -170,14 +184,22 @@ class FeatureSelectionResult:
         This is a *predictive* construction, deliberately separate from the
         discovered feature set (:attr:`features`): the discovered graph reports
         what discovery found/assumed, while the design matrix is what you feed a
-        model. Cross-variable features (``parent`` / ``child`` / ``spouse``) are
-        always included as columns. **Self-history** is added here on its own
+        model. Cross-variable features (``parent`` / ``child`` / ``spouse`` /
+        ``undirected``) are included as columns, except **lagged children**: a
+        ``child`` at lag ``k >= 1`` means ``target(t-k) -> child(t)``, so its
+        Markov-blanket member is ``child(t+k)``, a future value that cannot be a
+        predictor of ``target(t)``. Those are left out, together with any
+        ``spouse`` whose shared children (:attr:`Feature.via`) are all lagged:
+        a spouse is in the blanket only because conditioning on that child
+        makes it informative, and the child is not a column. Both are named in
+        a ``UserWarning``. Lag-0 children (``child(t)``) and spouses with a
+        lag-0 child are kept. **Self-history** is added here on its own
         terms, controlled by ``include_self`` and ``self_threshold`` — because
         the target's own past is a predictor decision, not a causal-discovery
         one (discovery prunes/assumes self-loops inconsistently).
 
-        Columns are named ``"{variable}_lag{lag}"`` (contemporaneous keep
-        ``lag0``). The nonstationarity C flag is excluded.
+        Columns are named ``"{variable}_lag{lag}"`` and hold ``variable(t-lag)``
+        (contemporaneous keep ``lag0``). The nonstationarity C flag is excluded.
 
         Parameters
         ----------
@@ -203,6 +225,8 @@ class FeatureSelectionResult:
         if source is None:
             raise ValueError("no DataFrame available; pass df=...")
         cols = {}
+        future_children = []
+        orphan_spouses = []
         # Cross-variable causal features (never self / nonstationarity here).
         for f in self.features:
             if f.role not in (
@@ -212,7 +236,33 @@ class FeatureSelectionResult:
                 ROLE_UNDIRECTED,
             ):
                 continue
+            if f.role == ROLE_CHILD and f.lag > 0:
+                # target(t-k) -> child(t): the blanket member is child(t+k), a
+                # future value; child.shift(k) would be child(t-k), unrelated.
+                future_children.append(f"{f.variable}(t+{f.lag})")
+                continue
+            if f.role == ROLE_SPOUSE and f.via and all(a > 0 for _, a in f.via):
+                # Only informative given a child that is not a column.
+                orphan_spouses.append(f"{f.variable}_lag{f.lag}")
+                continue
             cols[f"{f.variable}_lag{f.lag}"] = source[f.variable].shift(f.lag)
+        dropped = []
+        if future_children:
+            dropped.append(
+                "lagged children, whose Markov-blanket members are future "
+                f"values: {', '.join(future_children)}"
+            )
+        if orphan_spouses:
+            dropped.append(
+                "spouses found only through lagged children: "
+                f"{', '.join(orphan_spouses)}"
+            )
+        if dropped:
+            warnings.warn(
+                f"to_design_matrix left out {'; and '.join(dropped)}.",
+                UserWarning,
+                stacklevel=2,
+            )
         # Self-history: independent predictive selection by dcor strength.
         if include_self:
             self_scores = _self_dcor_scores(source[self.target], self.max_lag)
@@ -472,8 +522,8 @@ def _find_children_and_spouses(
     ``e`` — the classic v-structure / collider signature.
     """
     children: list[Feature] = []
-    spouses: list[Feature] = []
-    seen_spouse: set[tuple[str, int]] = set()
+    # (z, spouse_lag) -> [score, [shared children (e, a)]], in confirmation order
+    spouse_info: dict[tuple[str, int], list] = {}
 
     for e_name in candidates:
         if e_name == target:
@@ -514,7 +564,15 @@ def _find_children_and_spouses(
                 if spouse_lag < 0:
                     continue  # Z would be observed after the target; unusable
                 key = (z_name, spouse_lag)
-                if key in seen_spouse or key in existing_vars:
+                if key in existing_vars:
+                    continue
+                # Once a lag-0 shared child is recorded the spouse keeps its
+                # design-matrix column whatever else is found, so further
+                # collider tests would only nudge the ranking score.
+                if key in spouse_info and (
+                    (e_name, a) in spouse_info[key][1]
+                    or any(c_lag == 0 for _, c_lag in spouse_info[key][1])
+                ):
                     continue
 
                 x_target = df[target].to_numpy(dtype=float)
@@ -530,11 +588,16 @@ def _find_children_and_spouses(
                 p_marg, _ = _ci_pvalue(ci_test, xz, xt, None)
                 p_cond, stat_cond = _ci_pvalue(ci_test, xz, xt, xe.reshape(-1, 1))
                 if p_marg > alpha and p_cond <= alpha:
-                    seen_spouse.add(key)
-                    spouses.append(
-                        Feature(z_name, spouse_lag, ROLE_SPOUSE, abs(stat_cond))
-                    )
+                    # A spouse can share several children; record each one so
+                    # to_design_matrix can tell whether any is a usable column.
+                    info = spouse_info.setdefault(key, [abs(stat_cond), []])
+                    info[0] = max(info[0], abs(stat_cond))
+                    info[1].append((e_name, a))
 
+    spouses = [
+        Feature(z, lag, ROLE_SPOUSE, score, via=tuple(via))
+        for (z, lag), (score, via) in spouse_info.items()
+    ]
     return children, spouses
 
 
@@ -708,6 +771,17 @@ def _features_from_cpdag(
     return feats
 
 
+def _column_keys(feats):
+    """``(variable, lag)`` keys that already give a design-matrix column.
+
+    A lagged child is not one (its blanket member is a future value), so it
+    must not stop the same key from being recorded as a spouse.
+    """
+    return {
+        (f.variable, f.lag) for f in feats if not (f.role == ROLE_CHILD and f.lag > 0)
+    }
+
+
 def _spouses_from_cpdag(graph, target_idx, names, n_c, include_children_feats):
     """Spouses (co-parents of the target's children) read directly from a full
     oriented CDNOTS graph — no CI reruns needed, since the graph already has
@@ -716,9 +790,8 @@ def _spouses_from_cpdag(graph, target_idx, names, n_c, include_children_feats):
     d_all = graph.shape[0]
     d_x = d_all - n_c
     L = graph.shape[2]
-    spouses: list[Feature] = []
-    seen: set[tuple[str, int]] = set()
-    existing = {(f.variable, f.lag) for f in include_children_feats}
+    spouse_via: dict[tuple[str, int], list[tuple[str, int]]] = {}
+    existing = _column_keys(include_children_feats)
 
     children = [
         (f.variable, f.lag) for f in include_children_feats if f.role == ROLE_CHILD
@@ -738,11 +811,15 @@ def _spouses_from_cpdag(graph, target_idx, names, n_c, include_children_feats):
                 if spouse_lag < 0:
                     continue
                 key = (names[z], spouse_lag)
-                if key in seen or key in existing:
+                if key in existing:
                     continue
-                seen.add(key)
-                spouses.append(Feature(names[z], spouse_lag, ROLE_SPOUSE, None))
-    return spouses
+                via = spouse_via.setdefault(key, [])
+                if (e_name, a) not in via:
+                    via.append((e_name, a))
+    return [
+        Feature(z, lag, ROLE_SPOUSE, None, via=tuple(via))
+        for (z, lag), via in spouse_via.items()
+    ]
 
 
 def _is_linear_test(ci_test) -> bool:
@@ -837,7 +914,7 @@ def _score_cross_edges(df, target, feats, ci_test=None):
             except Exception:
                 r = np.corrcoef(xr, yr)[0, 1]
                 score = abs(float(r)) if np.isfinite(r) else None
-        out.append(Feature(f.variable, f.lag, f.role, score))
+        out.append(replace(f, score=score))
     return out
 
 
@@ -1066,7 +1143,7 @@ def select_features(
                 res.cg_tig, target_idx, var_names, n_c, feats
             )
         else:
-            existing_vars = {(f.variable, f.lag) for f in feats}
+            existing_vars = _column_keys(feats)
             candidates = [v for v in exposed_names if v != target]
             children, spouses = _find_children_and_spouses(
                 df,

@@ -97,6 +97,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   other CI tests and on plain CDNOTS.
 * `order_independent=True` on `KCIGPU`, `LinSigCIGPU`, `GCMIGPU`, `CMIknnGPU`,
   `CMIknnMixedGPU`: one p-value per test whatever the call order or X/Y orientation.
+* Opt-in generator fixes, defaults unchanged: `henon_chain(bounded_start=True)` (CLI
+  `generate --bounded-start`) stays finite; `topology_scp(coef_pools="fixed")` draws
+  negative coefficients. `RegimeConfig(threshold_rounding="ceil")` rounds the segment
+  vote threshold up.
 
 ### Changed
 
@@ -165,6 +169,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   data change.
 * `causal-ts -s` now seeds the CI test. Disk-cache keys include every result-shaping
   setting, so existing cache files miss.
+* `run_regime_discovery` counts lag-0 edges in the segment vote; regime graphs from a
+  segment method that returns lag-0 edges (e.g. CDNOTS) can gain or lose lag-0 edges,
+  and `regime_summary()` `n_edges` counts them.
+* `to_design_matrix` leaves out lagged children (and spouses found only through them),
+  with a warning; their columns were wrong.
+* `inspect` leaves out non-numeric columns (with a warning) and tests linearity on rows
+  without missing values, so its recommendation can change on such data.
 
 ### Fixed
 
@@ -317,6 +328,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   lag layout.
 * `DFCITGPU` over-rejected with |Z| >= 2, and `causal-ts discover --ci-test dfcit` kept a
   block length of 3.
+* `causal-ts evaluate` / `discover --ground-truth` trimmed the discovered graph to the
+  true max lag, missing false positives beyond it; scores change when the discovered
+  graph has more lags.
+* `shd_3d(double_for_anticausal=False)` symmetrised and halved lagged slices. `shd_2d` /
+  `shd_3d` now count differing entries (weighted and bool graphs too) and return `int`;
+  with `double_for_anticausal=False` a self-loop counts 1, not 0.5.
+* `run_tigramite(method="pc_stable")` returned an empty graph.
+* `ChangePointRegimeDetector.assign` failed on pandas 3.
+* `causal-ts generate -s 0` used seed 42.
+* `check_linearity` raised on a lag longer than the series; `shd_3d` on an empty lag axis.
 
 ## [0.27.0]
 

@@ -222,6 +222,7 @@ causal-ts generate [OPTIONS]
 | `-T, --samples INT` | `500` | Time series length |
 | `--density` | `sparse` | `sparse` or `dense` |
 | `--dep-funcs TEXT` | `lin,lin,nl1,nl2` | Comma-separated dependency functions, drawn at random per link: `lin`, `nl1`, `nl2`, `nl_sq`, `nl_abs`, `nl_sin` |
+| `--bounded-start` | off | `henon` only: start from U(-0.1, 0.1) so the series stays finite (the default standard-normal start diverges to -inf for about 20% of seeds); recorded in `meta.json` |
 
 **Outputs:** `data.csv`, `ground_truth.npy`, `meta.json`
 

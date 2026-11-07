@@ -121,10 +121,10 @@ class ChangePointRegimeDetector:
     def assign(self, df: pd.DataFrame) -> np.ndarray:
         if self.stat == "variance":
             rolling = df.rolling(self.window, min_periods=self.window // 2).var()
-            indicator = rolling.mean(axis=1).fillna(method="bfill")
+            indicator = rolling.mean(axis=1).bfill()
         elif self.stat == "mean":
             rolling = df.rolling(self.window, min_periods=self.window // 2).mean()
-            indicator = rolling.mean(axis=1).fillna(method="bfill")
+            indicator = rolling.mean(axis=1).bfill()
         else:
             raise ValueError(f"Unknown stat: {self.stat!r}")
 

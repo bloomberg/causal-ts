@@ -268,6 +268,8 @@ def test_markov_blanket_recovers_spouse(collider_data):
     )
     spouse_pairs = {(f.variable, f.lag) for f in r_mb.by_role("spouse")}
     assert ("X1", 1) in spouse_pairs
+    (x1,) = [f for f in r_mb.by_role("spouse") if (f.variable, f.lag) == ("X1", 1)]
+    assert ("X2", 0) in x1.via  # the shared lag-0 child
 
 
 def test_markov_blanket_no_children_is_noop(data):
@@ -348,6 +350,90 @@ def test_cdnots_gates_lag0(collider_data):
         collider_data, "X2", max_lag=2, algo="cdnots", include_lag0=True
     )
     assert any(f.lag == 0 and f.variable == "X0" for f in r_on.features)
+
+
+def test_design_matrix_leaves_out_lagged_children():
+    """A lagged child's blanket member is child(t+k), a future value.
+
+    ``to_design_matrix`` built ``child.shift(k)`` = child(t-k), an unrelated
+    column. Lagged children are now left out with a warning; lag-0 children,
+    parents and spouses keep their ``variable(t-lag)`` columns.
+    """
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame(rng.standard_normal((50, 7)), columns=list("TPSCEQR"))
+    r = FeatureSelectionResult(
+        target="T",
+        features=[
+            Feature("P", 1, "parent"),
+            Feature("S", 2, "spouse", via=(("C", 0),)),
+            Feature("Q", 1, "spouse", via=(("E", 1),)),
+            Feature("R", 0, "spouse", via=(("E", 1), ("C", 0))),
+            Feature("C", 0, "child"),
+            Feature("E", 1, "child"),
+        ],
+        var_names=list("TPSCEQR"),
+        max_lag=2,
+        algo="cdnots",
+        markov_blanket=True,
+        _df=df,
+    )
+    with pytest.warns(UserWarning, match=r"E\(t\+1\).*spouses.*Q_lag1"):
+        X = r.to_design_matrix(include_self=False)
+    # Q is a spouse only through the dropped lagged child E; R and S also share
+    # the lag-0 child C, which stays a column, so they keep theirs.
+    assert list(X.columns) == ["P_lag1", "S_lag2", "R_lag0", "C_lag0"]
+    pd.testing.assert_series_equal(
+        X["S_lag2"], df["S"].shift(2).iloc[2:], check_names=False
+    )
+
+
+def test_design_matrix_markov_blanket_lagged_child_end_to_end():
+    """The issue's X(t-1) -> Y example: target X, Y is a lag-1 child."""
+    rng = np.random.default_rng(0)
+    T = 1000
+    x = rng.standard_normal(T)
+    y = 0.3 * rng.standard_normal(T)
+    y[1:] += 0.9 * x[:-1]
+    df = pd.DataFrame({"X": x, "Y": y})
+    r = select_features(df, "X", max_lag=1, algo="cdnots", markov_blanket=True)
+    assert ("Y", 1, "child") in [(f.variable, f.lag, f.role) for f in r.features]
+    with pytest.warns(UserWarning, match="future values"):
+        X = r.to_design_matrix(include_self=False)
+    assert "Y_lag1" not in X.columns
+
+
+def test_cpdag_spouses_record_their_shared_children():
+    """A spouse read off the graph records the child it came from."""
+    from causalts.feature_selection import _spouses_from_cpdag
+
+    names = ["T", "E", "Z"]
+    graph = np.zeros((3, 3, 3), dtype=int)
+    graph[0, 1, 1] = 1  # T(t-1) -> E(t): child E at lag 1
+    graph[2, 1, 2] = 1  # Z(t-2) -> E(t): spouse Z at lag 2 - 1 = 1
+    (sp,) = _spouses_from_cpdag(graph, 0, names, 0, [Feature("E", 1, "child")])
+    assert (sp.variable, sp.lag, sp.role, sp.via) == ("Z", 1, "spouse", (("E", 1),))
+
+
+def test_cpdag_spouse_at_a_lagged_child_key_is_kept():
+    """T(t-1) -> Z(t) and T(t) -> E(t) <- Z(t-1): (Z, 1) is a lagged child and a
+    spouse via the lag-0 child E. Dropping the child must keep Z(t-1)."""
+    from causalts.feature_selection import _spouses_from_cpdag
+
+    names = ["T", "E", "Z"]
+    graph = np.zeros((3, 3, 2), dtype=int)
+    graph[0, 2, 1] = 1  # T(t-1) -> Z(t)
+    graph[0, 1, 0] = 1  # T(t) -> E(t)
+    graph[2, 1, 1] = 1  # Z(t-1) -> E(t)
+    children = [Feature("Z", 1, "child"), Feature("E", 0, "child")]
+    spouses = _spouses_from_cpdag(graph, 0, names, 0, children)
+    assert [(f.variable, f.lag, f.via) for f in spouses] == [("Z", 1, (("E", 0),))]
+    df = pd.DataFrame(np.random.default_rng(0).standard_normal((40, 3)), columns=names)
+    r = FeatureSelectionResult(
+        "T", children + spouses, names, 1, "cdnots", True, _df=df
+    )
+    with pytest.warns(UserWarning, match=r"Z\(t\+1\)"):
+        X = r.to_design_matrix(include_self=False)
+    assert list(X.columns) == ["E_lag0", "Z_lag1"]
 
 
 if __name__ == "__main__":

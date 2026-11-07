@@ -12,6 +12,23 @@ from ..result import CausalResult
 from .config import RegimeParams
 
 
+def count_edges(g: np.ndarray) -> int:
+    """Count the edges of a ``(d, d, L)`` graph, lag 0 included.
+
+    A directed pair ``(i, j)`` with an edge at any lag counts once (a lag-0
+    self-loop is no edge). An unoriented lag-0 edge (symmetric 1s) counts
+    once, not twice, unless a lagged edge already covers one of its directions.
+    """
+    present = g > 0
+    d = g.shape[0]
+    present[np.arange(d), np.arange(d), 0] = False
+    n = int(present.any(axis=2).sum())
+    lagged = present[:, :, 1:].any(axis=2)
+    lag0 = present[:, :, 0]
+    double = lag0 & lag0.T & ~lagged & ~lagged.T
+    return n - int(np.triu(double, 1).sum())
+
+
 class RegimeResult(CausalResult):
     """Result from regime-conditional causal discovery.
 
@@ -67,7 +84,7 @@ class RegimeResult(CausalResult):
         summary = {}
         for r, g in self.regime_graphs.items():
             n_samples = int((self.regime_labels == r).sum())
-            n_edges = int((g[:, :, 1:] > 0).any(axis=2).sum())
+            n_edges = count_edges(g)
             summary[self.regime_names[r]] = {
                 "n_samples": n_samples,
                 "n_edges": n_edges,
