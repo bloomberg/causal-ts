@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from .._warnings import external_stacklevel
 from ..ci_tests.kci_gpu import apply_H, rbf_kernel_gpu
 from .ancestral import count_c_cols
 from .meek import completes_forbidden_path, meek, reaches
@@ -700,11 +701,46 @@ def _lag_refine_step(
 
 
 def _is_discrete_aware(indep_test):
-    """Return True if the CI test natively handles discrete columns."""
+    """Return True if the CI test natively handles discrete columns.
+
+    A test class can declare that with ``handles_discrete = True``.
+    """
     from ..ci_tests.cmiknn_mixed_gpu import CMIknnMixedGPU
     from ..ci_tests.stratified_cit import StratifiedCIT
 
-    return isinstance(indep_test, (StratifiedCIT, CMIknnMixedGPU))
+    return isinstance(indep_test, (StratifiedCIT, CMIknnMixedGPU)) or bool(
+        getattr(indep_test, "handles_discrete", False)
+    )
+
+
+def _resolve_discrete(df, indep_test, discrete_cols):
+    """``(discrete_cols, indep_test)`` for the CDNOTS entry points.
+
+    ``discrete_cols=None`` auto-detects (with a warning if the test then needs
+    wrapping), ``[]`` opts out, a list names the columns. A test that cannot
+    handle discrete columns is wrapped in ``StratifiedCIT``.
+    """
+    if discrete_cols is None:
+        discrete_cols = _detect_discrete_cols(df, df.shape[0])
+        if discrete_cols and not _is_discrete_aware(indep_test):
+            warnings.warn(
+                f"Detected discrete columns: {discrete_cols}. "
+                f"Your CI test ({type(indep_test).__name__}) does not natively handle "
+                "discrete data — wrapping it in StratifiedCIT for correct conditioning. "
+                "Pass discrete_cols=[] to disable auto-wrapping.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+    if discrete_cols and not _is_discrete_aware(indep_test):
+        from ..ci_tests.stratified_cit import StratifiedCIT
+
+        indep_test = StratifiedCIT(
+            data=np.zeros((2, 2)),
+            discrete_cols=[],
+            inner_cit=indep_test,
+        )
+    return discrete_cols, indep_test
 
 
 def _resolve_knowledge(
@@ -755,8 +791,14 @@ def make_background_knowledge(
 
             [("X0", "X1", 1, 0)]  # forbid X0(t-1) -> X1(t)
 
+        Only the named direction is forbidden. For a lagged edge that is the
+        only possible direction, so the adjacency goes; for a contemporaneous
+        edge (equal lags) the reverse stays allowed, and an adjacency the data
+        keeps is oriented the other way. Forbid both directions to rule out a
+        contemporaneous adjacency.
     required : list of tuple, optional
-        Edges to require. Same format as ``forbidden``.
+        Edges to require. Same format as ``forbidden``. A required
+        contemporaneous edge is kept and oriented in the required direction.
     num_c_cols : int, optional
         Number of C columns (e.g. 2 for ``c_preset="linear+sin"``); defaults
         to 1 when ``include_C`` is set.
@@ -790,16 +832,38 @@ def make_background_knowledge(
 
     if forbidden:
         for cause_name, effect_name, cause_lag, effect_lag in forbidden:
+            # The window is time-invariant, so a forbid is a statement about its
+            # shift class. The skeleton checks knowledge through a lag-0
+            # endpoint, so anchor the pair there (("B", "A", 1, 2) is the same
+            # constraint as ("B", "A", 0, 1)). Like _node_pattern, this works in
+            # window slots, which equal lags only for lag_list=[1..L]; a stepped
+            # lag_list reads knowledge lags as slots.
+            shift = min(cause_lag, effect_lag)
+            cause_lag, effect_lag = cause_lag - shift, effect_lag - shift
             src = _node_pattern(cause_name, cause_lag)
             dst = _node_pattern(effect_name, effect_lag)
             bk.add_forbidden_by_pattern(src, dst)
-            bk.add_forbidden_by_pattern(dst, src)
+            if cause_lag != effect_lag:
+                # Across slices one direction runs backwards in time, so the
+                # pair has a single possible edge: forbidding it means removing
+                # the adjacency (also when the tuple names the impossible
+                # direction). Within one slice (lag 0) the reverse is a real
+                # edge and stays allowed.
+                bk.add_forbidden_by_pattern(dst, src)
 
     if required:
         for cause_name, effect_name, cause_lag, effect_lag in required:
-            src = _node_pattern(cause_name, cause_lag)
-            dst = _node_pattern(effect_name, effect_lag)
-            bk.add_required_by_pattern(src, dst)
+            # Also required at its lag-0 copy, like a forbid, so the pair cg_tig
+            # reports is oriented too (the skeleton keeps the whole class). The
+            # named copy stays required, so exact checks still see it.
+            shift = min(cause_lag, effect_lag)
+            for c_lag, e_lag in {
+                (cause_lag, effect_lag),
+                (cause_lag - shift, effect_lag - shift),
+            }:
+                src = _node_pattern(cause_name, c_lag)
+                dst = _node_pattern(effect_name, e_lag)
+                bk.add_required_by_pattern(src, dst)
 
     return bk
 
@@ -881,29 +945,7 @@ def cdnots_discovery(
         raise ValueError(
             "collider_search must be 'full' or 'sepset', " f"got {collider_search!r}"
         )
-    # discrete_cols=None  → auto-detect from df
-    # discrete_cols=[]    → explicit "no discrete columns" (opt-out)
-    # discrete_cols=[...] → user-specified column names
-    if discrete_cols is None:
-        discrete_cols = _detect_discrete_cols(df, df.shape[0])
-        if discrete_cols and not _is_discrete_aware(indep_test):
-            warnings.warn(
-                f"Detected discrete columns: {discrete_cols}. "
-                f"Your CI test ({type(indep_test).__name__}) does not natively handle "
-                "discrete data — wrapping it in StratifiedCIT for correct conditioning. "
-                "Pass discrete_cols=[] to disable auto-wrapping.",
-                UserWarning,
-                stacklevel=2,
-            )
-
-    if discrete_cols and not _is_discrete_aware(indep_test):
-        from ..ci_tests.stratified_cit import StratifiedCIT
-
-        indep_test = StratifiedCIT(
-            data=np.zeros((2, 2)),
-            discrete_cols=[],
-            inner_cit=indep_test,
-        )
+    discrete_cols, indep_test = _resolve_discrete(df, indep_test, discrete_cols)
 
     _IMPUTE_CHOICES = {None, "pairwise_complete", "var_em", "causal_iterative"}
     impute_kwargs = impute_kwargs or {}
@@ -1043,6 +1085,7 @@ def cdnots_discovery(
         include_C=include_C,
         num_c_cols=num_c_cols,
         background_knowledge=background_knowledge,
+        forbidden_ancestor_pairs=_forb_ancestor_pairs,
     )
     # The majority rule searches the window neighbours of both endpoints,
     # lagged ones included, as PC on the window does. Restricting it to
@@ -1094,7 +1137,7 @@ def cdnots_discovery(
     if knowledge is not None and knowledge.has_path_constraints:
         from .ancestral import apply_ancestral_constraints
 
-        cg_obj, _ = apply_ancestral_constraints(
+        cg_obj, _anc_violations = apply_ancestral_constraints(
             cg_obj,
             knowledge,
             _var_names_orig,
@@ -1105,6 +1148,8 @@ def cdnots_discovery(
             df=_df_orig,
             verbose=verbose,
         )
+    else:
+        _anc_violations = None
 
     # CDNOTS keeps unoriented lag-0 edges (o-o -> symmetric 1s). CDNOTS+
     # drops them; see finish_cdnots_plus. Both defaults are deliberate --
@@ -1135,6 +1180,8 @@ def cdnots_discovery(
         c_node_names=_c_node_names,
         undirected_policy="bidirected",
     )
+    result.ancestral_violations = _anc_violations
+    _report_ancestral_violations(_anc_violations)
 
     if return_pvals:
         return result, cg_tig, pvals
@@ -1211,7 +1258,9 @@ def run_cdnots(
     impute_kwargs : dict or None
         Extra kwargs for imputation.
     discrete_cols : list or None
-        Discrete column names (auto-detected if None).
+        Discrete column names (auto-detected if None; ``[]`` opts out). A CI
+        test that cannot handle discrete columns is wrapped in
+        ``StratifiedCIT``.
     background_knowledge : BackgroundKnowledge or None
         Domain constraints (forbidden/required edges).
     lag_verify : bool
@@ -1356,7 +1405,9 @@ def run_cdnots_plus(
     impute_kwargs : dict or None
         Extra kwargs for imputation.
     discrete_cols : list or None
-        Discrete column names (auto-detected if None).
+        Discrete column names (auto-detected if None; ``[]`` opts out). A CI
+        test that cannot handle discrete columns is wrapped in
+        ``StratifiedCIT``.
     background_knowledge : BackgroundKnowledge or None
         Domain constraints (forbidden/required edges).
     lag_verify : bool
@@ -1501,8 +1552,7 @@ def run_cdnots_plus(
                 f"addback_alpha / veto_alpha need an integer num_lags >= 1, got "
                 f"{num_lags!r}"
             )
-    if discrete_cols is None:
-        discrete_cols = _detect_discrete_cols(df, df.shape[0])
+    discrete_cols, indep_test = _resolve_discrete(df, indep_test, discrete_cols)
 
     _IMPUTE_CHOICES = {None, "pairwise_complete", "var_em", "causal_iterative"}
     impute_kwargs = impute_kwargs or {}
@@ -1718,6 +1768,7 @@ def run_cdnots_plus(
         include_C=include_C,
         num_c_cols=num_c_cols,
         background_knowledge=background_knowledge,
+        forbidden_ancestor_pairs=_forb_ancestor_pairs,
     )
 
     def _collide(cg, parents):
@@ -1787,10 +1838,11 @@ def run_cdnots_plus(
         parent_pos = {}  # (cause, effect, lag) -> its index in parents_ref, or None
         last_p = {}  # (cause, effect, lag) -> p of its latest test
         M0 = np.array(state.pvalue_matrix, dtype=float, copy=True)
+        state.discovery_pvalue_matrix = M0
         converged = None  # finished result of the pass that changed nothing
         for _ in range(_REFINE_PASSES):
             tested = {}
-            finished = finish_cdnots_plus(state)
+            finished = finish_cdnots_plus(state, _report=False)
             changes = _lag_refine_step(
                 # modified in place; finished may be returned as converged
                 deepcopy(finished.graph),
@@ -1884,6 +1936,8 @@ def run_cdnots_plus(
             # fields, so skip the second orientation tail.
             converged.pvalue_matrix = state.pvalue_matrix
             converged.lag_refinements = state.lag_refinements
+            _reconcile_lag_refinements(converged, M0, num_lags)
+            _report_ancestral_violations(converged.ancestral_violations)
             return converged
     if return_prefix:
         # Caller may evaluate several orientation settings against this one
@@ -2210,12 +2264,13 @@ class CdnotsPlusPrefix:
     lag_refinements: object = None
     refined_orient_margin: object = None
     refined_lag0_orient: object = None
+    discovery_pvalue_matrix: object = None
 
 
 _UNSET = object()
 
 
-def finish_cdnots_plus(state, orient_margin=None, lag0_orient=_UNSET):
+def finish_cdnots_plus(state, orient_margin=None, lag0_orient=_UNSET, _report=True):
     """Run the orientation tail of CDNOTS+ on a :class:`CdnotsPlusPrefix`.
 
     Meek rules -> nonstationarity orientation -> (optional) lag-0 orientation
@@ -2282,10 +2337,11 @@ def finish_cdnots_plus(state, orient_margin=None, lag0_orient=_UNSET):
         forbidden_ancestor_pairs=state.forbidden_ancestor_pairs,
     )
     knowledge = state.knowledge
+    anc_violations = None
     if knowledge is not None and knowledge.has_path_constraints:
         from .ancestral import apply_ancestral_constraints
 
-        cg_obj, _ = apply_ancestral_constraints(
+        cg_obj, anc_violations = apply_ancestral_constraints(
             cg_obj,
             knowledge,
             state.var_names_orig,
@@ -2361,4 +2417,75 @@ def finish_cdnots_plus(state, orient_margin=None, lag0_orient=_UNSET):
             d["effect_name"] = names[d["effect"]]
     result.lag0_orientations = lag0_decisions
     result.lag_refinements = state.lag_refinements
+    result.ancestral_violations = anc_violations
+    _reconcile_lag_refinements(result, state.discovery_pvalue_matrix, num_lags)
+    if _report:
+        _report_ancestral_violations(anc_violations)
     return result
+
+
+def _reconcile_lag_refinements(result, discovery_pvalue_matrix, num_lags):
+    """Drop refinement changes the finished graph does not show.
+
+    Ancestral cleanup runs after the refinement and can remove a link it
+    added (or, re-orienting, bring back one it removed). Such a change is not
+    in the result, so it leaves ``lag_refinements`` and the link's p-value
+    goes back to the discovery one.
+    """
+    changes = result.lag_refinements
+    if not changes:
+        return
+    g = result.graph.G.graph
+    n_inst = g.shape[0] // (num_lags + 1)
+    pv = np.array(result.pvalue_matrix, dtype=float, copy=True)
+    kept, unknown = [], []
+    for ch in changes:
+        key = (ch["cause"], ch["effect"], ch["lag"])
+        present = g[ch["cause"] + ch["lag"] * n_inst, ch["effect"]] != 0
+        if present == (ch["action"] == "added"):
+            kept.append(ch)
+        elif discovery_pvalue_matrix is not None:
+            pv[key] = discovery_pvalue_matrix[key]
+        else:
+            # A prefix pickled before it kept discovery p-values: the stale
+            # refinement p-value must not stay, and the right one is unknown.
+            pv[key] = np.nan
+            unknown.append(key)
+    if unknown:
+        warnings.warn(
+            f"the discovery p-value of {len(unknown)} link(s) whose refinement the "
+            "ancestral cleanup undid is unknown for this older prefix and was set "
+            "to NaN; recompute it with run_cdnots_plus(..., return_prefix=True)",
+            UserWarning,
+            stacklevel=external_stacklevel(),
+        )
+    result.lag_refinements = kept
+    result.pvalue_matrix = pv
+
+
+def _report_ancestral_violations(violations):
+    """Warn about path constraints the result does not satisfy."""
+    if not violations:
+        return
+    unmet = [f"required_ancestor{p}" for p in violations.get("required", ())]
+    unmet += [
+        f"forbidden_ancestor path {a} -> {d}"
+        for a, d in violations.get("forbidden", ())
+    ]
+    ignored = violations.get("ignored", ())
+    stacklevel = external_stacklevel()
+    if ignored:
+        warnings.warn(
+            "AncestralKnowledge constraint(s) name unknown variables and were "
+            "ignored: " + "; ".join(f"{k}({a}, {d})" for k, a, d in ignored),
+            UserWarning,
+            stacklevel=stacklevel,
+        )
+    if unmet:
+        warnings.warn(
+            "AncestralKnowledge constraint(s) not satisfied by the result: "
+            + "; ".join(unmet)
+            + ". See result.ancestral_violations.",
+            UserWarning,
+            stacklevel=stacklevel,
+        )

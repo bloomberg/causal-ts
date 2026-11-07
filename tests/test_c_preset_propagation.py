@@ -255,6 +255,44 @@ def test_run_ci_skeleton_honors_c_preset():
     assert skel.shape == (3, 3, 3)
 
 
+@pytest.mark.parametrize(
+    "include_C, c_preset, n_c", [(False, "linear", 0), (True, "linear+sin", 2)]
+)
+def test_run_ci_skeleton_passes_c_layout_to_skeleton_cnst(
+    monkeypatch, include_C, c_preset, n_c
+):
+    """skeleton_cnst got its defaults (one C column) whatever include_C was."""
+    import causalts.cdnots.skeleton_discovery as sd
+
+    seen = {}
+    real = sd.skeleton_cnst
+
+    def spy(cg, data, num_lags, include_C=True, num_c_cols=1):
+        seen.update(include_C=include_C, num_c_cols=num_c_cols)
+        return real(cg, data, num_lags, include_C=include_C, num_c_cols=num_c_cols)
+
+    monkeypatch.setattr(sd, "skeleton_cnst", spy)
+    gd.run_ci_skeleton(
+        _df(T=80, d=3), max_lag=1, include_C=include_C, c_preset=c_preset, verbose=False
+    )
+    assert seen == {"include_C": include_C, "num_c_cols": n_c}
+
+
+def test_run_ci_skeleton_without_c_keeps_last_variable_edges():
+    """With include_C=False the last real variable lost its lagged edges."""
+    rng = np.random.default_rng(0)
+    T = 500
+    x = np.zeros((T, 3))
+    e = rng.standard_normal((T, 3))
+    for t in range(1, T):
+        x[t, 0] = 0.5 * x[t - 1, 0] + e[t, 0]
+        x[t, 1] = 0.5 * x[t - 1, 1] + 0.8 * x[t - 1, 0] + e[t, 1]
+        x[t, 2] = 0.5 * x[t - 1, 2] + 0.8 * x[t - 1, 1] + e[t, 2]
+    df = pd.DataFrame(x, columns=["X", "Y", "Z"])
+    skel = gd.run_ci_skeleton(df, max_lag=1, include_C=False, verbose=False)
+    assert skel[1, 2, 1] and skel[2, 2, 1]
+
+
 # ---------------------------------------------------------------------------
 # discover_df: nothing silently dropped
 # ---------------------------------------------------------------------------

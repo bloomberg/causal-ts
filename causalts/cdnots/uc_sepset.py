@@ -674,6 +674,9 @@ def uc_sepset(
                 others,
                 n,
                 ignore=frozenset(ignore),
+                priority=priority,
+                order=[t for t in UT if t in live],
+                fixed=frozenset(fixed),
             )
             dropped = set(implicated) - keep
             if not dropped:
@@ -687,9 +690,10 @@ def uc_sepset(
                 if t in kept:
                     _orient_collider(*t)
         # Reached when no selection of lag-0 colliders removes the cycle: a
-        # cycle only in a lag copy, priority 0 or 2 resolving opposite arrows
-        # differently from the selection, or a cycle oriented before this
-        # step. Mark the arrows on a cycle this step oriented as conflicts.
+        # cycle only in a lag copy, a cycle oriented before this step, or (at
+        # priority 0/2) no acyclic selection, since dropping a collider can let
+        # a later one apply. Mark the arrows on a cycle this step oriented as
+        # conflicts.
         for i, j in sorted(_cycle_edges(_arrows(cg_new.G.graph), size) - fixed_all):
             cg_new.G.remove_edge(
                 cg_new.G.get_edge(cg_new.G.nodes[i], cg_new.G.nodes[j])
@@ -801,21 +805,59 @@ def _collider_arrows(t, n):
     return {(a, y) for a in (x, z) if a < n}
 
 
+def _orient_in_order(colliders, fixed, n, priority):
+    """Lag-0 arrows after orienting ``colliders`` in order, starting from the
+    arrows in ``fixed``, the way ``priority`` 0 (overwrite) or 2 (keep the
+    first orientation) does in :func:`uc_sepset`."""
+    head = {frozenset(a): a for a in fixed}  # pair -> (tail, head)
+    for x, y, z in colliders:
+        arms = [a for a in (x, z) if a < n]
+        if priority == 2 and any(head.get(frozenset((a, y))) == (y, a) for a in arms):
+            continue  # an arm already points out of y: the collider is skipped
+        for a in arms:
+            head[frozenset((a, y))] = (a, y)
+    return set(head.values())
+
+
 def _select_colliders(
-    candidates, weights, others, n, exact_limit=16, ignore=frozenset()
+    candidates,
+    weights,
+    others,
+    n,
+    exact_limit=16,
+    ignore=frozenset(),
+    priority=1,
+    order=(),
+    fixed=frozenset(),
 ):
     """Colliders kept from ``candidates`` when breaking lag-0 cycles.
 
     Finds the heaviest subsets (by summed ``weights``, tuples compared in
     order) whose arrows, with the arrows in ``others``, contain no directed
-    cycle, and returns the colliders in all of them. Opposite arrows on one
-    pair cancel out, as ``priority=1`` marks them a conflict. Arrows in
-    ``ignore`` (a cycle oriented before the collider step) never count,
+    cycle, and returns the colliders in all of them. With ``priority=1``
+    opposite arrows on one pair cancel out, as it marks them a conflict. With
+    ``priority`` 0 or 2 they do not: the colliders in ``order`` (every live
+    collider, in visiting order) are re-oriented from the arrows in ``fixed``
+    as that priority would, keeping only the candidates in the subset. Arrows
+    in ``ignore`` (a cycle oriented before the collider step) never count,
     whichever collider asserts them. Beyond ``exact_limit`` candidates the
-    search is greedy, heaviest first.
+    search is greedy, heaviest first. At priority 0/2, if no subset is
+    acyclic (dropping a collider can let a later one apply), every candidate
+    is kept, so the caller marks the cycle as a conflict instead; if the
+    colliders common to the best subsets are not acyclic, the first best
+    subset by node index is returned, so that rare case depends on variable
+    order.
     """
+    cand_set = set(candidates)
+    if priority in (0, 2) and not cand_set <= set(order):
+        raise ValueError("priority 0/2 needs every candidate in `order`")
 
     def acyclic(subset):
+        if priority in (0, 2):
+            sub = set(subset)
+            kept = [t for t in order if t not in cand_set or t in sub]
+            arrows = _orient_in_order(kept, fixed, n, priority) - ignore
+            return not _cycle_edges(arrows, n)
         arrows = set(others)
         for t in subset:
             arrows |= _collider_arrows(t, n)
@@ -826,11 +868,16 @@ def _select_colliders(
         return tuple(round(sum(c), 9) for c in zip(*(weights[t] for t in subset)))
 
     cands = sorted(candidates)
+    # Priority 0/2 only: with nothing acyclic, keep every candidate. Priority 1
+    # keeps its earlier behaviour (drop them all), so CDNOTS+ is unchanged.
+    none_acyclic = set(cands) if priority in (0, 2) else set()
     if len(cands) > exact_limit:
         keep = []
         for t in sorted(cands, key=lambda t: weights[t], reverse=True):
             if acyclic(keep + [t]):
                 keep.append(t)
+        if not keep and not acyclic([]):
+            return none_acyclic
         return set(keep)
     zero = (0.0,) * len(next(iter(weights.values()), ()))
     subsets = sorted(
@@ -849,7 +896,15 @@ def _select_colliders(
         if acyclic(sub):
             best = tot
             keep = set(sub) if keep is None else keep & set(sub)
-    return keep or set()
+    if keep is None:
+        return none_acyclic
+    if priority in (0, 2) and not acyclic(keep):
+        # Dropping a collider can let a later one apply, so the colliders
+        # common to every best subset need not be acyclic. Keep the first
+        # tied subset (smallest node indices): this tie-break depends on
+        # variable order, but dropping them all would lose true edges.
+        return next(set(sub) for tot, sub in subsets if tot == best and acyclic(sub))
+    return keep
 
 
 def maxp(

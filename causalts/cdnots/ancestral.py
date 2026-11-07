@@ -255,7 +255,12 @@ class AncestralKnowledge:
 
 
 def _semi_directed_bfs(
-    cg, start: int, end: int, exclude_nodes: set | None = None
+    cg,
+    start: int,
+    end: int,
+    exclude_nodes: set | None = None,
+    background_knowledge=None,
+    n_per_lag: int | None = None,
 ) -> list[int] | None:
     """Find shortest semi-directed path from *start* to *end* in *cg*.
 
@@ -269,6 +274,13 @@ def _semi_directed_bfs(
         Node indices that must not appear as INTERMEDIATE nodes (they can
         still be the start or end).  Used to block autoregressive stepping
         stones through past copies of the descendant variable.
+    background_knowledge : BackgroundKnowledge, optional
+        An undirected edge is not followed in a direction it forbids (or
+        whose reverse it requires): the caller orients the path's edges along
+        it. A one-sided lag-0 forbid keeps such an edge in the graph.
+    n_per_lag : int, optional
+        Nodes per lag slice, to check knowledge at the lag-0 anchor of a
+        time-shifted pair as well.
     """
     n = cg.G.num_vars
     if start == end:
@@ -287,12 +299,37 @@ def _semi_directed_bfs(
             if nxt != end and exclude_nodes and nxt in exclude_nodes:
                 continue
             # Can we traverse current → nxt?
-            if cg.is_undirected(current, nxt) or cg.is_fully_directed(current, nxt):
+            if (
+                cg.is_undirected(current, nxt)
+                and _knowledge_allows(cg, current, nxt, background_knowledge, n_per_lag)
+            ) or cg.is_fully_directed(current, nxt):
                 if nxt == end:
                     return path + [nxt]
                 visited.add(nxt)
                 queue.append(path + [nxt])
     return None
+
+
+def _knowledge_allows(
+    cg, x: int, y: int, background_knowledge, n_per_lag: int | None = None
+) -> bool:
+    """Whether background knowledge allows orienting x -> y.
+
+    With ``n_per_lag`` the pair's shallowest shift-class copy is checked too:
+    ``make_background_knowledge`` anchors edge knowledge there.
+    """
+    if background_knowledge is None:
+        return True
+    pairs = {(x, y)}
+    if n_per_lag:
+        shift = min(x, y) // n_per_lag * n_per_lag
+        pairs.add((x - shift, y - shift))
+    nodes = cg.G.nodes
+    return not any(
+        background_knowledge.is_forbidden(nodes[a], nodes[b])
+        or background_knowledge.is_required(nodes[b], nodes[a])
+        for a, b in pairs
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +375,10 @@ def apply_ancestral_constraints(
     Called after the full CDNOTS orientation pipeline (uc_sepset + Meek +
     Phase 3).  Returns ``(cg, violations)`` where *violations* is a dict
     with ``"required"`` and ``"forbidden"`` lists of (ancestor, descendant)
-    name pairs that could not be satisfied.
+    name pairs that could not be satisfied, and ``"ignored"``: the
+    ``(kind, ancestor, descendant)`` constraints naming unknown variables.
+    ``run_cdnots`` / ``run_cdnots_plus`` put it on
+    ``result.ancestral_violations`` and warn about unsatisfied ones.
 
     Required ancestors
     ------------------
@@ -370,10 +410,20 @@ def apply_ancestral_constraints(
             stacklevel=3,
         )
 
-    violations = {"required": [], "forbidden": []}
+    violations = {"required": [], "forbidden": [], "ignored": []}
 
     if not knowledge.has_path_constraints:
         return cg, violations
+
+    # A constraint naming a variable the data does not have cannot be enforced;
+    # it used to be skipped without a word. The callers warn about it.
+    for kind, pairs in (
+        ("required_ancestor", knowledge._required_ancestors),
+        ("forbidden_ancestor", knowledge._forbidden_ancestors),
+    ):
+        for a, d in pairs:
+            if a not in var_names or d not in var_names:
+                violations["ignored"].append((kind, a, d))
 
     n = cg.G.num_vars
     n_per_lag = len(var_names) + count_c_cols(include_C, num_c_cols)
@@ -483,7 +533,14 @@ def apply_ancestral_constraints(
             a_idx = var_names.index(anc_name) + lag * n_per_lag
             if a_idx >= n:
                 continue
-            path = _semi_directed_bfs(cg, a_idx, d_idx, exclude_nodes=exclude_desc_lags)
+            path = _semi_directed_bfs(
+                cg,
+                a_idx,
+                d_idx,
+                exclude_nodes=exclude_desc_lags,
+                background_knowledge=background_knowledge,
+                n_per_lag=n_per_lag,
+            )
             if path is not None:
                 for k in range(len(path) - 1):
                     xi, xj = path[k], path[k + 1]
@@ -514,7 +571,12 @@ def apply_ancestral_constraints(
                     if nb != a_idx_best
                     and nb not in exclude_desc_lags
                     and (
-                        cg.is_undirected(a_idx_best, nb)
+                        (
+                            cg.is_undirected(a_idx_best, nb)
+                            and _knowledge_allows(
+                                cg, a_idx_best, nb, background_knowledge, n_per_lag
+                            )
+                        )
                         or cg.is_fully_directed(a_idx_best, nb)
                     )
                 ]
@@ -522,7 +584,12 @@ def apply_ancestral_constraints(
                     nb
                     for nb in neighbors_of_a
                     if _semi_directed_bfs(
-                        cg, nb, d_idx, exclude_nodes=exclude_desc_lags
+                        cg,
+                        nb,
+                        d_idx,
+                        exclude_nodes=exclude_desc_lags,
+                        background_knowledge=background_knowledge,
+                        n_per_lag=n_per_lag,
                     )
                     is not None
                 ]
@@ -579,8 +646,7 @@ def apply_ancestral_constraints(
                             f"{_var_label(a_idx_best)} → {_var_label(d_idx)} "
                             f"(required_ancestor, no bridge, lag={best_k})"
                         )
-                else:
-                    violations["required"].append((anc_name, desc_name))
+                # else: no copy of the ancestor; the final check below reports it.
 
     # Re-run Meek to propagate required_ancestor orientations
     if oriented_any:
@@ -899,7 +965,16 @@ def apply_ancestral_constraints(
 
     _print_cut_log()
 
-    # Post-hoc violation check: report any remaining paths
+    # Post-hoc violation check against the final graph: a later constraint,
+    # a cut or Meek can undo a required ancestor that held when it was handled.
+    satisfied = _satisfied_required_ancestors()
+    violations["required"] = list(
+        dict.fromkeys(
+            (a, d)
+            for a, d in knowledge._required_ancestors
+            if a in var_names and d in var_names and (a, d) not in satisfied
+        )
+    )
     for a_idx, d_idx in forb_pairs:
         if a_idx >= n or d_idx >= n:
             continue

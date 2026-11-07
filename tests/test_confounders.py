@@ -7,8 +7,7 @@ Covers the public API of :mod:`causalts.confounders` (``run_lucid``, ``LucidResu
 ``routed_deconfound``, the post-hoc ``deconfound`` layer and the standalone filters),
 the result-object methods on :class:`causalts.result.CausalResult`, plus the
 ``apply_confounding`` synthetic-data helper.
-Kept CPU-fast and seed-fixed; numeric performance claims live in
-``experiments/confounders`` (the paper's reproducibility harness), not here.
+Kept CPU-fast and seed-fixed; numeric performance claims are not tested here.
 """
 
 import numpy as np

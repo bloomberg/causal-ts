@@ -847,6 +847,22 @@ def mci_skeleton(
     all_val_min = {}  # {j: {p: min |stat|}}
     all_base_j = {}  # {j: base lagged conditions for Y}
 
+    # Pairs forbidden in both directions go before any test, as in
+    # skeleton_discovery. Phase 1 screens only lagged and C parents, so a
+    # contemporaneous pair would otherwise survive and condition other tests.
+    # A pair whose shift class holds a required copy stays: remove_edge would
+    # delete that copy too.
+    if background_knowledge is not None:
+        nodes = cg.G.nodes
+        for j in range(no_of_inst_var):
+            for p in list(cg.neighbors(j)):
+                if (
+                    background_knowledge.is_forbidden(nodes[p], nodes[j])
+                    and background_knowledge.is_forbidden(nodes[j], nodes[p])
+                    and not is_required(p, j)
+                ):
+                    remove_edge(p, j)
+
     for j in range(no_of_inst_var):
         if _is_c_node(j):
             continue
@@ -1203,7 +1219,12 @@ def _remove_forbidden_c_edge(cg, c_idx, c_node, x_node):
 
 
 def c_lag_cnst(
-    cgg, num_lags=0, include_C=True, num_c_cols=1, background_knowledge=None
+    cgg,
+    num_lags=0,
+    include_C=True,
+    num_c_cols=1,
+    background_knowledge=None,
+    forbidden_ancestor_pairs=None,
 ):
     """Adjust the causal graph by orienting edges based on lagged variables.
 
@@ -1219,7 +1240,11 @@ def c_lag_cnst(
         Number of C columns (nonstationarity indicators). Default 1.
     background_knowledge : BackgroundKnowledge, optional
         C can only be a cause, so a C - X edge whose C -> X is forbidden (and
-        not required) is removed instead of oriented.
+        not required) is removed instead of oriented. Same-slice edges the
+        knowledge decides are oriented (see :func:`_orient_by_knowledge`).
+    forbidden_ancestor_pairs : list, optional
+        Resolved forbidden-ancestor pairs; a knowledge orientation that would
+        complete one of these paths is skipped, as in Meek.
 
     Returns
     -------
@@ -1264,4 +1289,92 @@ def c_lag_cnst(
                             cg.G.nodes[j],
                             cg.G.nodes[i],
                         )
+    if background_knowledge is not None:
+        _orient_by_knowledge(
+            cg,
+            background_knowledge,
+            num_lags,
+            num_of_inst_vars,
+            forbidden_ancestor_pairs,
+        )
     return cg
+
+
+def _orient_by_knowledge(
+    cg, background_knowledge, num_lags, num_of_inst_vars, forbidden_ancestor_pairs=None
+):
+    """Orient the same-slice edges background knowledge decides, with lag copies.
+
+    An undirected x - y becomes x -> y when x -> y is required or y -> x is
+    forbidden (and the knowledge does not also point the other way), as in
+    causal-learn's ``orient_by_background_knowledge`` after the PC skeleton.
+    Without this a required contemporaneous edge stayed unoriented: the later
+    steps only refuse the opposite direction. The orientation is copied onto
+    the time-shifted pairs later in the window where ``lag_copy_allowed``
+    permits, as Meek does. Like Meek, it skips an orientation that would
+    complete a forbidden-ancestor path. Required edges are oriented first; an
+    orientation implied only by a forbid is skipped if it would close a
+    directed cycle (possible when the skeleton keeps an extra adjacency).
+    """
+    from .meek import (
+        completes_forbidden_path,
+        lag_copy_allowed,
+        reaches,
+        rebuild_dpath,
+    )
+
+    nodes = cg.G.nodes
+
+    def _points(a, b):
+        return background_knowledge.is_required(
+            nodes[a], nodes[b]
+        ) or background_knowledge.is_forbidden(nodes[b], nodes[a])
+
+    # One decision per shift class, from its shallowest slice the knowledge
+    # decides, applied from the class's lag-0 copy (the one cg_tig reports)
+    # down the window, so every slice gets the same direction. Raw knowledge
+    # may name only deeper nodes; lag_copy_allowed gates each copy.
+    decided, seen = [], set()
+    for t in range(num_lags + 1):
+        lo = t * num_of_inst_vars
+        for x in range(lo, lo + num_of_inst_vars):
+            for y in range(lo, lo + num_of_inst_vars):
+                if x == y or not cg.is_undirected(x, y):
+                    continue
+                if (x - lo, y - lo) in seen:
+                    continue
+                if _points(x, y) and not _points(y, x):
+                    seen.add((x - lo, y - lo))
+                    req = background_knowledge.is_required(nodes[x], nodes[y])
+                    decided.append((x - lo, y - lo, req))
+    # Required edges first, so a forbid-implied orientation sees them below.
+    decided.sort(key=lambda e: not e[2])
+    for x, y, _ in decided:
+        k = 0
+        while y + k * num_of_inst_vars < cg.G.num_vars:
+            cx, cy = x + k * num_of_inst_vars, y + k * num_of_inst_vars
+            if (
+                cg.is_undirected(cx, cy)
+                and lag_copy_allowed(cg, cx, cy, background_knowledge)
+                and (
+                    # An exactly required edge is oriented regardless; the
+                    # ancestral cleanup cuts a non-required hop if needed.
+                    background_knowledge.is_required(nodes[cx], nodes[cy])
+                    or not (
+                        reaches(cg.G.graph, cy, cx)
+                        or completes_forbidden_path(
+                            cg.G.graph, cx, cy, forbidden_ancestor_pairs
+                        )
+                    )
+                )
+            ):
+                cg.G.graph[cx, cy] = -1
+                cg.G.graph[cy, cx] = 1
+            else:
+                # A refused pair (or one already oriented, with its copies)
+                # ends the copying: going on would give deeper slices a
+                # direction a shallower one lacks, breaking time invariance.
+                break
+            k += 1
+    if decided:
+        rebuild_dpath(cg)  # the direct writes above bypass GeneralGraph's cache
