@@ -131,6 +131,80 @@ def test_select_colliders_unit():
     }
 
 
+def test_select_colliders_models_priority_2():
+    """Priority 2 keeps the first orientation; opposite arrows do not cancel
+    (they did, as for priority 1, so every collider was kept and the cycle
+    was then marked x-x, dropping its true edges)."""
+    w = {(0, 1, 3): (0.5, 0.0), (1, 2, 4): (0.5, 0.0), (2, 0, 5): (0.2, 0.0)}
+    order = sorted(w)
+    # 0 -> 1 -> 2 -> 0: priority 2 must drop the weakest collider.
+    assert _select_colliders(list(w), w, set(), 6, priority=2, order=order) == {
+        (0, 1, 3),
+        (1, 2, 4),
+    }
+    # With a fixed 2 -> 0, either 0.5 collider closes the cycle with the other:
+    # equal evidence drops both.
+    assert _select_colliders(
+        list(w), w, set(), 6, priority=2, order=order, fixed={(2, 0)}
+    ) == {(2, 0, 5)}
+
+
+def test_select_colliders_keeps_all_when_no_subset_is_acyclic():
+    """At priority 2 dropping a collider can let a later one apply: here A
+    closes 1 -> 0 -> 3 -> 1, and without A, B closes 0 -> 1 -> 2 -> 0. No
+    selection helps, so every candidate is kept and the cycle is marked x-x."""
+    a, b = (1, 0, 5), (0, 1, 4)
+    fixed = {(1, 2), (2, 0), (0, 3), (3, 1)}
+    keep = _select_colliders(
+        [a], {a: (0.5, 0.0)}, set(), 6, priority=2, order=[a, b], fixed=fixed
+    )
+    assert keep == {a}
+    greedy = _select_colliders(
+        [a],
+        {a: (0.5, 0.0)},
+        set(),
+        6,
+        exact_limit=0,
+        priority=2,
+        order=[a, b],
+        fixed=fixed,
+    )
+    assert greedy == {a}
+    # Greedy, empty set cyclic (B alone closes 0 -> 1 -> 2 -> 0): keeping A
+    # blocks B, so A is kept and the heavier C (2 -> 3 -> 1 -> 2) is dropped.
+    c = (2, 3, 5)
+    w = {a: (0.5, 0.0), c: (0.6, 0.0)}
+    fixed2 = {(1, 2), (2, 0), (3, 1)}
+    assert _select_colliders(
+        [a, c], w, set(), 6, exact_limit=0, priority=2, order=[a, b, c], fixed=fixed2
+    ) == {a}
+    with pytest.raises(ValueError, match="order"):
+        _select_colliders([a], {a: (0.5, 0.0)}, set(), 6, priority=2)
+
+
+def test_select_colliders_tied_intersection_must_be_acyclic():
+    """Either tied collider alone blocks B, but dropping both lets B close
+    0 -> 1 -> 2 -> 0: keep one best subset, not their (cyclic) intersection."""
+    a1, a2, b = (1, 0, 3), (1, 5, 4), (0, 1, 5)
+    w = {a1: (0.5, 0.0), a2: (0.5, 0.0)}
+    fixed = {(1, 2), (2, 0), (0, 4), (5, 3)}
+    keep = _select_colliders(
+        [a1, a2], w, set(), 6, priority=2, order=[a1, a2, b], fixed=fixed
+    )
+    assert keep in ({a1}, {a2})
+
+
+def test_select_colliders_priority_0_overwrites():
+    """Priority 0 lets the later collider C overwrite 1 -> 0 and close
+    0 -> 1 -> 2 -> 0, so C is dropped; priority 2 skips C, so C stays."""
+    e, c = (1, 0, 4), (0, 1, 5)
+    w = {c: (0.5, 0.0)}
+    fixed = {(1, 2), (2, 0)}
+    kw = dict(order=[e, c], fixed=fixed)
+    assert _select_colliders([c], w, set(), 6, priority=0, **kw) == set()
+    assert _select_colliders([c], w, set(), 6, priority=2, **kw) == {c}
+
+
 def test_a_cycle_oriented_before_the_collider_step_warns():
     cg = initialize_graph(np.zeros((20, 3)), None)
     for a, b in [(0, 1), (1, 2), (2, 0)]:

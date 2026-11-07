@@ -1645,10 +1645,12 @@ def run_ci_skeleton(
     ci_test = ci_test_class(ci_data, cache_dir=cache_dir, data_hash=data_hash)
 
     # Add the C nonstationarity basis if requested
+    num_c_cols = 0
     if include_C:
         from ..cdnots.phase3_utils import _C_PRESET_LABELS, make_c_array
 
         C_data = make_c_array(df_input.shape[0], c_preset)
+        num_c_cols = C_data.shape[1]
         C = pd.DataFrame(
             C_data,
             columns=_C_PRESET_LABELS.get(
@@ -1667,7 +1669,9 @@ def run_ci_skeleton(
 
     # Run skeleton discovery
     cg_i = initialize_graph(data, None)
-    cg_i_cnst = skeleton_cnst(cg_i, data, max_lag)
+    cg_i_cnst = skeleton_cnst(
+        cg_i, data, max_lag, include_C=include_C, num_c_cols=num_c_cols
+    )
     cg_skel, pvals = skeleton_discovery(
         cg=cg_i_cnst,
         ci_test=ci_test,

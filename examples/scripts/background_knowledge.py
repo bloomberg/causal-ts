@@ -24,7 +24,7 @@
 #
 # | Constraint | Level | Enforced at | Mechanism |
 # |------------|-------|-------------|-----------|
-# | **Forbidden edge** | Direct (path length 1) | Skeleton phase | Removes the specific edge before CI testing begins |
+# | **Forbidden edge** | Direct (path length 1) | Skeleton phase | Removes the specific edge before CI testing begins (a lag-0 forbid is one-sided: the reverse stays allowed, so forbid both directions to remove a lag-0 adjacency) |
 # | **Required edge** | Direct (path length 1) | Skeleton phase | Skips CI testing — edge is always kept in skeleton |
 # | **Required ancestor** | Path (any length) | Post-orientation | (1) Orient undirected edges on existing semi-directed path; (2) bridge via best-correlated skeleton neighbor; (3) force-add direct edge at AR-residualized best lag |
 # | **Forbidden ancestor** | Path (any length) | Post-orientation + Meek | Remove direct A→D edges + all lag-shifted copies; remove last-hop Y→D for surviving multi-hop paths; block new Meek orientations that would recreate the path |
@@ -105,6 +105,8 @@ for c, e, l in fns:
 # %%
 # Forbid all false positives identified above
 forbidden_edges = [(var_names[c], var_names[e], int(l), 0) for c, e, l in fps]
+# A lag-0 forbid is one-sided, so also forbid the reverse to remove the adjacency
+forbidden_edges += [(var_names[e], var_names[c], 0, 0) for c, e, l in fps if l == 0]
 print("Forbidding:", forbidden_edges)
 
 bk = _res.make_background_knowledge(
@@ -521,7 +523,9 @@ plt.show()
 # ```
 #
 # Enforced during **skeleton discovery**: forbidden edges are removed before CI
-# testing; required edges skip CI testing and are always kept.
+# testing; required edges skip CI testing and are always kept. A lag-0 forbid is
+# one-sided: the reverse direction stays allowed and a kept adjacency is oriented
+# away from the forbidden direction, so forbid both directions to remove it.
 #
 # ### Part 2 — Path constraints (`AncestralKnowledge`, post-orientation)
 #
@@ -539,7 +543,7 @@ plt.show()
 #
 # | Constraint | When enforced | What it does |
 # |---|---|---|
-# | `add_forbidden_edge` | Skeleton (pre-CI) | Removes the specific direct edge before CI testing |
+# | `add_forbidden_edge` | Skeleton (pre-CI) | Removes the specific direct edge before CI testing (lag 0: one-sided, see above) |
 # | `add_required_edge` | Skeleton (pre-CI) | Keeps the specific direct edge regardless of CI result |
 # | `add_required_ancestor(A, D)` | Post-orientation | Orients skeleton path / bridges via neighbor / force-adds at AR-residualized best lag |
 # | `add_forbidden_ancestor(A, D)` | Post-orientation + Meek | Removes direct + lag-shifted A→D edges; last-hop Y→D for multi-hop paths; blocks Meek re-creation |

@@ -160,12 +160,35 @@ class CMIknnMixedGPU(CMIknnGPU):
 
     def __init__(self, data, discrete_cols, device=None, **kwargs):
         super().__init__(data=data, device=device, **kwargs)
-        self.discrete_cols = list(discrete_cols)
-        self._disc_global = set(discrete_cols)
+        self.discrete_cols = discrete_cols
         # Stores the global column sequence [X_cols, Y_cols, Z_cols] for the
         # current __call__ invocation; used by _cmi_estimate to remap subspaces
         self._current_global_cols = []
         self._query_disc = True
+
+    @property
+    def discrete_cols(self):
+        return sorted(self._disc_global)
+
+    @discrete_cols.setter
+    def discrete_cols(self, cols):
+        self._disc_global = set(int(c) for c in cols)
+
+    def _get_array_hash(self, X, Y, Z):
+        """Cache key: the columns plus which of them are discrete.
+
+        The estimate depends on the discrete flags of the tested columns, so a
+        result computed under another configuration (``discrete_cols`` or
+        ``_disc_global`` changed on a live object) must not be reused. With no
+        discrete column in the test the key is ``CMIknnGPU``'s: the estimate then
+        is ``CMIknnGPU``'s too.
+        """
+        key = super()._get_array_hash(X, Y, Z)
+        cols = [X] if isinstance(X, (int, np.integer)) else list(X)
+        cols += [Y] if isinstance(Y, (int, np.integer)) else list(Y)
+        cols += [] if Z is None else list(Z)
+        disc = sorted({int(c) for c in cols if int(c) in self._disc_global})
+        return f"{key}|disc{disc}" if disc else key
 
     def __call__(self, X, Y, condition_set=None):
         """Override to record the global column ordering before CMI estimation."""

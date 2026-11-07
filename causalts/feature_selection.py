@@ -37,10 +37,6 @@ Backends (choose with ``algo``):
   MCI / Phase-3). lag>=1 = parent, lag-0 = ``undirected``.
 * ``"cdnots"`` — the real CDNOTS algorithm run once and sliced to the target;
   O(d²) but faithfully oriented (parent / child / ``undirected`` from the CPDAG).
-
-See ``experiments/feature_selection/FINDINGS.md`` for the validation that the
-O(d) backends beat Lasso / correlation-top-k on direct-cause precision and reach
-predictive parity once self-history is included.
 """
 
 from __future__ import annotations

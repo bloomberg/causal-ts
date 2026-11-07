@@ -98,6 +98,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+* `run_cdnots_plus` wraps a discrete-unaware CI test in `StratifiedCIT`, as `run_cdnots`
+  does, and neither wraps `chisq` / `gsquared`; output changes when discrete columns are
+  detected (`discrete_cols=[]` keeps the old behaviour).
+* A one-sided lag-0 forbid in CDNOTS / CDNOTS+ background knowledge no longer removes the
+  adjacency; forbid both directions to remove it.
 * `recommend_config`: discovery is always CDNOTS (the d>20 → GRACE rule is gone). CI
   test: `cmiknn-mixed-gpu` for discrete columns, `rcot` when variance-only parents are
   detected, `raft` for nonlinear and `parcorr-gpu` for linear data. Refinement: GRACE
@@ -154,6 +159,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* CDNOTS / CDNOTS+: required lag-0 edges are oriented, and CDNOTS+ removes lag-0 edges
+  forbidden in both directions.
+* CDNOTS (default collider priority): breaking a lag-0 collider cycle no longer drops the
+  cycle's true edges; `run_cdnots` output changes when such a cycle occurs.
+* CDNOTS / CDNOTS+ report unsatisfied ancestral constraints in `ancestral_violations`;
+  CDNOTS+ `lag_refinements` no longer lists changes the ancestral cleanup undid.
+* `StratifiedCIT` and `CMIknnMixedGPU`: lag structure, missing discrete values and cache
+  keys; `run_cdnots` output changes with discrete columns plus NaNs or a lag-aware test.
+* GRACE `run_ci_skeleton(include_C=False)` no longer treats the last variable as the C
+  node.
 * Removed the undeclared `six` import from the CI-test base class; a core-only install
   failed to import `ParCorr`, GRACE and REAP.
 * `CMIknnMixedGPU`: p = 1 for strong dependence in small discrete strata; a

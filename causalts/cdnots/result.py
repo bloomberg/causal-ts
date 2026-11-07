@@ -55,11 +55,22 @@ class CdnotsResult(CausalResult):
         links: ``cause`` / ``effect`` (indices), ``cause_name`` /
         ``effect_name``, ``lag``, ``action`` (``"added"`` or ``"removed"``)
         and ``p`` (its latest refinement p-value). None when the step did
-        not run.
+        not run. Only changes the finished graph shows are listed.
+    ancestral_violations : dict | None
+        Path constraints (``AncestralKnowledge``) the result does not
+        satisfy. ``"required"``: ``(ancestor, descendant)`` variable names.
+        ``"forbidden"``: one ``(ancestor, descendant)`` pair per lag copy
+        that still reaches the descendant, with lag-labelled names, e.g.
+        ``("A(t-1)", "X")`` (``"A"`` for lag 0, ``"C0"`` for a C column),
+        so one constraint can give several entries. ``"ignored"``:
+        ``(kind, ancestor, descendant)`` constraints naming unknown
+        variables. A warning is raised when any is unsatisfied. None without
+        path constraints.
     """
 
     lag0_orientations = None  # also for results pickled before the field
     lag_refinements = None  # likewise
+    ancestral_violations = None  # likewise
 
     def __init__(
         self,

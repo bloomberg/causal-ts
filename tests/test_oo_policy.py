@@ -55,12 +55,12 @@ def _data(T=300, d=7, seed=0):
 
 def _run(fn, df, **kw):
     ci = ParCorrGPU(np.zeros((2, 2)), device="cpu")
+    kw = {"include_C": False, **kw}
     return fn(
         df,
         ci,
         num_lags=1,
         alpha=0.05,
-        include_C=False,
         verbose=False,
         show_progress=False,
         **kw,
@@ -130,11 +130,18 @@ def test_marks_preserve_lagged_and_c_edges():
     An endpoint-pair rule alone silently erases every one of them, so this
     pins that to_marks() agrees with cg_tig outside the lag-0 block.
     """
-    res = _run(run_cdnots, _data(), c_preset="linear")
+    df = _data()
+    df["X0"] += np.linspace(0, 3, len(df))  # a trend, so C has an edge
+    res = _run(run_cdnots, df, include_C=True, c_preset="linear")
     marks = res.to_marks()
     lagged = np.isin(marks[:, :, 1:], ["-->"]).astype(np.int8)
     assert np.array_equal(lagged, res.cg_tig[:, :, 1:])
     assert res.cg_tig[:, :, 1:].sum() > 0, "fixture produced no lagged edges"
+    c = res.cg_tig.shape[0] - 1
+    # An arrowhead into C is x-x in the marks and C -> X in cg_tig.
+    c_out = np.isin(marks[c, :, 0], ["-->", "x-x"])
+    assert np.array_equal(c_out, res.cg_tig[c, :, 0] == 1)
+    assert res.cg_tig[c, :, 0].sum() > 0, "fixture produced no C edges"
 
 
 def test_works_without_undirected_policy_attribute():
@@ -222,6 +229,63 @@ def test_conflict_policy_renders_x_x():
     assert cdnots_to_tigramite_marks(cg, **kw)[0, 1, 0] == "x-x"
     assert cdnots_to_tigramite_graph(cg, **kw)[0, 1, 0] == 0
     assert cdnots_to_tigramite_graph(cg, conflict="bidirected", **kw)[0, 1, 0] == 1
+
+
+def _planted_lagged_and_c():
+    """Three variables, one lag, plus one C column: rare endpoint states.
+
+    Nodes: 0-2 = X0-X2 (t), 3 = C(t), 4-6 = X0-X2 (t-1), 7 = C(t-1). Each
+    cross-variable lagged pair is used once, so its reciprocal cell is free.
+    """
+    from causalts.cdnots.skeleton_discovery import initialize_graph
+
+    cg = initialize_graph(np.zeros((10, 8)), None)
+    g = cg.G.graph
+    g[:, :] = 0
+    g[1, 4], g[4, 1] = 1, -1  # X0(t-1) -> X1(t), the normal lagged state
+    g[2, 5], g[5, 2] = -1, -1  # X1(t-1) o-o X2(t)
+    g[0, 6], g[6, 0] = 1, 1  # X2(t-1) x-x X0(t)
+    g[0, 4], g[4, 0] = -1, 1  # X0(t) -> X0(t-1), against time order
+    g[3, 0], g[0, 3] = 1, 1  # C x-x X0 at lag 0
+    g[3, 1], g[1, 3] = 1, -1  # X1 -> C at lag 0, impossible
+    return cg
+
+
+@pytest.mark.parametrize("undirected", ["drop", "bidirected"])
+@pytest.mark.parametrize("conflict", ["drop", "bidirected"])
+def test_rare_lagged_and_c_states_render_by_known_direction(undirected, conflict):
+    from causalts.tigramite_discovery import tigramite_graph_to_binary
+
+    cg = _planted_lagged_and_c()
+    kw = dict(num_lags=1, include_C=True, num_c_cols=1)
+    marks = cdnots_to_tigramite_marks(cg, **kw)
+    assert marks[0, 1, 1] == "-->"
+    assert marks[1, 2, 1] == "o-o"
+    assert marks[2, 0, 1] == "x-x"
+    assert marks[0, 0, 1] == "x-x"
+    assert marks[3, 0, 0] == "x-x" and marks[0, 3, 0] == "x-x"
+    assert marks[3, 1, 0] == "x-x" and marks[1, 3, 0] == "x-x"
+    assert (marks[:, :, 1] != "").sum() == 4
+
+    G = cdnots_to_tigramite_graph(cg, undirected=undirected, conflict=conflict, **kw)
+    assert set(np.unique(G)) <= {0, 1}
+    # Time order fixes a lagged edge's direction: the forward link, always,
+    # and never its reciprocal cell.
+    assert G[0, 1, 1] == G[1, 2, 1] == G[2, 0, 1] == G[0, 0, 1] == 1
+    assert G[1, 0, 1] == G[2, 1, 1] == G[0, 2, 1] == 0
+    assert G[:, :, 1].sum() == 4
+    # C has no parents: an arrowhead into C (conflict or X -> C) keeps
+    # C -> X, and shows X -> C too only under "bidirected".
+    assert G[3, 0, 0] == 1 and G[0, 3, 0] == (conflict == "bidirected")
+    assert G[3, 1, 0] == 1 and G[1, 3, 0] == (conflict == "bidirected")
+    # The marks binarise to the same graph, except that
+    # tigramite_graph_to_binary cannot know which node is C.
+    from_marks = tigramite_graph_to_binary(
+        marks, undirected=undirected, conflict=conflict
+    )
+    if conflict == "drop":
+        from_marks[3, 0, 0] = from_marks[3, 1, 0] = 1
+    assert np.array_equal(from_marks, G)
 
 
 # ----------------------------------------------------------------------
@@ -347,6 +411,17 @@ def test_cedar_and_grace_get_working_marks():
     # CEDAR is directed by construction: no o-o should appear.
     assert not (m == "o-o").any(), "CEDAR emitted a symmetric lag-0 pair"
     assert np.array_equal(np.isin(m, ["-->", "o-o"]).astype(np.int8), cres.cg_tig)
+
+
+def test_tigramite_lagged_reverse_marks_render_the_forward_link():
+    from causalts.tigramite_discovery import tigramite_graph_to_binary
+
+    marks = np.full((2, 2, 2), "", dtype="<U3")
+    marks[0, 1, 1] = "<--"
+    marks[1, 0, 0], marks[0, 1, 0] = "<--", "-->"
+    G = tigramite_graph_to_binary(marks)
+    assert G[0, 1, 1] == 1 and G[1, 0, 1] == 0
+    assert G[0, 1, 0] == 1 and G[1, 0, 0] == 0
 
 
 if __name__ == "__main__":

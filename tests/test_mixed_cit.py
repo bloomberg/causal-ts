@@ -375,3 +375,36 @@ def test_cmiknn_mixed_null_keeps_serial_dependence():
         )
         rej += ci(0, 1, [2])[0] < 0.05
     assert rej <= 4  # nominal 1 of 20; row-level shuffling rejected ~all
+
+
+def test_cmiknn_mixed_cache_follows_discrete_config():
+    """A cached p-value from another discrete configuration was reused."""
+    data = _make_independent_mixed(T=80, seed=1)
+    for attr in ("discrete_cols", "_disc_global"):
+        ci = CMIknnMixedGPU(data, discrete_cols=[2], device=DEVICE, sig_samples=20)
+        ci(0, 1, [2])
+        n = ci.n_actual_tests
+        setattr(ci, attr, [] if attr == "discrete_cols" else set())
+        ci(0, 1, [2])
+        # Recomputed: a cache hit returns the same pair without a new estimate.
+        assert ci.n_actual_tests == n + 1
+    # A numpy conditioning set keys the same way (np.array([2]) is not "empty").
+    ci = CMIknnMixedGPU(data, discrete_cols=[2], device=DEVICE, sig_samples=20)
+    ci(0, 1, np.array([2]))
+    n = ci.n_actual_tests
+    ci.discrete_cols = []
+    ci(0, 1, np.array([2]))
+    assert ci.n_actual_tests == n + 1
+    # discrete_cols and the set CDNOTS writes stay one configuration.
+    ci._disc_global = {2}
+    assert ci.discrete_cols == [2]
+
+
+def test_cmiknn_mixed_key_is_parents_without_discrete_columns():
+    """No discrete column tested: same estimate as CMIknnGPU, so the same key."""
+    from causalts.ci_tests.cmiknn_gpu import CMIknnGPU
+
+    data = _make_independent_mixed(T=80, seed=1)
+    ci = CMIknnMixedGPU(data, discrete_cols=[2], device=DEVICE)
+    assert ci._get_array_hash(0, 1, []) == CMIknnGPU._get_array_hash(ci, 0, 1, [])
+    assert ci._get_array_hash(0, 1, [2]) != CMIknnGPU._get_array_hash(ci, 0, 1, [2])
