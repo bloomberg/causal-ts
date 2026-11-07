@@ -721,13 +721,14 @@ print("\nLag-0 edges, no BK      :", lag0_edges(est_nc))
 print("Lag-0 edges, lag0 LiNGAM:", lag0_edges(est_lg))
 
 # %% [markdown]
-# None of the three runs recovers a wind→cloud edge: the same-station wind–cloud
-# adjacency is not found at lag 0 in either direction, so no orientation step can
-# help. The weak coupling is not detectable with partial correlation at
-# `alpha=0.01` on this sample.
+# Only the run with physics background knowledge recovers a wind→cloud edge, and
+# only one of the eight. In the other two runs the same-station wind–cloud adjacency
+# is not found at lag 0 in either direction, so no orientation step can help. The
+# weak coupling is mostly not detectable with partial correlation at `alpha=0.01`
+# on this sample.
 #
-# The physics background knowledge improves precision (0.833 → 0.893) and SHD
-# (18 → 16) at unchanged recall, by removing edges that point in a forbidden
+# The physics background knowledge improves precision (0.833 → 0.897), recall
+# (0.658 → 0.684) and SHD (18 → 15), by removing edges that point in a forbidden
 # direction. `lag0_orient="lingam"` orients four more contemporaneous edges
 # (two cloud→cloud and two wind→wind links), none of them in the ground truth, so
 # precision drops to 0.735. LiNGAM orientation relies on non-Gaussian noise and is
