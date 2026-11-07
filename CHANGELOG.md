@@ -9,338 +9,104 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.28.0]
+
 ### Added
 
-* `dowhy_latent_confounders` example notebook: latent confounding from discovery to DoWhy
-  effect estimates, with LUCID correction and exported DoWhy artifacts.
-* `check_variance_dependence` (`causalts.utils.heteroskedasticity`): detects lagged
-  variance-only parents, which mean-based tools (`raft`, `parcorr`, REAP) cannot see.
-  It feeds the `inspect` recommendation; its docstring gives the method and simulation
-  results.
-* `inspect_df` / `causal-ts inspect`: `facts["variance_dependence"]`, and
-  `recommendation["refine"]` / `["refine_params"]` for an optional REAP or GRACE
-  refinement step. `causalts.inspection.merge_lag0` adds the CDNOTS lag-0 edges to a
-  GRACE result.
-* `corr_table()` — APA-style correlation table (r, stars, M/SD, CI, footnote), prints via `_repr_html_`/`__repr__`.
-* `pairs_panel()` — scatterplot matrix (histogram+KDE diagonal, scatter+fit, correlation text), colorblind-safe palette.
-* CI tests `gcm`, `wgcm`, `pcm` (residual-score) and `raft`, `rift` (random-feature F-tests).
-* `ci_test_selection` example notebook: which CI test and α to use inside CDNOTS.
-* How an unoriented (`o-o`) contemporaneous edge is rendered is now a post-discovery choice, not a hardcoded one: `result.to_binary(undirected=, conflict=)`, the lossless `result.to_marks()`, `result.plot(undirected=)`, `result.undirected_policy`, and the same knobs on `cdnots_to_tigramite_graph()` / `tigramite_graph_to_binary()`. Engine defaults are unchanged — `cg_tig` is bit-identical. `evaluate_graph()` gains `*_lag0`, `*_lag0_adj` and `*_lagpos` metric groups.
-* `run_cdnots(collider_search="full"|"sepset")`: which conditioning sets the lag-0 collider
-  vote searches. `run_cdnots_plus(return_prefix=True)` + `finish_cdnots_plus()` reuse one
-  skeleton for several `orient_margin` values.
-* `run_grace` and `run_reap` (`causalts.run_grace`, `causalts.run_reap`), two refinements of a
-  directed candidate graph: any method's graph passed as `candidate_graph=`, or a CDNOTS graph
-  built on the data. GRACE refines it with neural Hard Concrete gates under an L0 penalty.
-  REAP refines it by a regression-based grow-shrink: per target, the weakest candidate parent is dropped while a
-  partial F-test on its natural-spline block (Huber-clipped residuals) says it adds nothing;
-  three grow rounds by default; optional lag-0 edges (`contemporaneous=True`, CDNOTS+ with the
-  lagged edges pinned) and an adaptive effect floor (`effect_floor="adaptive"`). Both call
-  `run_cdnots_gated(refine="gates" | "shrink")`. `reap` is a registered algorithm, and
-  `causal-ts discover --algorithm reap` is the same as `--algorithm grace --refine shrink`.
-* `run_lucid(pervasive_lagged="factor_adjusted")`: opt-in lagged edges from a
-  factor-adjusted partial correlation on the pervasive route.
-* GRACE stages and options on `run_grace` / `run_cdnots_gated` (CLI flags in parentheses):
-  grow rounds that test the lagged pairs outside the candidates, for an effect on the mean and
-  on the noise scale, and add the hits (`grow_rounds`, `grow_q`, `grow_transform`,
-  `grow_variance`, `grow_nuisance_basis`; `--grow-rounds`); an ungated autoregressive head
-  whose self-loops are kept by a partial F-test (`ar_path`, `self_loop_basis`; `--ar-path`);
-  a cutoff chosen from the gate values (`gate_threshold="auto" | "li"`); closed-form L0
-  strengths (`lambda_rule="xcorr" | "density" | "dT"`; `--lambda-rule`); a minimum edge effect
-  as an adjusted partial R² (`effect_floor`; `--effect-floor`); a rank transform
-  (`data_transform`) and a Student-t likelihood (`noise_model`). New `GraceResult` fields:
-  `candidate_graph`, `gate_threshold_rule`, `grow_history`, `effect_floor`, `n_effect_pruned`,
-  `effect_pruned`, `ar_path`, `lambda_rule`, `refine`, `edge_pvalue`, `edge_strength`,
-  `contemporaneous_result`.
-* `run_cdnots_plus(lag0_orient="lingam")`: orients contemporaneous edges that conditional
-  independence leaves undirected (`o-o`) or conflicting (`x-x`), which PCMCI+-style search
-  cannot do. Each such component's innovations are ordered by DirectLiNGAM, and an edge is
-  oriented only when the direction holds in at least 90% of bootstrap re-orderings, one
-  endpoint's innovations reject normality (p < 0.01), and it creates no unshielded
-  collider the CI step ruled out; Meek then propagates the new arrowheads. Decisions are
-  on `result.lag0_orientations`. Off by default. On held-out linear simulations (d 10–30,
-  ParCorr) it added +0.02 to +0.04 F1 under non-Gaussian noise when 60% of the true edges
-  are contemporaneous (+0.002 to +0.017 with a 0.3 share), and changed F1 on Gaussian
-  data by at most 0.0003 on average (0.0008 in any single cell). It assumes linear
-  mechanisms: on spline mechanisms with Laplace or Gaussian noise most of its orientations
-  were wrong (small F1 cost, SHD up to +0.75), though with uniform noise it still helped,
-  and on CausalRivers it left F1 unchanged while raising SHD by about 0.5. Discrete
-  columns are never oriented.
-* `run_cdnots_plus(addback_alpha=..., veto_alpha=..., alpha_mci=...)`: grow-then-prune
-  refinement of lagged links. After orientation, every absent lagged cross link is
-  re-tested with the MCI conditioning set (parents of both endpoints, the cause's shifted
-  by its lag, plus each endpoint's next lag) and added when `p < addback_alpha`; every
-  lagged link of the grown graph is then re-tested and removed when `p > veto_alpha`.
-  Phase 1 drops most missed lagged links at depth 0, where the target's own past masks
-  them. The graph is then re-oriented from the refined skeleton, repeating until a pass
-  changes nothing; a link changes together with its lag copies, within background
-  knowledge and ancestral constraints, and a test with too few complete rows changes
-  nothing. `alpha_mci` sets the phase 2 MCI level apart from `alpha`. Changes are on
-  `result.lag_refinements`, their p-values in `pvalue_matrix`. On held-out linear
-  simulations (ParCorr, d 10–50, T 100–1000, Gaussian and Laplace noise),
-  `addback_alpha=1e-4, veto_alpha=0.001` at `alpha=0.01`, against the plain run at the
-  same alpha, lowered SHD (by 0.1–5) in every setting and raised F1 by 0.007–0.05, except
-  at T=100 with d=50 (F1 -0.03). Against CDNOTS+ at its best single alpha it raised F1 in
-  9 of 12 settings (not at T=100, d=50: -0.03; nor at T=1000 with d=10 or 50: -0.002
-  and -0.006) and lowered SHD in 11 of 12 (+1.5 at T=1000, d=50). A strict `alpha_mci` is
-  not needed at `alpha=0.01`. On nonlinear simulations (spline / MLP, d 10–20, T 300–1000)
-  with `raft` and the same alphas it was about neutral (F1 within 0.03). It needs a CI
-  test with power at the sample size, since the veto drops links the test cannot detect
-  (`splitkci` tests on half the rows, so at T=300 it lost up to 0.12 F1; about neutral at
-  T=1000), and p-values that track effect size: on CausalRivers the add-back left F1
-  unchanged while raising SHD by 2. All default `None`: results unchanged.
-* `majority_gamma` on `run_cdnots`, `run_cdnots_plus`, `cdnots_discovery` and `uc_sepset`:
-  an ambiguity band for the majority collider rule (Zhalama, Zhang & Mayer 2017). With
-  share `f` of separating sets containing the middle node, a triple is a collider if
-  `f < 0.5` and `f <= majority_gamma`, a non-collider if `f > 0.5` and
-  `f >= 1 - majority_gamma`, and ambiguous (left for Meek not to orient through)
-  otherwise. The default 0.5 is the plain majority rule, so results are unchanged; 0
-  orients only unanimous votes, as conservative PC does. On a CDNOTS+ / ParCorr
-  simulation grid `0.4` gave F1 +0.003 and SHD −0.35 on held-out seeds; it is untested on
-  other CI tests and on plain CDNOTS.
-* `order_independent=True` on `KCIGPU`, `LinSigCIGPU`, `GCMIGPU`, `CMIknnGPU`,
-  `CMIknnMixedGPU`: one p-value per test whatever the call order or X/Y orientation.
-* Opt-in generator fixes, defaults unchanged: `henon_chain(bounded_start=True)` (CLI
-  `generate --bounded-start`) stays finite; `topology_scp(coef_pools="fixed")` draws
-  negative coefficients. `RegimeConfig(threshold_rounding="ceil")` rounds the segment
-  vote threshold up.
+* `run_grace` and `run_reap` refine any directed candidate graph (`candidate_graph=`) or a
+  CDNOTS graph: GRACE with L0 Hard Concrete gates, REAP with a spline partial-F
+  grow-shrink (`contemporaneous=True`, `effect_floor="adaptive"`); CLI
+  `discover --algorithm reap`. New GRACE options: grow rounds (`grow_rounds`,
+  `grow_variance`, ...), an F-tested autoregressive head (`ar_path`),
+  `gate_threshold="auto" | "li"`, `lambda_rule`, `effect_floor`, `data_transform`,
+  `noise_model`, with matching `GraceResult` fields.
+* CI tests `gcm`, `wgcm`, `pcm` (residual score) and `raft`, `rift` (random-feature
+  F-tests); `order_independent=True` on `KCIGPU`, `LinSigCIGPU`, `GCMIGPU`, `CMIknnGPU`
+  and `CMIknnMixedGPU`.
+* CDNOTS+ options, off by default: `lag0_orient="lingam"` orients undirected lag-0 edges
+  (bootstrap-checked DirectLiNGAM, linear mechanisms); `addback_alpha` / `veto_alpha` /
+  `alpha_mci` grow and prune lagged links (`result.lag_refinements`);
+  `return_prefix=True` with `finish_cdnots_plus()` reuses one skeleton.
+* CDNOTS / CDNOTS+: `majority_gamma` (ambiguity band for the majority collider rule) and
+  `run_cdnots(collider_search="full" | "sepset")`.
+* Rendering of undirected lag-0 edges is chosen after discovery: `to_binary(undirected=,
+  conflict=)`, lossless `to_marks()`, `plot(undirected=)`, and the same on the tigramite
+  converters (`cg_tig` unchanged). `evaluate_graph()` adds `*_lag0`, `*_lag0_adj` and
+  `*_lagpos` metrics.
+* `run_lucid(pervasive_lagged="factor_adjusted")`: opt-in factor-adjusted lagged edges on
+  the pervasive route.
+* `check_variance_dependence` (variance-only lagged parents), feeding new `inspect` facts
+  and `recommendation["refine"]`; `merge_lag0`.
+* `corr_table()` and `pairs_panel()`.
+* Opt-in generator fixes: `henon_chain(bounded_start=True)`,
+  `topology_scp(coef_pools="fixed")`, `RegimeConfig(threshold_rounding="ceil")`.
+* Example notebooks `ci_test_selection` and `dowhy_latent_confounders`.
 
 ### Changed
 
-* `run_cdnots_plus` wraps a discrete-unaware CI test in `StratifiedCIT`, as `run_cdnots`
-  does, and neither wraps `chisq` / `gsquared`; output changes when discrete columns are
-  detected (`discrete_cols=[]` keeps the old behaviour).
-* A one-sided lag-0 forbid in CDNOTS / CDNOTS+ background knowledge no longer removes the
-  adjacency; forbid both directions to remove it.
-* `recommend_config`: discovery is always CDNOTS (the d>20 → GRACE rule is gone). CI
-  test: `cmiknn-mixed-gpu` for discrete columns, `rcot` when variance-only parents are
-  detected, `raft` for nonlinear and `parcorr-gpu` for linear data. Refinement: GRACE
-  when variance-only parents are detected, else REAP; none at `max_lag=0`. With missing
-  values both steps get `impute="var_em"`.
-* `discover_df(ci_test=...)` now reaches GRACE, GRACE-SS and REAP, and `device` reaches
-  GRACE; the default is `ci_test=None`.
-* `create_ci_test` ignores `device` for CPU-only tests and fills `discrete_cols` for
-  `cmiknn-mixed-gpu`.
-* `causal-ts ci-test-info`: updated selection table and test descriptions.
-* `causalts.__all__` no longer exports import helpers (`version`,
-  `PackageNotFoundError`, `TYPE_CHECKING`, `tigramite_discovery`).
-* GRACE defaults to the configuration evaluated in the GRACE paper: rank-transformed data,
-  a Student-t likelihood, `lambda_rule="xcorr"` (bounded, scales with the data's background
-  lagged cross-correlation; was the density formula), one grow round with noise-scale
-  candidates, the autoregressive head with F-tested self-loops (when `max_lag >= 1`),
-  `gate_threshold="auto"` (was 0.5) and `effect_floor=1-exp(-0.02)`. Results change. Under
-  the default `ar_path`, self-loop entries of `gate_values` are 0, so bootstrap on
-  `cg_tig != 0` rather than on gate values.
-* A supplied candidate graph (`skeleton=` on `run_cdnots_gated`) is a starting point, not a
-  boundary: grow rounds can add lagged edges and the self-loop test can add self-loops. Pass
-  `grow_rounds=0, ar_path=False` to keep the result inside it.
-* `run_cdnots_gated`: `lambda_rule` follows `lambda_cv`, so `impute`, `impute_kwargs` and
-  `discrete_cols` moved one position; pass them by keyword.
-* LUCID and `inspect` place the Marchenko-Pastur edge using residual degrees of freedom:
-  `run_lucid` routing and `n_factors` change on wide panels (d/T >= ~0.2), and `inspect`'s
-  latent-factor check reports `null` when it cannot fire (d < 3 or too few rows).
-* `routed_deconfound`: options after `arch_alpha` are keyword-only.
-* Cedar: `max_prune_path` (never used) is deprecated and warns.
-* Cedar `pvalue_matrix` is NaN for self-loops and required edges added without a test,
-  instead of 1.0; `--json` edges show `null` for any non-finite p-value.
-* `sigkci` / `SigKCIGPU` renamed to `linsig` / `LinSigCIGPU` (old names deprecated). Results
-  change: kernel-scaled ridge (`ridge`, replaces `lamda`), no spurious lag-2 self-loops.
-* `RCOTGPU` defaults: `num_f2=min(25, floor(sqrt(T)))`, `n_avg=1`, `seed=42`
-  (was `25, 5, None`).
-* `ParCorrGPU.__call__` now reads partial correlation off the cached covariance
-  matrix under `method="precision"` (default) instead of solving OLS every call —
-  5.8x faster. Only benefits scalar callers (Cedar, `run_cdnots(stable=False)`);
-  default `run_cdnots` gets no speedup (it already used the same cache via
-  `batch_test`), but its statistics shift by ~1e-8 from the float32->float64
-  covariance, and any persisted `pvalue_cache` misses across the upgrade.
-  Ill-conditioned tests fall back to the unchanged `method="ols"` path.
-* `discover -a cdnots+` defaults `--alpha` to 0.01, matching `run_cdnots_plus`.
-* Keyword-only: `orient_margin` in `cdnots_discovery` / `run_cdnots`, `legacy_mci_conds` and
-  `orient_margin` in `run_cdnots_plus`, and `legacy_mci_conds` in `mci_skeleton`, along with
-  the new options. Passing them positionally now raises `TypeError`.
-* Results change (fixes below): CDNOTS and CDNOTS+ lag-0 orientations; with
-  `include_C=True`, CDNOTS+ C-node edges and lagged edges whose MCI tests conditioned on C;
-  lagged edges under `lag_verify=True`.
-* `DFCITGPU`: conditional p-values change at every |Z| (bandwidth rule scales with |Z|
-  and is ~6% narrower at |Z| = 1; leave-one-out smoothing on by default, also for a
-  numeric `bandwidth`); unconditional p-values change below ~100 rows (blocks of sqrt(n)
-  rows, shortened only to keep enough blocks to reach p < alpha), inside CDNOTS, after
-  `.data` is reassigned, and when an explicit `sig_blocklength` leaves too few blocks
-  (now shortened, with a warning). The CLI and `discover_df` pass their alpha (Cedar:
-  `alpha_cond1`) to `dfcit`.
-* `GCMIGPU`: tie-breaking jitter is drawn per test from `seed`, so p-values on exactly tied
-  data change.
-* `causal-ts -s` now seeds the CI test. Disk-cache keys include every result-shaping
-  setting, so existing cache files miss.
-* `run_regime_discovery` counts lag-0 edges in the segment vote; regime graphs from a
-  segment method that returns lag-0 edges (e.g. CDNOTS) can gain or lose lag-0 edges,
-  and `regime_summary()` `n_edges` counts them.
-* `to_design_matrix` leaves out lagged children (and spouses found only through them),
-  with a warning; their columns were wrong.
-* `inspect` leaves out non-numeric columns (with a warning) and tests linearity on rows
-  without missing values, so its recommendation can change on such data.
+Results can change for:
+
+* CDNOTS / CDNOTS+ lag-0 orientation: Meek R1 runs to closure, collider votes condition on
+  correctly shifted parents, ambiguous triples and NaN scores stay undirected, collider
+  cycles keep their true edges. Also CDNOTS+ with `include_C=True` and `lag_verify=True`.
+* `run_cdnots_plus` wraps discrete-unaware CI tests in `StratifiedCIT`, like `run_cdnots`;
+  neither wraps `chisq` / `gsquared` (`discrete_cols=[]` restores the old behaviour).
+* A one-sided lag-0 forbid keeps the adjacency; forbid both directions to remove it.
+* GRACE defaults to its paper configuration (rank transform, Student-t likelihood,
+  `lambda_rule="xcorr"`, one grow round, autoregressive head, `gate_threshold="auto"`,
+  `effect_floor=1-exp(-0.02)`). A supplied `skeleton=` is a starting point;
+  `grow_rounds=0, ar_path=False` keeps the result inside it.
+* `recommend_config`: always CDNOTS; the CI test follows the data (`cmiknn-mixed-gpu`,
+  `rcot`, `raft`, `parcorr-gpu`), with a GRACE or REAP refinement.
+* LUCID and `inspect` place the Marchenko-Pastur edge from residual degrees of freedom, so
+  routing and `n_factors` change on wide panels.
+* `DFCITGPU`: the bandwidth scales with |Z| and uses leave-one-out smoothing; the automatic
+  block length is sqrt(n) of the tested rows; the CLI and `discover_df` pass it their alpha.
+* `sigkci` / `SigKCIGPU` are renamed `linsig` / `LinSigCIGPU` (old names deprecated) with a
+  kernel-scaled `ridge`; `RCOTGPU` defaults to `num_f2=min(25, floor(sqrt(T)))`,
+  `n_avg=1`, `seed=42`; `ParCorrGPU.__call__` reads the cached covariance (5.8x faster for
+  scalar callers).
+* `causal-ts -s` seeds the CI test, and disk-cache keys include every result-shaping
+  setting, so old caches miss. `discover -a cdnots+` defaults `--alpha` to 0.01.
+* `run_regime_discovery` counts lag-0 edges in the segment vote; `to_design_matrix` drops
+  lagged children (with a warning); `inspect` skips non-numeric columns.
+* Cedar `pvalue_matrix` is NaN (JSON `null`) for untested self-loops and required edges.
+
+API:
+
+* Keyword-only: `orient_margin`, `legacy_mci_conds`, `routed_deconfound` options after
+  `arch_alpha`, and `run_cdnots_gated` arguments after `lambda_cv`.
+* `discover_df(ci_test=)` reaches GRACE, GRACE-SS and REAP; `create_ci_test` ignores
+  `device` for CPU-only tests; `causalts.__all__` drops import helpers; Cedar's
+  `max_prune_path` is deprecated.
 
 ### Fixed
 
-* CDNOTS / CDNOTS+: required lag-0 edges are oriented, and CDNOTS+ removes lag-0 edges
-  forbidden in both directions.
-* CDNOTS (default collider priority): breaking a lag-0 collider cycle no longer drops the
-  cycle's true edges; `run_cdnots` output changes when such a cycle occurs.
-* CDNOTS / CDNOTS+ report unsatisfied ancestral constraints in `ancestral_violations`;
-  CDNOTS+ `lag_refinements` no longer lists changes the ancestral cleanup undid.
-* `StratifiedCIT` and `CMIknnMixedGPU`: lag structure, missing discrete values and cache
-  keys; `run_cdnots` output changes with discrete columns plus NaNs or a lag-aware test.
-* GRACE `run_ci_skeleton(include_C=False)` no longer treats the last variable as the C
-  node.
-* Removed the undeclared `six` import from the CI-test base class; a core-only install
-  failed to import `ParCorr`, GRACE and REAP.
-* `CMIknnMixedGPU`: p = 1 for strong dependence in small discrete strata; a
-  miscalibrated permutation null given discrete conditioning variables (now shuffled in
-  blocks within strata); a biased statistic for all-discrete data; non-default
-  transforms ignored when no column is discrete.
-* CDNOTS phase three could orient contemporaneous edges from NaN scores (e.g. with
-  missing values); it now leaves them unoriented.
-* Boolean columns crashed `discover_df` / `causal-ts discover` and were ignored by
-  `inspect_df`.
-* `causal-ts discover --ci-test cmiknn-mixed-gpu` crashed. `cmiknn-mixed-gpu` is now
-  rejected for CEDAR and GRACE-SS, which lose the discrete columns.
-* `from causalts.ci_tests import StratifiedCIT` raised `AttributeError`.
-* The CLI created an output directory for commands that write nothing.
-* `ParCorrGPU` warned on read-only input (e.g. `df.values` under pandas
-  copy-on-write).
-* `--impute-kwargs` help, `docs/cli.md` and the `run_cedar` docstring showed imputer
-  kwargs that `var_em` rejects.
-* Docstrings with wrong defaults or claims (`plot_graph`, `compare_graphs`,
-  `select_features`, `CausalForecaster`, `interventional_query`, `run_pcmci`, ...) and
-  RST errors.
-* `CIT_Base.set_data` wrote buffered cache rows into the new data's cache file.
-* `RCOTGPU` p-values depended on the order of the conditioning set.
-* `ParCorrGPU.batch_test` (precision method) now runs the same
-  reciprocal-condition guard the scalar path got in #73, instead of inverting
-  every sub-covariance blindly and returning a near-random statistic for
-  ill-conditioned tests (issue #74). Declined tests fall back to the same OLS
-  computation `__call__` uses, so both entry points return identical results.
-  That fallback now uses the cache key's column order and is clipped to
-  [-1, 1]; previously, reorderings of one declined test could differ by up to
-  0.06 in the statistic, which could also exceed 1 by float32 rounding. On
-  MPS, which lacks `lstsq`, the fallback runs on CPU instead of raising.
-  Well-conditioned results are unchanged up to rounding. The persisted p-value
-  cache key changes, so caches written by earlier builds are recomputed.
-* `examples/regime_discovery.ipynb` now seeds each synthetic dataset independently
-  (`np.random.default_rng`), reports detector comparisons as mean ± std across
-  multiple seeds instead of a single misleading run, degrades gracefully when the
-  optional `hmmlearn` dependency is absent, and documents PELT's `signal="volatility"`
-  option (it is not limited to mean shifts).
-* `sensitivity_analysis()` reports why it cannot run instead of raising (`reason`, `stats`).
-* `routed_deconfound(..., keep_undirected=True, pervasive_base="tetrad")` works instead of raising `NotImplementedError`.
-* CDNOTS / CDNOTS+ lag-0 orientation: Meek R1 orients from lagged parents and runs to
-  closure; collider votes condition on correctly shifted lagged parents (plain CDNOTS also
-  on lagged neighbours); ambiguous triples and conflicting orientations stay undirected;
-  colliders that would close a lag-0 cycle are re-selected.
-* `run_cdnots_plus(include_C=True)` never tested C's lag-0 edges, so every variable came
-  out C-adjacent.
-* C-node handling: `knowledge=` with several C columns, forbidden `C -> X`, `lag_verify`
-  ignoring C, `select_features(from_result=...)` `IndexError` on results with a C edge.
-* Orientation guards: lag-copied orientations respect the skeleton and knowledge; the
-  C-node phase respects knowledge and acyclicity; cycle checks use the live graph.
-* Discrete-column indices were misaligned with `include_C=True` (`StratifiedCIT`,
-  `CMIknnMixedGPU`).
-* CDNOTS+ `pvalue_matrix` (`return_pvals=True`) dropped every lagged test and transposed the
-  lag-0 ones: its raw `pvals` records were `(cause, effect, ...)`. They are now
-  `(effect, cause, ...)`, as in CDNOTS.
-* `select_features(algo="cdnots", markov_blanket=True)` with a custom `c_array` silently
-  dropped spouses whose column name equalled the C node's label (e.g. `C3`). Colliding C
-  labels now get a `_` prefix (`_C3`).
-* `run_cdnots_plus(include_C=True)`: the majority-rule collider step now conditions every
-  vote on both endpoints' C parents (phase 2 MCI does so for the effect), instead of
-  offering C as an optional subset member. Votes without C tested an endpoint whose
-  regime shift swamps the dependence, found spurious separating sets and declared false
-  colliders, which showed up as conflicting (`x-x`) lag-0 edges at nonstationary
-  variables. With a C-driven mean shift on 20% of the variables (linear Gaussian, d 10–20,
-  alpha 0.01) correctly oriented lag-0 edges rose by 2–7% and F1 by +0.004 to +0.016 for a
-  strong shift, ~0 for a weak one. Outputs with `include_C=False`, or where no variable is
-  C-adjacent, are unchanged.
-* `run_cdnots_plus(max_conds_py=..., max_conds_px=...)` now keeps the *strongest* lagged
-  parents, as PCMCI does. Phase 1 ranks each variable's parents by test strength, but
-  phase 2 rebuilt the lists from graph neighbours in node order, so the caps kept the
-  lowest-indexed parents instead. The same lists condition the majority-rule collider
-  votes, so capped runs can change orientations as well as the skeleton. Uncapped runs
-  (the default) are unchanged.
-* `run_cdnots_plus` with a gapped `lag_list` (e.g. `[2, 4]`): the MCI phase read a dense
-  `0..2*len(lag_list)` embedding with different rows from the phase-1 window, so tested
-  and conditioning columns sat at the wrong lags, and parents were shifted by slice
-  position instead of lag. MCI and the collider step now read every sum of two window
-  lags, aligned with the window. On 20 simulated series with true lags 2 and 4, lagged F1
-  rose from 0.46 to 0.96. Contiguous lags are unchanged.
-* CDNOTS+ phase 2 (MCI) and the plain CDNOTS skeleton no longer CI-test edges that
-  background knowledge requires; they ran the tests and discarded the result, as CDNOTS+
-  phase 1 already avoided. A required neighbour now ranks first as a conditioning
-  candidate, as in phase 1, so outputs with required edges can change slightly; without
-  background knowledge they are unchanged. Required edges get no MCI p-value
-  (`pvalue_matrix` NaN, as from phase 1). `lag_verify=True` no longer removes a required
-  lagged edge. In every skeleton phase, an edge whose time-shifted copy is required (e.g.
-  `make_background_knowledge(required=[("A", "B", 2, 1)])`) now counts as required:
-  removing an edge also removes its copies, so the required copy used to be lost.
-* The CDNOTS / CDNOTS+ collider step no longer takes a C column as the middle of a
-  collider. C has no parents, so `X -> C <- Y` was always wrong: `priority=1` turned the C
-  edges into conflicts (`x-x` in `to_marks()`) and `priority=0` reversed them. `cg_tig`
-  was already rendered as C -> X; the CPDAG and its marks now are too. `uc_sepset` gains
-  `parentless=` for such nodes.
-* CDNOTS graph rendering (`cg_tig`, `to_binary`, `to_marks`) covers every endpoint state.
-  Lagged cells read only a bare "1": a lagged `o-o` leaked into the binary graph as -1, and
-  `to_marks()` showed a lagged `x-x` as `-->`. `to_marks()` now reports lagged `o-o` /
-  `x-x` (and an arrowhead against time order as `x-x`), and the binary graph renders any
-  lagged adjacency as the forward link, since time order fixes its direction. A
-  conflicting C edge rendered as symmetric 1s (including the impossible X -> C) even with
-  `conflict="drop"`. C has no parents, so an arrowhead into C (that conflict, or an
-  X -> C from e.g. a `priority=0` collider overwrite) is `x-x` in `to_marks()` and
-  C -> X under `"drop"`. With `priority=1` this can change `cg_tig` on normal runs with C.
-  `tigramite_graph_to_binary` renders a lagged `o-o` / `x-x` as the forward link and no
-  longer writes its mirrored cell, a different link.
-* Forbidden-ancestor cleanup (`AncestralKnowledge.add_forbidden_ancestor`) no longer
-  removes an edge that background knowledge requires, or one a satisfied required ancestor
-  (`add_required_ancestor`) depends on. With `A -> Y -> D`, `Y -> D` required and `A`
-  forbidden as an ancestor of `D`, it removed `Y -> D` and reported no violation; it now
-  cuts the path at its last edge that is neither required nor needed by a satisfied
-  required ancestor (here `A -> Y`, with its lag copies), or reports the violation when
-  there is no such edge. When the cleanup still leaves a forbidden ancestor violated
-  because of competing required edges or ancestors, it now searches for the fewest edges
-  to cut (up to 4, each with its lag copies if possible, from the graph before its own
-  cuts) that satisfy every forbidden and satisfied required ancestor, and uses them if
-  found. With `A -> B, A -> C, B -> C, B -> D, C -> E, D -> E`, `A` required and `B`
-  forbidden as ancestors of `E`, it cut `C -> E` and reported `B => E` violated; it now
-  cuts `B -> C` and `B -> D`. Results where the cleanup succeeds are unchanged.
-* `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` read the lag-0
-  mirror mark of a string (edge-mark) graph, `"<--"` at `[j, i, 0]`, as a second edge
-  `j -> i`. A reversed lag-0 edge was drawn as a true positive and a correct one as a
-  true positive plus a false positive. Numeric graphs are unchanged.
-* `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` failed on a
-  single-variable graph: squeezing the input collapsed `(1, 1, n_lags)` to 1-D (or 0-D),
-  and the per-lag indexing then raised. A single-variable graph now keeps its variable
-  axes; other shapes are squeezed as before.
-* `ParCorrGPU`: wrong cached p-values when the data was replaced (e.g. `run_tigramite`
-  PCMCI); declined batched tests use the CPU OLS fallback on CUDA too; a singular raw
-  inverse declines one row instead of failing the batch; works on torch < 2.2.
-* CI tests raise `ValueError` on an infinite tested value instead of returning p = 1 / NaN;
-  `CausalLearnFisherZ` accepts a numpy conditioning set.
-* `GCMIGPU` tests X against Y when X or Y is multivariate.
-* `KCIGPU`, `LinSigCIGPU`, `SplitKCIGPU` permutation/bootstrap nulls honour `seed`; CPU
-  `CMIknn` takes `seed`; `KCIGPU` passes on `nperms` (unconditional) and `lamda`/`thresh`.
-* `LinSigCIGPU` docs state its measured null calibration.
-* `LinSigCIGPU` no longer reuses a result cached (in memory or on disk) under an earlier
-  lag layout.
-* `DFCITGPU` over-rejected with |Z| >= 2, and `causal-ts discover --ci-test dfcit` kept a
-  block length of 3.
-* `causal-ts evaluate` / `discover --ground-truth` trimmed the discovered graph to the
-  true max lag, missing false positives beyond it; scores change when the discovered
-  graph has more lags.
-* `shd_3d(double_for_anticausal=False)` symmetrised and halved lagged slices. `shd_2d` /
-  `shd_3d` now count differing entries (weighted and bool graphs too) and return `int`;
-  with `double_for_anticausal=False` a self-loop counts 1, not 0.5.
-* `run_tigramite(method="pc_stable")` returned an empty graph.
-* `ChangePointRegimeDetector.assign` failed on pandas 3.
-* `causal-ts generate -s 0` used seed 42.
-* `check_linearity` raised on a lag longer than the series; `shd_3d` on an empty lag axis.
+* CDNOTS / CDNOTS+ background knowledge: required lag-0 edges are oriented and never
+  tested away (time-shifted copies included); edges forbidden both ways are removed; the
+  forbidden-ancestor cleanup keeps required edges; `ancestral_violations` reports
+  unsatisfied constraints.
+* CDNOTS+: `pvalue_matrix` dropped lagged tests and transposed lag-0 ones; `max_conds_*`
+  kept the lowest-indexed parents instead of the strongest; a gapped `lag_list` read the
+  wrong lags; a C column was taken as a collider middle; lagged `o-o` / `x-x` and C edges
+  rendered wrongly.
+* Discrete data: `StratifiedCIT` / `CMIknnMixedGPU` lag structure, missing values, cache
+  keys and permutation null; misaligned discrete columns with `include_C=True`; a crash
+  with `--ci-test cmiknn-mixed-gpu` (now rejected for CEDAR and GRACE-SS); boolean columns.
+* CI tests: infinite input raises `ValueError`; `ParCorrGPU` stale cache after replaced
+  data and ill-conditioned batch tests (#74); `GCMIGPU` with multivariate X or Y;
+  randomised nulls honour `seed`; `RCOTGPU` order dependence; `LinSigCIGPU` reuse across
+  lag layouts; `DFCITGPU` over-rejection with |Z| >= 2 and the CLI's fixed block length.
+* GRACE `run_ci_skeleton(include_C=False)` treated the last variable as C; a core-only
+  install failed to import (undeclared `six`).
+* `causal-ts evaluate` / `--ground-truth` trimmed extra lags; `shd_2d` / `shd_3d`
+  counting; graph comparison plots with lag-0 mirror marks or one variable;
+  `run_tigramite(method="pc_stable")` returned an empty graph; `select_features` C-label
+  collisions.
+* `sensitivity_analysis()` and `routed_deconfound(keep_undirected=True,
+  pervasive_base="tetrad")` no longer raise; `ChangePointRegimeDetector.assign` on
+  pandas 3; `generate -s 0`; `check_linearity` on long lags; read-only input warnings;
+  docstring and CLI help errors.
 
 ## [0.27.0]
 
@@ -495,7 +261,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * Comprehensive documentation and example notebooks
 * Synthetic data generators (nonstationary, mixed discrete-continuous, Lorenz-96)
 
-[unreleased]: https://github.com/bloomberg/causal-ts/compare/v0.27.0...HEAD
+[unreleased]: https://github.com/bloomberg/causal-ts/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/bloomberg/causal-ts/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/bloomberg/causal-ts/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/bloomberg/causal-ts/compare/v0.25.2...v0.26.0
 [0.25.2]: https://github.com/bloomberg/causal-ts/compare/v0.25.1...v0.25.2
