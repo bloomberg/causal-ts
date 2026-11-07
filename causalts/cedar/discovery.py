@@ -1141,8 +1141,9 @@ def run_cedar(
         C basis preset. Same options as in ``run_cdnots``:
         ``'linear'``, ``'linear+quad'``, ``'linear+sin'``, ``'linear+exp'``,
         ``'step'``, ``'step+linear'``.
-    c_array : ndarray (T, k), optional
-        Custom C basis. Overrides ``c_preset`` when provided.
+    c_array : ndarray, optional
+        Custom C basis of shape ``(T, k)``. Overrides ``c_preset`` when
+        provided.
     include_autoreg : bool, default True
         Add autoregressive self-loops ``Xi(t-k) → Xi(t)`` for each
         variable's detected AR order. Self-loops are added before MCI

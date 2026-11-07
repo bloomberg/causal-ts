@@ -145,6 +145,11 @@ Experiments in the settings of the GRACE paper ([arXiv:2606.23880](https://arxiv
   <span class="ct-gallery-title">CI Test Comparison</span>
 </a>
 
+<a href="ci_test_selection.html" class="ct-gallery-item" data-tooltip="Which CI test, at which alpha? Regime maps, calibration and runtime from a 276k-run benchmark of 8 CI tests inside CDNOTS, the simulated mechanisms with their linear R², and a live ex1/ex2/ex3 check.">
+  <img src="../_static/img/thumbnails/ci_test_selection_thumb.png" alt="Choosing a CI Test" />
+  <span class="ct-gallery-title">Choosing a CI Test</span>
+</a>
+
 <a href="mixed_data.html" class="ct-gallery-item" data-tooltip="Automatic discrete column detection, stratified CI testing for mixed data types.">
   <img src="../_static/img/thumbnails/mixed_data_thumb.png" alt="Mixed Discrete-Continuous Data" />
   <span class="ct-gallery-title">Mixed Data</span>
@@ -278,6 +283,7 @@ latent_confounder_detection
 :caption: CI Tests
 
 ci_test_comparison
+ci_test_selection
 mixed_data
 ```
 
