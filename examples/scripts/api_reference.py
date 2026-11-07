@@ -917,7 +917,7 @@ result_b.plot(var_names=names_b, node_layout="circular", node_size=0.2, show_col
 # ## `run_cedar`
 #
 # <div style="background: #FDF5E6; padding: 12px 16px; border-radius: 4px; margin: 8px 0; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85em; line-height: 1.8;">
-# causalts.cedar.<strong>run_cedar</strong>(<em>df, ci_test, max_lag, *, alpha_cond1=0.01, alpha_cond2=0.01, lag_method='partial_dcor', lag_pvalue_method='t_test', lag_alpha=0.05, n_permutations=200, normalize='minmax', filter_children=False, direction_threshold=1.2, direction_method='dcor', prune=True, alpha_mci=None, sweep_all_lags=False, max_prune_path=4, include_lag0=False, multi_lag=True, multi_lag_keep='first', target_var=None, n_jobs=1, verbose=False, forbidden=None, required=None, knowledge=None, impute=None, impute_kwargs=None, include_C=False, c_preset='linear', c_array=None, include_autoreg=True, assume_ar1=True, lag_filter=None, lag_filter_frac=0.95</em>) → <em>CedarResult</em>
+# causalts.cedar.<strong>run_cedar</strong>(<em>df, ci_test, max_lag, *, alpha_cond1=0.01, alpha_cond2=0.01, lag_method='partial_dcor', lag_pvalue_method='t_test', lag_alpha=0.05, n_permutations=200, normalize='minmax', filter_children=False, direction_threshold=1.2, direction_method='dcor', prune=True, alpha_mci=None, sweep_all_lags=False, max_prune_path=None, include_lag0=False, multi_lag=True, multi_lag_keep='first', target_var=None, n_jobs=1, verbose=False, forbidden=None, required=None, knowledge=None, impute=None, impute_kwargs=None, include_C=False, c_preset='linear', c_array=None, include_autoreg=True, assume_ar1=True, lag_filter=None, lag_filter_frac=0.95</em>) → <em>CedarResult</em>
 # </div>
 #
 # Convenience wrapper around `Cedar(...).run()`. Runs the full CEDAR pipeline and returns a `CedarResult`.
@@ -959,8 +959,8 @@ result_b.plot(var_names=names_b, node_layout="circular", node_size=0.2, show_col
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Separate alpha for MCI pruning. When <code>None</code>, uses <code>alpha_cond2</code>. Setting stricter than alpha_cond2 enables permissive discovery + tight pruning (e.g. <code>alpha_cond2=0.00001, alpha_mci=0.01</code> for scale-free graphs).</dd>
 # <dt><strong>sweep_all_lags</strong> : <em>bool, default=False</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">When True, test every lag 1..max_lag for each candidate pair regardless of lag-selection significance. CI tests become the sole acceptance gate.</dd>
-# <dt><strong>max_prune_path</strong> : <em>int, default=4</em></dt>
-# <dd style="margin-left: 24px; margin-bottom: 8px;">Maximum path length for pruning.</dd>
+# <dt><strong>max_prune_path</strong> : <em>None</em></dt>
+# <dd style="margin-left: 24px; margin-bottom: 8px;">Deprecated, has no effect: pruning is MCI-based. Passing a value warns.</dd>
 # <dt><strong>include_lag0</strong> : <em>bool, default=False</em></dt>
 # <dd style="margin-left: 24px; margin-bottom: 8px;">Include contemporaneous (lag 0) effects.</dd>
 # <dt><strong>multi_lag</strong> : <em>bool, default=True</em></dt>

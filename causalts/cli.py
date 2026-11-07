@@ -561,7 +561,10 @@ def inspect(data, var_names, max_lag):
     "--impute-kwargs",
     type=str,
     default=None,
-    help='JSON dict of kwargs for the imputer, e.g. \'{"p": 2, "n_iter": 5}\'.',
+    help=(
+        'JSON dict of kwargs for the imputer, e.g. \'{"p": 2, "max_iter": 5}\' '
+        "for var_em; causal_iterative takes e.g. '{\"n_iter\": 3}'."
+    ),
 )
 @click.option(
     "--json",

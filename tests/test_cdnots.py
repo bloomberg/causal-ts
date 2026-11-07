@@ -148,7 +148,7 @@ def test_cdnots_entry_points_keep_released_positional_order():
     import inspect
 
     cases = [
-        ("phase3_utils", "cdnots_discovery", ["df", "indep_test", "num_lags", "lag_list", "include_C", "c_array", "c_preset", "alpha", "stable", "return_pvals", "max_degree", "max_combinations", "priority", "verbose", "show_progress", "impute", "impute_kwargs", "discrete_cols", "background_knowledge", "knowledge", "lag_verify", "alpha_lv"], ["contemp_collider_rule", "orient_margin", "collider_search", "majority_gamma"]),
+        ("phase3_utils", "cdnots_discovery", ["df", "indep_test", "num_lags", "lag_list", "include_C", "c_array", "c_preset", "alpha", "stable", "return_pvals", "max_degree", "max_combinations", "priority", "verbose", "show_progress", "impute", "impute_kwargs", "discrete_cols", "background_knowledge", "knowledge", "lag_verify", "alpha_lv"], ["contemp_collider_rule", "orient_margin", "collider_search", "majority_gamma", "_skeleton_only"]),
         ("phase3_utils", "run_cdnots", ["df", "indep_test", "num_lags", "lag_list", "include_C", "c_array", "c_preset", "alpha", "stable", "max_degree", "max_combinations", "priority", "verbose", "show_progress", "impute", "impute_kwargs", "discrete_cols", "background_knowledge", "knowledge", "lag_verify", "alpha_lv", "return_pvals"], ["orient_margin", "collider_search", "majority_gamma"]),
         ("phase3_utils", "run_cdnots_plus", ["df", "indep_test", "num_lags", "lag_list", "include_C", "c_array", "c_preset", "alpha", "max_degree", "max_conds_py", "max_conds_px", "priority", "verbose", "show_progress", "impute", "impute_kwargs", "discrete_cols", "background_knowledge", "knowledge", "lag_verify", "alpha_lv", "return_pvals"], ["legacy_mci_conds", "orient_margin", "return_prefix", "majority_gamma", "lag0_orient", "alpha_mci", "addback_alpha", "veto_alpha"]),
         ("skeleton_discovery", "skeleton_discovery_pervar", ["cg", "alpha", "ci_test", "max_combinations", "background_knowledge", "verbose", "show_progress", "return_pvals", "max_degree", "num_lags"], ["include_C", "num_c_cols"]),
@@ -236,3 +236,53 @@ def test_cdnots_with_a_duplicated_column_completes(num_lags):
     ci = ParCorrGPU(np.zeros((2, 2)), device=DEVICE)
     res = run_cdnots(df.assign(g=df["a"]), ci, num_lags=num_lags)
     assert res.cg_tig.shape == (8, 8, num_lags + 1)  # 7 variables + the C node
+
+
+def _lag_panel(seed, d=6, T=400):
+    rng = np.random.default_rng(seed)
+    x = np.zeros((T, d))
+    f = np.zeros(T)
+    for t in range(1, T):
+        f[t] = 0.8 * f[t - 1] + rng.standard_normal()
+        x[t] = 0.3 * x[t - 1] + f[t] + 0.6 * rng.standard_normal(d)
+        x[t, 1] += 0.5 * x[t - 1, 0]
+        x[t, 3] += 0.4 * x[t, 2]
+    import pandas as pd
+
+    return pd.DataFrame(x, columns=[f"X{i}" for i in range(d)])
+
+
+def test_skeleton_only_keeps_the_lagged_slices():
+    """The orientation steps never change lagged adjacencies, and the binary graph
+    renders every lagged adjacency as its forward link, so stopping after the
+    skeleton must give the same lagged slices."""
+    from causalts.cdnots.phase3_utils import cdnots_discovery
+
+    for seed in range(3):
+        df = _lag_panel(seed)
+        kw = dict(num_lags=2, include_C=True, alpha=0.05, return_pvals=False)
+        full, _ = cdnots_discovery(df, ParCorrGPU(np.zeros((2, 2)), device="cpu"), **kw)
+        fast, _ = cdnots_discovery(
+            df, ParCorrGPU(np.zeros((2, 2)), device="cpu"), _skeleton_only=True, **kw
+        )
+        d = df.shape[1]
+        np.testing.assert_array_equal(
+            full.to_binary()[:d, :d, 1:], fast.to_binary()[:d, :d, 1:]
+        )
+
+
+def test_skeleton_only_rejects_path_knowledge():
+    import pytest
+
+    from causalts.cdnots.ancestral import AncestralKnowledge
+    from causalts.cdnots.phase3_utils import cdnots_discovery
+
+    knowledge = AncestralKnowledge().add_required_ancestor("X0", "X1")
+    with pytest.raises(ValueError, match="path-level knowledge"):
+        cdnots_discovery(
+            _lag_panel(0),
+            ParCorrGPU(np.zeros((2, 2)), device="cpu"),
+            num_lags=1,
+            knowledge=knowledge,
+            _skeleton_only=True,
+        )

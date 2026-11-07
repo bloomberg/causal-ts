@@ -159,12 +159,6 @@ def test_apply_confounding_removes_nodes():
     assert len(out["confounder_nodes"]) == out["n_confounders"]
 
 
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(pytest.main([__file__, "-v"]))
-
-
 # ── run_lucid / LucidResult ──────────────────────────────────────────────────
 def _cdnots_result(df, max_lag=MAX_LAG, alpha=0.05):
     ci = ParCorrGPU(df.values.copy())
@@ -398,3 +392,102 @@ def test_grace_specific_fields_survive_the_shallow_copy(grace_result):
     """A subclass's own fields (not on the CausalResult base) must not be dropped."""
     filtered = grace_result.tetrad_filter()
     assert filtered.gate_values is grace_result.gate_values
+
+
+# --- Marchenko-Pastur edge uses residual degrees of freedom -------------------------
+
+
+def test_mp_factor_count_wide_noise_has_no_factors():
+    from causalts.confounders.routed_deconf import _route, mp_factor_count
+
+    false_count = false_route = false_auto = 0
+    for s in range(20):
+        X = np.random.default_rng(s).normal(size=(100, 40))
+        false_count += mp_factor_count(X) > 0
+        false_route += _route(X)[0] != "sparse"
+        false_auto += _route(X, router="auto")[0] != "sparse"
+    assert false_count <= 1 and false_route <= 1 and false_auto <= 1
+
+
+def test_mp_factor_count_keeps_power_on_wide_factor_panels():
+    from causalts.confounders.routed_deconf import _route, mp_factor_count
+    from tests._factor_panel import factor_panel
+
+    for s in range(3):
+        X = factor_panel(d=40, T=200, n_factors=3, seed=s)["X"].to_numpy()
+        assert mp_factor_count(X) == 3
+        assert _route(X)[0] != "sparse"
+        assert _route(X, router="auto")[0] != "sparse"
+
+
+def test_mp_factor_count_auto_order_uses_its_own_dof():
+    from causalts.confounders.routed_deconf import mp_factor_count
+
+    X = np.random.default_rng(0).normal(size=(300, 30))
+    assert mp_factor_count(X, var_order="auto") == 0
+    assert mp_factor_count(X, var_order=2) == 0
+
+
+def test_mp_factor_count_auto_order_above_one_uses_its_dof():
+    # Noise-only VAR(2) (no factors) on which the whiteness search picks p >= 2: the
+    # edge must use rows - (d*p + 1). Measured over 30 seeds: 2 false counts with the
+    # corrected edge vs 8 with the row-count edge.
+    from causalts.confounders.routed_deconf import (
+        _FACTOR_COUNT_MARGIN,
+        _select_var_order_whiteness,
+        _varp_residuals,
+        mp_factor_count,
+    )
+
+    def noise_var2(seed, T=400, d=30):
+        rng = np.random.default_rng(seed)
+        E = rng.standard_normal((T + 200, d))
+        X = np.zeros_like(E)
+        for t in range(2, T + 200):
+            X[t] = 0.6 * X[t - 2] + E[t]
+        return X[200:]
+
+    def row_count_edge(X, p):
+        R = _varp_residuals(X, p)
+        n, d = R.shape
+        ev = np.linalg.eigvalsh(np.corrcoef(R, rowvar=False))
+        return int(np.sum(ev > (1 + np.sqrt(d / n)) ** 2 * _FACTOR_COUNT_MARGIN))
+
+    new = old = 0
+    for seed in range(15):
+        X = noise_var2(seed)
+        p = _select_var_order_whiteness(X)
+        assert p >= 2
+        new += mp_factor_count(X, var_order="auto") > 0
+        old += row_count_edge(X, p) > 0
+    assert new <= 2 and old > new
+
+
+def test_routed_deconfound_keeps_released_positional_order():
+    """Positional parameters stop at arch_alpha; everything after it is keyword-only,
+    so a positional call there fails loudly instead of binding one option's value to
+    another.
+    """
+    import inspect
+
+    from causalts.confounders.routed_deconf import routed_deconfound
+
+    params = inspect.signature(routed_deconfound).parameters.values()
+    assert [p.name for p in params if p.kind is p.POSITIONAL_OR_KEYWORD] == [
+        "df_obs",
+        "max_lag",
+        "ci",
+        "router",
+        "thresholds",
+        "profile",
+        "alpha_factor_pds",
+        "arch_alpha",
+    ]
+    keyword_only = {p.name for p in params if p.kind is p.KEYWORD_ONLY}
+    assert {"drop_lag0", "alpha_ci", "return_info", "pervasive_lagged"} <= keyword_only
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(pytest.main([__file__, "-v"]))

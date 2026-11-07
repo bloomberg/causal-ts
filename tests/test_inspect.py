@@ -256,5 +256,17 @@ def test_merge_lag0_restores_candidate_contemporaneous_edges():
     assert g.shape == refined.shape and refined[0, 1, 0] == 0
 
 
+def test_latent_factor_block_unavailable_when_threshold_unreachable():
+    # With T_eff = T - d - 2 the auto threshold can reach 1 on narrow-but-short
+    # panels; the top-2 trace share cannot exceed 1, so the check cannot fire there.
+    from causalts.inspection import _latent_factor_block
+
+    for d, T in [(2, 5000), (3, 300), (4, 60), (10, 13), (10, 22), (20, 23), (20, 28)]:
+        out = _latent_factor_block(np.random.default_rng(0).normal(size=(T, d)))
+        assert out == {"detected": None, "spectral_ratio": None, "tau": None}
+    ok = _latent_factor_block(np.random.default_rng(0).normal(size=(200, 10)))
+    assert ok["detected"] is False and ok["tau"] < 1
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

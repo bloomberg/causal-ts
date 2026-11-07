@@ -35,6 +35,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   lagged edges pinned) and an adaptive effect floor (`effect_floor="adaptive"`). Both call
   `run_cdnots_gated(refine="gates" | "shrink")`. `reap` is a registered algorithm, and
   `causal-ts discover --algorithm reap` is the same as `--algorithm grace --refine shrink`.
+* `run_lucid(pervasive_lagged="factor_adjusted")`: opt-in lagged edges from a
+  factor-adjusted partial correlation on the pervasive route.
 * GRACE stages and options on `run_grace` / `run_cdnots_gated` (CLI flags in parentheses):
   grow rounds that test the lagged pairs outside the candidates, for an effect on the mean and
   on the noise scale, and add the hits (`grow_rounds`, `grow_q`, `grow_transform`,
@@ -127,6 +129,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `grow_rounds=0, ar_path=False` to keep the result inside it.
 * `run_cdnots_gated`: `lambda_rule` follows `lambda_cv`, so `impute`, `impute_kwargs` and
   `discrete_cols` moved one position; pass them by keyword.
+* LUCID and `inspect` place the Marchenko-Pastur edge using residual degrees of freedom:
+  `run_lucid` routing and `n_factors` change on wide panels (d/T >= ~0.2), and `inspect`'s
+  latent-factor check reports `null` when it cannot fire (d < 3 or too few rows).
+* `routed_deconfound`: options after `arch_alpha` are keyword-only.
+* Cedar: `max_prune_path` (never used) is deprecated and warns.
+* Cedar `pvalue_matrix` is NaN for self-loops and required edges added without a test,
+  instead of 1.0; `--json` edges show `null` for any non-finite p-value.
 * `sigkci` / `SigKCIGPU` renamed to `linsig` / `LinSigCIGPU` (old names deprecated). Results
   change: kernel-scaled ridge (`ridge`, replaces `lamda`), no spurious lag-2 self-loops.
 * `RCOTGPU` defaults: `num_f2=min(25, floor(sqrt(T)))`, `n_avg=1`, `seed=42`
@@ -185,6 +194,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * The CLI created an output directory for commands that write nothing.
 * `ParCorrGPU` warned on read-only input (e.g. `df.values` under pandas
   copy-on-write).
+* `--impute-kwargs` help, `docs/cli.md` and the `run_cedar` docstring showed imputer
+  kwargs that `var_em` rejects.
 * Docstrings with wrong defaults or claims (`plot_graph`, `compare_graphs`,
   `select_features`, `CausalForecaster`, `interventional_query`, `run_pcmci`, ...) and
   RST errors.

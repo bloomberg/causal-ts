@@ -210,13 +210,19 @@ def mp_factor_count(X, var_order=1, factor_count_margin=_FACTOR_COUNT_MARGIN):
     so the MP null scale sigma^2 = 1), which also makes it robust to per-series
     heteroskedasticity (e.g. GARCH) that would distort a covariance-based edge.
 
-    ``factor_count_margin`` is a small multiplicative slack on the edge so borderline
-    bulk eigenvalues are not counted as factors (paper Table 4).
+    ``T_eff`` is the residual degrees of freedom, ``rows - (d * p + 1)`` for a VAR(p)
+    with intercept. ``factor_count_margin`` is a small multiplicative slack on the edge
+    so borderline bulk eigenvalues are not counted as factors (paper Table 4).
 
     Returns the number of eigenvalues above the edge (0 = sparse/no pervasive factor).
     """
-    resid = _var_residuals(X, var_order)
-    T_eff, d = resid.shape
+    p = _select_var_order_whiteness(X) if var_order == "auto" else int(var_order)
+    p = max(p, 1)  # _varp_residuals fits a VAR(1) for any order <= 1
+    resid = _varp_residuals(X, p)
+    n, d = resid.shape
+    # Least-squares VAR residuals keep n - (d*p + 1) degrees of freedom, not n rows;
+    # using n puts the edge too low and wide panels show spikes from pure noise.
+    T_eff = n - (d * p + 1)
     C = np.corrcoef(resid, rowvar=False)
     C = np.nan_to_num(C, nan=0.0)
     eigvals = np.linalg.eigvalsh(C)
@@ -262,7 +268,10 @@ def _route(
         if router == "auto":
             # sparse<->pervasive boundary from the MP null (adapts to d/T); SF<->GARCH
             # boundary is a robust default in a wide gap (0.31->0.49), expert-overridable.
-            T_eff, d = X.shape[0] - 1, X.shape[1]
+            # spectral_gap uses VAR(1) residuals (with intercept): T - 1 rows, d + 1
+            # coefficients per equation.
+            d = X.shape[1]
+            T_eff = X.shape[0] - 1 - (d + 1)
             tau = gamma * _mp_null_top_mass(d, T_eff, k=router_k)
             tau2 = thresholds[1] if thresholds else _SPECTRAL_TAU2
         else:  # "spectral": fixed calibrated thresholds
@@ -638,7 +647,7 @@ def _sl_deconf_pcorr(
     (pcorr[d,d], U[n,d] innovations, (Uu,s,Vt) SVD, Udec[n,d] deconfounded residuals).
 
     ``ktrim_margin`` (research, ported from the profile="sl" full-replacement research loop's
-    idea-020/`_sl_multilag_skeleton`, see SL_VALIDATION.md): an extra integer safety margin
+    idea-020/`_sl_multilag_skeleton`): an extra integer safety margin
     added on top of the nominal k trim count. mp_factor_count's k can under-trim under
     heteroskedasticity (a volatility-clustering factor's smaller singular values blend into
     the bulk edge more than a homoskedastic factor's would), leaving a stable (non-noise)
@@ -762,7 +771,7 @@ def _sl_blockboot_threshold(
     """Single-lag-0 analogue of `_sl_maxt_threshold`, using the stationary block bootstrap
     (`_sl_block_bootstrap_column`) instead of a single circular shift per idiosyncratic
     column. Research (2026-08-10): tested as an alternative to `_sl_maxt_threshold` inside
-    `sl_lag0_recover`/Workstream A; see SL_VALIDATION.md for the result."""
+    `sl_lag0_recover`/Workstream A."""
     Uu, s, Vt = svd
     n, d = U.shape
     Uc = _winsorize_cols(U, presvd_c) if presvd_c is not None else U
@@ -1062,7 +1071,7 @@ def sl_lag0_recover(
     joint-stack construction, does NOT transfer here. Left at default 0; do not change.
     ``threshold_rule`` : "maxt" (default, original behavior) or "blockboot" (research,
     ported from idea-004: stationary block bootstrap instead of a single circular shift per
-    idiosyncratic column -- see `_sl_blockboot_threshold`). See SL_VALIDATION.md for results.
+    idiosyncratic column -- see `_sl_blockboot_threshold`).
     """
     X = df_obs.values
     # VAR order for residualization = the EFFECTIVE lag the base discovery actually found
@@ -1224,6 +1233,7 @@ def _discover(
     keep_undirected=False,
     alpha=0.05,
     tetrad_threshold=_TETRAD_THRESHOLD,
+    **engine_kw,
 ):
     """Run the base skeleton engine, optionally followed by the tetrad lag-0 filter.
 
@@ -1237,6 +1247,7 @@ def _discover(
     kw = dict(
         num_lags=max_lag, include_C=True, c_preset="linear", alpha=alpha, verbose=False
     )
+    kw.update(engine_kw)
     result = fn(df_obs, ci, **kw)
     # `keep_undirected=False` means "whatever the engine does", NOT "drop":
     # the two engines disagree, with the naive route (`run_cdnots`) keeping
@@ -1255,6 +1266,41 @@ def _discover(
         )
     d = df_obs.shape[1]
     return np.asarray(cg[:d, :d, : max_lag + 1])
+
+
+def _factor_adjusted_graph(
+    df_obs, max_lag, alpha, factor_count_margin=_FACTOR_COUNT_MARGIN
+):
+    """Base-engine discovery with the leave-out factor-adjusted partial correlation.
+
+    Only the lagged slices of the result are meant to be used: lag-0 tests condition on
+    current factor scores, which are sums of current series.
+    """
+    from ..cdnots.phase3_utils import cdnots_discovery
+    from ._factor_parcorr import FactorParCorr
+
+    X = df_obs.values
+    k = max(1, int(mp_factor_count(X, factor_count_margin=factor_count_margin)))
+    test = FactorParCorr(k, n_obs=X.shape[1])
+    # discrete_cols=[]: CDNOTS would otherwise wrap the test in StratifiedCIT for
+    # integer-valued columns, which hides the lag layout FactorParCorr needs. Every
+    # column is treated as continuous here. _skeleton_only: only the lagged slices
+    # are used, and they depend only on lagged adjacencies, so the lag-0
+    # orientation steps (most of the run time) are skipped.
+    result, _ = cdnots_discovery(
+        df_obs,
+        test,
+        num_lags=max_lag,
+        include_C=True,
+        c_preset="linear",
+        alpha=alpha,
+        verbose=False,
+        return_pvals=False,
+        discrete_cols=[],
+        _skeleton_only=True,
+    )
+    d = df_obs.shape[1]
+    return np.asarray(result.to_binary()[:d, :d, : max_lag + 1]), {"n_factors": k}
 
 
 def deconfound(
@@ -1288,6 +1334,7 @@ def routed_deconfound(
     profile="adaptive",
     alpha_factor_pds=_ALPHA_FACTOR_PDS,
     arch_alpha=_ARCH_ALPHA,
+    *,
     drop_lag0=True,
     keep_undirected=False,
     recover_lag0=True,
@@ -1305,6 +1352,7 @@ def routed_deconfound(
     factor_count_margin=_FACTOR_COUNT_MARGIN,
     tetrad_threshold=_TETRAD_THRESHOLD,
     return_info=False,
+    pervasive_lagged="observed",
     **filter_kw,
 ):
     """Regime-adaptive causal discovery under latent confounders.
@@ -1369,6 +1417,20 @@ def routed_deconfound(
         differing only in which correction runs downstream. "tetrad" (research
         configuration) switches the pervasive branch to CD-NOTS+ with a tetrad
         deconfounding filter as its base skeleton engine instead.
+    pervasive_lagged : where the pervasive route takes its lag >= 1 edges from.
+        "observed" (default, shipped) keeps the base skeleton's lagged edges, which
+        are not adjusted for the latent factors. "factor_adjusted" re-runs plain
+        CDNOTS with LUCID's private ``FactorParCorr``: partial
+        correlation that also partials out ``k`` PCA factor scores (``k`` = LUCID's MP
+        count, at least 1), estimated without the two tested series and taken only at
+        the older time point of the pair and before. It applies only when the
+        router says "pervasive"; the "sf" and "sparse" routes are unchanged (on "sf"
+        it helped some benchmark families and hurt others). The lag-0 slice is still
+        handled by ``recover_lag0``/``drop_lag0``. This path uses its own linear test,
+        so ``ci`` only affects the observed-data skeleton, and it treats every column
+        as continuous (no missing values). Not combinable with
+        ``pervasive_filters=True``, ``base_discovery``, ``pervasive_base="tetrad"`` or
+        ``profile="unconditional"``.
     return_info : if True, also return the routing/gate diagnostics dict.
     **filter_kw : optional alpha/threshold overrides passed to `deconfound`.
 
@@ -1382,6 +1444,33 @@ def routed_deconfound(
         ``return_info=True``.
     """
     X = df_obs.values
+    if pervasive_lagged not in ("observed", "factor_adjusted"):
+        raise ValueError(
+            f"unknown pervasive_lagged {pervasive_lagged!r} "
+            "(use 'observed' or 'factor_adjusted')"
+        )
+    if pervasive_lagged != "observed":
+        if pervasive_filters:
+            raise ValueError(
+                f"pervasive_lagged={pervasive_lagged!r} replaces the lagged edges that "
+                "pervasive_filters would prune; use one or the other"
+            )
+        if base_discovery is not None:
+            raise ValueError(
+                f"pervasive_lagged={pervasive_lagged!r} runs its own discovery and "
+                "cannot reuse a base discovery"
+            )
+        if profile != "adaptive":
+            raise ValueError(
+                f"pervasive_lagged={pervasive_lagged!r} needs profile='adaptive'"
+            )
+        if pervasive_base != "naive":
+            raise ValueError(
+                f"pervasive_lagged={pervasive_lagged!r} runs plain CDNOTS for the "
+                f"lagged edges and cannot be combined with pervasive_base="
+                f"{pervasive_base!r} (e.g. 'tetrad', which uses CDNOTS+)"
+            )
+    user_ci = ci is not None
     if ci is None:
         ci = ParCorrGPU(X)
     regime, info = _route(
@@ -1411,7 +1500,8 @@ def routed_deconfound(
 
     if profile == "unconditional":
         out = deconfound(graph, df_obs, max_lag, regime, **filter_kw)
-        return (out, {**info, "profile": "unconditional"}) if return_info else out
+        info = {**info, "profile": "unconditional", "pervasive_lagged": "observed"}
+        return (out, info) if return_info else out
     if profile != "adaptive":
         raise ValueError(
             f"unknown profile {profile!r} (use 'adaptive' or 'unconditional')"
@@ -1424,8 +1514,32 @@ def routed_deconfound(
             max_lag,
             alpha=filter_kw.get("alpha_pds_sparse", _ALPHA_PDS_SPARSE),
         )
-        info = {**info, "profile": "adaptive", "pervasive_filters": None}
+        info = {
+            **info,
+            "profile": "adaptive",
+            "pervasive_filters": None,
+            "pervasive_lagged": "observed",
+        }
         return (out, info) if return_info else out
+
+    lagged_info = None
+    if pervasive_lagged == "factor_adjusted" and regime == "pervasive":
+        if user_ci:
+            import warnings as _warnings
+
+            _warnings.warn(
+                f"pervasive_lagged={pervasive_lagged!r} finds the lagged edges of the "
+                "pervasive route with its own factor-adjusted partial correlation; "
+                "`ci` is used only for the base skeleton",
+                UserWarning,
+                stacklevel=2,
+            )
+        # The adjusted lagged slices are spliced in only after lag-0 handling, so
+        # S-L recovery sees the observed graph (its VAR order comes from the
+        # highest occupied lag) and the lag-0 slice is the same as with "observed".
+        lagged, lagged_info = _factor_adjusted_graph(
+            df_obs, max_lag, alpha=alpha_ci, factor_count_margin=factor_count_margin
+        )
 
     if not pervasive_filters:
         # No pervasive lag>=1 filtering (ARCH gate is moot with nothing to gate). The
@@ -1478,12 +1592,18 @@ def routed_deconfound(
         )
     elif drop_lag0:
         out = _drop_instantaneous(out)
+    if lagged_info is not None:
+        out = np.array(out, copy=True)
+        out[:, :, 1:] = lagged[:, :, 1:]
     info = {
         **info,
         "profile": "adaptive",
         "vol_clustering_p": p_arch,
         "pervasive_filters": applied,
+        "pervasive_lagged": pervasive_lagged if lagged_info is not None else "observed",
     }
+    if lagged_info is not None:
+        info["factor_adjusted"] = lagged_info
     return (out, info) if return_info else out
 
 
@@ -1495,16 +1615,15 @@ def routed_deconfound_naive_sl(df_obs, max_lag, **kw):
     F13/F14: max-T, alpha=0.05, n_boot=200 -- stable at this scope since lag-0-only has
     far fewer tested pairs than the failed full-multilag-replacement attempt).
 
-    Research question (2026-08-09, `experiments/confounders/SL_VALIDATION.md`): with a
-    single shared base engine across both branches, does S-L lag-0 recovery alone (not a
-    full pervasive-branch replacement) match/beat the shipped CDNOTS+/tetrad pervasive
-    base engine on the paper's OOD suite?
+    Research question: with a single shared base engine across both branches, does
+    S-L lag-0 recovery alone (not a full pervasive-branch replacement) match/beat the
+    shipped CDNOTS+/tetrad pervasive base engine on the paper's OOD suite?
 
-    Reproduce::
+    Example::
 
-        python run_ood_benchmark.py \\
-            --method causalts.confounders.routed_deconf:routed_deconfound_naive_sl \\
-            --worktree /Users/mfesanghary1/workspace/causal-ts-lag0 --seeds 0 1 2
+        from causalts.confounders.routed_deconf import routed_deconfound_naive_sl
+
+        graph = routed_deconfound_naive_sl(df, max_lag=2)  # (d, d, 3) array
     """
     return routed_deconfound(
         df_obs,
@@ -1520,7 +1639,7 @@ def routed_deconfound_naive_sl(df_obs, max_lag, **kw):
 def routed_deconfound_lucid(df_obs, max_lag, **kw):
     """The shipped LUCID pipeline (2026-08-12): unified plain-CD-NOTS base on both branches,
     S-L lag-0 recovery, and NO pervasive lag>=1 filters. The benchmark filter ablation
-    (`experiments/confounders/run_filter_ablation.py`, 20 seeds + higher-lag check) showed the
+    (20 seeds + higher-lag check) showed the
     vol-invariance/LLCCA/factor-PDS filters are net-harmful on the unified base -- they
     over-prune, increasingly at higher lags -- so LUCID omits them (and the ARCH gate they
     were gated on). This is `routed_deconfound_naive_sl` with `pervasive_filters=False`.

@@ -8,10 +8,10 @@ from __future__ import annotations
 import logging
 import warnings
 
-import networkx as nx
 import numpy as np
 import pandas as pd
 
+from .._warnings import external_stacklevel
 from .lag_selection import (
     compute_lag_importance,
     compute_lag_pvalues,
@@ -104,6 +104,18 @@ def _compute_children_mask(
     return mask
 
 
+def _warn_max_prune_path(value):
+    """Warn that ``max_prune_path`` is ignored; return None to pass on."""
+    if value is not None:
+        warnings.warn(
+            "max_prune_path is deprecated and has no effect: Cedar prunes with "
+            "MCI tests, not path lengths. It will be removed in a future release.",
+            DeprecationWarning,
+            stacklevel=external_stacklevel(),
+        )
+    return None
+
+
 class Cedar:
     """CEDAR causal discovery algorithm.
 
@@ -153,8 +165,9 @@ class Cedar:
     sweep_all_lags : bool
         When True, test every lag 1..max_lag for each candidate pair regardless
         of lag-selection significance. CI tests become the sole acceptance gate.
-    max_prune_path : int
-        Maximum path length for pruning.
+    max_prune_path : None
+        Deprecated, has no effect: pruning is MCI-based (``_prune_mci``) and
+        never used a path length. Passing a value warns.
     include_lag0 : bool
         Include contemporaneous effects (lag 0).
     n_jobs : int
@@ -182,7 +195,7 @@ class Cedar:
         prune: bool = True,
         alpha_mci: float | None = None,
         sweep_all_lags: bool = False,
-        max_prune_path: int = 4,
+        max_prune_path: int | None = None,
         include_lag0: bool = False,
         multi_lag: bool = True,
         multi_lag_keep: str = "first",
@@ -230,6 +243,7 @@ class Cedar:
         self.prune = prune
         self._alpha_mci = alpha_mci
         self.sweep_all_lags = sweep_all_lags
+        _warn_max_prune_path(max_prune_path)
         self.max_prune_path = max_prune_path
         self.include_lag0 = include_lag0
         self.multi_lag = multi_lag
@@ -467,6 +481,7 @@ class Cedar:
         graph = np.zeros((d, d, self.max_lag + 1), dtype=np.int8)
         val_matrix = np.zeros((d, d, self.max_lag + 1))
         pval_matrix = np.ones((d, d, self.max_lag + 1))
+        tested = np.zeros((d, d, self.max_lag + 1), dtype=bool)
         n_tests = 0
 
         if target_col is not None:
@@ -515,6 +530,7 @@ class Cedar:
                 graph[cause_idx, target_idx, lag] = 1
                 val_matrix[cause_idx, target_idx, lag] = strength
                 pval_matrix[cause_idx, target_idx, lag] = pv
+                tested[cause_idx, target_idx, lag] = True
 
         # --- Phase 1.5: Autoregressive self-loops ---
         ar_violations_dict: dict[str, float] = {}
@@ -540,6 +556,11 @@ class Cedar:
             else:
                 for lg in range(1, self.max_lag + 1):
                     graph[ci, ei, lg] = 1
+
+        # Self-loops and required edges are added without passing a Cond1 test
+        # (no p-value is kept for them): give them NaN ("untested", as in CDNOTS),
+        # not the 1.0 of a rejected edge.
+        pval_matrix[(graph != 0) & ~tested] = np.nan
 
         # --- Phase 4: MCI Pruning ---
         pruned = False
@@ -1005,164 +1026,6 @@ class Cedar:
 
         return graph, val_matrix, n_tests
 
-    def _prune_graph(
-        self,
-        graph: np.ndarray,
-        val_matrix: np.ndarray,
-        selected_lags: np.ndarray,
-        data: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, int]:
-        """Remove indirect links via Markov blanket CI testing."""
-        d = self._d
-        T = data.shape[0]
-        graph = graph.copy()
-        val_matrix = val_matrix.copy()
-        n_tests = 0
-
-        # Build directed graph from summary adjacency
-        adj = graph.sum(axis=2)
-        G = nx.from_numpy_array(adj, create_using=nx.DiGraph)
-
-        # --- Prune indirect paths ---
-        for target_idx in range(d):
-            parents = list(np.where(graph[:, target_idx, :].any(axis=1))[0])
-            if len(parents) <= 1:
-                continue
-
-            for parent_idx in list(parents):
-                if parent_idx not in parents:
-                    continue
-                try:
-                    descendants = nx.descendants(G, parent_idx)
-                except nx.NetworkXError:
-                    continue
-                common = set(parents) & descendants - {parent_idx}
-                if not common:
-                    continue
-
-                lag_p = int(np.nanmin(np.where(graph[parent_idx, target_idx, :])))
-
-                # Build Markov blanket test array
-                mb_cols = [
-                    data[lag_p:T, parent_idx],  # source at lag
-                    data[lag_p:T, target_idx],  # target at t
-                ]
-                # Add target t-1 and t+1 as context
-                if lag_p + 1 <= T:
-                    mb_cols.append(data[lag_p - 1 : T - 1, target_idx])  # t-1
-                if lag_p + 1 < T:
-                    mb_cols.append(
-                        data[lag_p + 1 : T + 1, target_idx]
-                        if lag_p + 1 + (T - lag_p) <= T
-                        else data[lag_p + 1 :, target_idx]
-                    )
-
-                # Add other parents at their lags
-                for other_p in parents:
-                    if other_p == parent_idx:
-                        continue
-                    lag_o = int(np.nanmin(np.where(graph[other_p, target_idx, :])))
-                    if lag_o < T:
-                        mb_cols.append(data[lag_o:T, other_p])
-                        if lag_o > 0:
-                            mb_cols.append(data[lag_o - 1 : T - 1, other_p])
-
-                # Align all columns to same length
-                min_len = min(len(c) for c in mb_cols)
-                if min_len < 10:
-                    continue
-                mb_cols = [c[:min_len] for c in mb_cols]
-
-                test_data = np.column_stack(mb_cols)
-                nan_mask = np.isnan(test_data).any(axis=1)
-                if nan_mask.any():
-                    test_data = test_data[~nan_mask]
-                if test_data.shape[0] < 10:
-                    continue
-
-                self._ci_test.data = test_data
-                cond_set = np.arange(2, test_data.shape[1])
-                p_val, _ = self._ci_test(0, 1, cond_set)
-                n_tests += 1
-
-                if p_val >= self.alpha_cond2:
-                    graph[parent_idx, target_idx, lag_p] = 0
-                    val_matrix[parent_idx, target_idx, lag_p] = 0.0
-                    if G.has_edge(parent_idx, target_idx):
-                        G.remove_edge(parent_idx, target_idx)
-                    parents.remove(parent_idx)
-                    if self.verbose:
-                        logger.info(
-                            "Pruned %s -> %s (p=%.4f)",
-                            self._var_names[parent_idx],
-                            self._var_names[target_idx],
-                            p_val,
-                        )
-
-        # --- Prune simple cycles ---
-        try:
-            simple_cycles = list(nx.simple_cycles(G, length_bound=2))
-        except Exception:
-            simple_cycles = []
-
-        for cycle in simple_cycles:
-            for src, trg in [cycle, cycle[::-1]]:
-                if not graph[src, trg, :].any():
-                    continue
-                lag_s = int(np.nanmin(np.where(graph[src, trg, :])))
-                parents_trg = list(np.where(graph[:, trg, :].any(axis=1))[0])
-
-                mb_cols = [
-                    data[lag_s:T, src],
-                    data[lag_s:T, trg],
-                ]
-                if lag_s > 0:
-                    mb_cols.append(data[lag_s - 1 : T - 1, trg])
-                if lag_s + 1 < T:
-                    end_idx = min(T, lag_s + 1 + (T - lag_s))
-                    mb_cols.append(data[lag_s + 1 : end_idx, trg])
-
-                for op in parents_trg:
-                    if op == src:
-                        continue
-                    if not graph[op, trg, :].any():
-                        continue
-                    lag_o = int(np.nanmin(np.where(graph[op, trg, :])))
-                    mb_cols.append(data[lag_o:T, op])
-                    if lag_o > 0:
-                        mb_cols.append(data[lag_o - 1 : T - 1, op])
-
-                min_len = min(len(c) for c in mb_cols)
-                if min_len < 10:
-                    continue
-                mb_cols = [c[:min_len] for c in mb_cols]
-                test_data = np.column_stack(mb_cols)
-                nan_mask = np.isnan(test_data).any(axis=1)
-                if nan_mask.any():
-                    test_data = test_data[~nan_mask]
-                if test_data.shape[0] < 10:
-                    continue
-
-                self._ci_test.data = test_data
-                cond_set = np.arange(2, test_data.shape[1])
-                p_val, _ = self._ci_test(0, 1, cond_set)
-                n_tests += 1
-
-                if p_val >= self.alpha_cond2:
-                    graph[src, trg, lag_s] = 0
-                    val_matrix[src, trg, lag_s] = 0.0
-                    if G.has_edge(src, trg):
-                        G.remove_edge(src, trg)
-                    if self.verbose:
-                        logger.info(
-                            "Cycle pruned %s -> %s (p=%.4f)",
-                            self._var_names[src],
-                            self._var_names[trg],
-                            p_val,
-                        )
-
-        return graph, val_matrix, n_tests
-
 
 from ..algorithms import register_algorithm  # noqa: E402
 
@@ -1186,7 +1049,7 @@ def run_cedar(
     prune: bool = True,
     alpha_mci: float | None = None,
     sweep_all_lags: bool = False,
-    max_prune_path: int = 4,
+    max_prune_path: int | None = None,
     include_lag0: bool = False,
     multi_lag: bool = True,
     multi_lag_keep: str = "first",
@@ -1243,8 +1106,8 @@ def run_cedar(
         Separate alpha for MCI pruning (default None → same as alpha_cond2).
     sweep_all_lags : bool
         Test every lag 1..max_lag regardless of lag-selection significance.
-    max_prune_path : int
-        Max path length for pruning.
+    max_prune_path : None
+        Deprecated, has no effect (see :class:`Cedar`). Passing a value warns.
     include_lag0 : bool
         Include contemporaneous effects.
     n_jobs : int
@@ -1267,7 +1130,7 @@ def run_cedar(
         ``'var_em'`` — fill NaN via iterative VAR-EM before discovery.
     impute_kwargs : dict, optional
         Extra keyword arguments forwarded to the imputer (e.g.
-        ``{"p": 2, "n_iter": 10}`` for ``var_em``).
+        ``{"p": 2, "max_iter": 10}`` for ``var_em``).
     include_C : bool, default False
         Append a nonstationarity time-index variable (C node) to the data
         before discovery. C is treated as a pure cause — it is tested as a
@@ -1312,7 +1175,7 @@ def run_cedar(
         prune=prune,
         alpha_mci=alpha_mci,
         sweep_all_lags=sweep_all_lags,
-        max_prune_path=max_prune_path,
+        max_prune_path=_warn_max_prune_path(max_prune_path),
         include_lag0=include_lag0,
         multi_lag=multi_lag,
         multi_lag_keep=multi_lag_keep,
