@@ -117,14 +117,13 @@ class CIT_Base(object):
         self.random_state = np.random.default_rng(seed)
         self._base_seed = seed
         # hash: if data absent create placeholder
-        if data_hash is not None:
-            self.data_hash = data_hash
-        else:
-            self.data_hash = (
+        if data_hash is None:
+            data_hash = (
                 hashlib.md5(str(data).encode("utf-8")).hexdigest()
                 if data is not None
                 else f"nodata-{method}"
             )
+        self.data_hash = data_hash
         if data is not None:
             self.sample_size, self.num_features = data.shape
         else:

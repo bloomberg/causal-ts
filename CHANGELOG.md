@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * `corr_table()` — APA-style correlation table (r, stars, M/SD, CI, footnote), prints via `_repr_html_`/`__repr__`.
 * `pairs_panel()` — scatterplot matrix (histogram+KDE diagonal, scatter+fit, correlation text), colorblind-safe palette.
 * CI tests `gcm`, `wgcm`, `pcm` (residual-score) and `raft`, `rift` (random-feature F-tests).
+* `ci_test_selection` example notebook: which CI test and α to use inside CDNOTS.
 * How an unoriented (`o-o`) contemporaneous edge is rendered is now a post-discovery choice, not a hardcoded one: `result.to_binary(undirected=, conflict=)`, the lossless `result.to_marks()`, `result.plot(undirected=)`, `result.undirected_policy`, and the same knobs on `cdnots_to_tigramite_graph()` / `tigramite_graph_to_binary()`. Engine defaults are unchanged — `cg_tig` is bit-identical. `evaluate_graph()` gains `*_lag0`, `*_lag0_adj` and `*_lagpos` metric groups.
 * `run_cdnots(collider_search="full"|"sepset")`: which conditioning sets the lag-0 collider
   vote searches. `run_cdnots_plus(return_prefix=True)` + `finish_cdnots_plus()` reuse one
