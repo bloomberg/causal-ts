@@ -433,7 +433,7 @@ plot_graph(g_base, val_matrix=None, var_names=list(df.columns),
 
 # %% [markdown]
 # On this seed CDNOTS recovers four of the six planted cross-variable edges, so recall
-# is `0.67`. Precision collapses to `0.10`: it also reports 38 spurious contemporaneous
+# is `0.67`. Precision collapses to `0.12`: it also reports 30 spurious contemporaneous
 # arrows between observed series, induced by the latent factors, where the truth has none.
 
 # %% [markdown]
@@ -572,7 +572,7 @@ print(f"\nthe panel plotted above is seed 42: LUCID F1 {lu.loc[42]:.3f} against 
 # Over these thirty seeds LUCID's F1 is higher than the fixed filter's on 28 and tied on
 # the other two, never lower. The single panel above is a below-average draw: its recall,
 # `0.67`, sits under the `0.84` seed mean, and the gap it shows over the fixed filter
-# (`0.13`) is about a third of the `0.33` mean gap.
+# (`0.13`) is under half of the `0.29` mean gap.
 #
 # All three rows share the same recall, and here that is mechanical rather than
 # coincidental. Every planted edge is lag-1; `tetrad_filter` only ever touches the lag-0
@@ -584,7 +584,7 @@ print(f"\nthe panel plotted above is seed 42: LUCID F1 {lu.loc[42]:.3f} against 
 #
 # Precision is what separates the methods. `tetrad_filter` applies one fixed assumption to
 # every dataset — on this pervasively confounded panel that assumption is the right one,
-# and it reaches a mean F1 of `0.57` (`±0.18`). Deciding per dataset, LUCID reaches `0.90`
+# and it reaches a mean F1 of `0.61` (`±0.16`). Deciding per dataset, LUCID reaches `0.90`
 # (`±0.08`) at a mean precision of `0.99`, with an SHD of 1 as both the median and the most
 # common outcome (14 of the 30 seeds; 8 more are exact).
 

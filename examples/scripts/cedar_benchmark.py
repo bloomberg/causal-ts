@@ -198,15 +198,15 @@ plt.show()
 # These are findings from this benchmark (sparse SCP, PartialCorr, T=300, max_lag=2,
 # 4 seeds), not a general recommendation.
 #
-# - **Runtime.** In the sweep, CEDAR is 3-5x faster than CDNOTS+ at every d
-#   (d=40: 0.56 s vs 2.50 s). Its pairwise design uses O(d²) CI tests, while
+# - **Runtime.** In the sweep, CEDAR is about 2x faster than CDNOTS+ at every d
+#   (d=40: 0.62 s vs 1.22 s). Its pairwise design uses O(d²) CI tests, while
 #   CDNOTS+'s cost grows with the conditioning-set size. The single d=20 run above
-#   shows the opposite (CEDAR 2.26 s vs CDNOTS+ 0.45 s) because it is the first CEDAR
+#   shows the opposite (CEDAR 2.07 s vs CDNOTS+ 0.30 s) because it is the first CEDAR
 #   call in the session and includes one-off setup cost; the sweep's d=20 mean for
-#   CEDAR is 0.16 s.
-# - **Accuracy.** Mean F1 is close at most d (d=20: 0.815 for both; d=40: CEDAR
+#   CEDAR is 0.17 s.
+# - **Accuracy.** Mean F1 is close at most d (d=20: CEDAR 0.815 vs CDNOTS+ 0.805; d=40: CEDAR
 #   0.764 vs CDNOTS+ 0.766; d=15: CDNOTS+ slightly ahead). CEDAR is ahead at d=10
-#   (0.824 vs 0.762) and d=35 (0.805 vs 0.780). With only 4 seeds per d, differences
+#   (0.824 vs 0.750) and d=35 (0.805 vs 0.784). With only 4 seeds per d, differences
 #   of a few hundredths should not be over-read.
 # - **Scope.** The generator produces autoregressive data, which matches CEDAR's
 #   design assumption. On data without that structure, this comparison may not hold.
