@@ -28,7 +28,7 @@ def _multivariate_silverman_bandwidth(n, d):
     standardized data: h = (4 / ((d + 2) n)) ** (1 / (d + 4)).
 
     For d = 1 it is the textbook 1-D rule (1.06 n^(-1/5)); the rule it replaced
-    multiplied in the 1.06 twice, so |Z| = 1 bandwidths are about 6% narrower
+    multiplied in the 1.06 twice, so ``|Z|`` = 1 bandwidths are about 6% narrower
     than before. For larger d it shrinks more slowly with n, as the
     d-dimensional NW smoother needs.
     """
@@ -89,7 +89,7 @@ def _estimate_conditional_cdfs(x, z, h, leave_one_out=False, return_n_fallback=F
     With ``leave_one_out`` the point's own weight is dropped from its sum. Its
     self-weight is the largest in the row and always counts x_i <= x_i, which
     pulls U_i towards 1 by an amount that depends on how isolated z_i is, so U
-    stays dependent on Z and the permutation null over-rejects as |Z| grows.
+    stays dependent on Z and the permutation null over-rejects as ``|Z|`` grows.
     A point with no neighbour weight left falls back to the marginal CDF of x,
     which ignores Z for that point; ``return_n_fallback`` also returns how many
     did (without ``leave_one_out``: how many have only their own weight, which
@@ -315,14 +315,14 @@ def citest_cind(
     leave_one_out : bool (default True)
         Leave each point out of its own Nadaraya-Watson sum, with the automatic
         or a numeric ``h``. The self-included estimator biases U towards 1
-        where Z is sparse, which over-rejects as |Z| grows.
+        where Z is sparse, which over-rejects as ``|Z|`` grows.
 
     on_sparse : callable or None
         Called as ``on_sparse(frac, h)`` when more than 10% of rows have no
         neighbour weight left (it underflows) and fall back to the marginal CDF,
         so Z is ignored for them: a numeric ``h`` far below Z's scale. Rows
         with only one or two effective neighbours are not counted, so the
-        automatic rule practically never triggers it, including at large |Z|
+        automatic rule practically never triggers it, including at large ``|Z|``
         where the test still over-rejects. By default a ``UserWarning`` is
         issued.
 
@@ -460,7 +460,7 @@ class DFCITGPU(CIT_Base):
     d-dimensional Silverman rule; a number is used as the kernel width on Z as
     given. ``leave_one_out`` (default True) drops each point from its own kernel
     sum with either bandwidth; ``False`` restores the self-included estimator,
-    which over-rejects as |Z| grows.
+    which over-rejects as ``|Z|`` grows.
     """
 
     def __init__(
