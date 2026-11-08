@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+* `extract_subgraph` reads a lag-0 `<--` / `<-o` mark in a string graph as the reversed edge,
+  so `direction="parents"` / `"children"` no longer return the wrong neighbours.
+
 ## [0.28.0]
 
 ### Added
