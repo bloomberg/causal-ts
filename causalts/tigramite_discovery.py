@@ -357,7 +357,7 @@ def tigramite_graph_to_binary(
     Parameters
     ----------
     tig_graph : numpy.ndarray
-        Shape (d, d, tau_max+1), dtype string.
+        Shape (d, d, tau_max+1), dtype string (``str`` or ``bytes``).
     p_matrix : numpy.ndarray or None, optional
         Optional p-value matrix for additional thresholding.
     alpha_level : float or None, optional
@@ -395,6 +395,11 @@ def tigramite_graph_to_binary(
         symmetric.add("o-o")
     if conflict == "bidirected":
         symmetric.add("x-x")
+
+    tig_graph = np.asarray(tig_graph)
+    if tig_graph.dtype.kind == "S":
+        # str() of a bytes mark is "b'-->'", which matches no mark below.
+        tig_graph = tig_graph.astype(str)
 
     d = tig_graph.shape[0]
     tau_max_plus_1 = tig_graph.shape[2]

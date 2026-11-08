@@ -424,5 +424,19 @@ def test_tigramite_lagged_reverse_marks_render_the_forward_link():
     assert G[0, 1, 0] == 1 and G[1, 0, 0] == 0
 
 
+def test_tigramite_converter_reads_bytes_marks():
+    from causalts.tigramite_discovery import tigramite_graph_to_binary
+
+    marks = np.full((3, 3, 2), "", dtype="<U3")
+    marks[0, 1, 0], marks[1, 0, 0] = "-->", "<--"
+    marks[1, 2, 0], marks[2, 1, 0] = "o-o", "o-o"
+    marks[2, 0, 1] = "o->"
+    for undirected in ("drop", "bidirected"):
+        expected = tigramite_graph_to_binary(marks, undirected=undirected)
+        G = tigramite_graph_to_binary(marks.astype("S3"), undirected=undirected)
+        assert G.sum() > 0
+        assert np.array_equal(G, expected)
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
