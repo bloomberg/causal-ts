@@ -246,6 +246,47 @@ def test_compare_functions_single_variable_graph(n_lags, as_marks):
     plt.close("all")
 
 
+@pytest.mark.parametrize("tau", [0, 1])
+def test_plot_lag_metrics_latent_mark_is_not_an_edge(tau):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_lag_metrics
+
+    # "<->" asserts there is no direct edge, so it is a false negative here,
+    # not a true positive plus a false positive.
+    gt = np.zeros((2, 2, 2), dtype=np.int8)
+    gt[0, 1, tau] = 1
+    disc = np.full((2, 2, 2), "", dtype="<U3")
+    disc[0, 1, tau] = "<->"
+    if tau == 0:
+        disc[1, 0, 0] = "<->"
+
+    _, ax = plot_lag_metrics(gt, disc, metrics=["TP", "FP", "FN"])
+    np.testing.assert_array_equal(ax.images[0].get_array()[:, tau], [0, 0, 1])
+    plt.close("all")
+
+
+@pytest.mark.parametrize("mark", ["o-o", "x-x", "<->"])
+def test_compare_functions_reject_non_dag_ground_truth(mark):
+    from causalts.plotting import (
+        compare_graphs,
+        plot_lag_metrics,
+        plot_pvalue_distribution,
+    )
+
+    gt = np.full((2, 2, 1), "", dtype="<U3")
+    gt[0, 1, 0] = gt[1, 0, 0] = mark
+    disc = np.zeros((2, 2, 1), dtype=np.int8)
+    pvals = np.full((2, 2, 1), 0.5)
+
+    with pytest.raises(ValueError, match="must be a DAG"):
+        compare_graphs(gt, disc)
+    with pytest.raises(ValueError, match="must be a DAG"):
+        plot_lag_metrics(gt, disc)
+    with pytest.raises(ValueError, match="must be a DAG"):
+        plot_pvalue_distribution(pvals, gt)
+
+
 @pytest.mark.parametrize(
     "n_lags, wrap",
     [
