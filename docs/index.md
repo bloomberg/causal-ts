@@ -1,7 +1,8 @@
 ---
 myst:
   html_meta:
-    "description": "Causal discovery for nonstationary time series — CDNOTS, CDNOTS+, CEDAR, GRACE/REAP refinement, LUCID latent-confounder correction, GPU and CPU CI tests"
+    "description": "Causal-TS is a Python library for causal discovery (causal structure learning) in stationary and nonstationary multivariate time series: constraint-based (CDNOTS, CDNOTS+, CEDAR), score-based (LGES, TGES, GES) and hybrid (GRACE, REAP) methods, CPU and GPU conditional-independence tests, LUCID latent-confounder correction and DoWhy effect estimation."
+    "google-site-verification": "B1Vaoes-7BZBNEdL2FxoOcN4tFdqkJJAhCxmVv5qR_Q"
 ---
 
 ```{toctree}
@@ -20,10 +21,10 @@ cli
   <div class="ct-hero-inner">
     <img src="_static/img/cts_.png" class="ct-hero-icon" alt="Causal-TS" />
     <div class="ct-hero-text">
-      <h1>Causal-<span class="ct-logo-ts">TS</span></h1>
+      <div class="ct-brand" role="presentation">Causal-<span class="ct-logo-ts">TS</span></div>
       <p class="tagline">
-        Causal discovery for nonstationary time series.<br/>
-        Constraint-based discovery · grow-shrink refinement · linear and nonlinear CI tests · effect estimation.
+        Causal discovery for stationary and nonstationary time series.<br/>
+        Constraint-based, score-based and hybrid discovery · linear and nonlinear CI tests · effect estimation.
       </p>
       <div class="btn-group">
         <a href="getting_started/index.html" class="ct-btn ct-btn-primary">Get Started</a>
@@ -56,9 +57,20 @@ cli
   </div>
 </div>
 
+# Causal discovery for time series in Python
+
+Causal-TS (`causalts` on PyPI) is an open-source Python library for causal
+discovery (also called causal structure learning) from stationary and
+nonstationary multivariate time series. It learns lagged and contemporaneous causal graphs
+with constraint-based, score-based and hybrid methods;
+provides linear and nonlinear conditional-independence tests on CPU and GPU;
+and supports graph refinement, regime discovery, latent-confounder correction,
+missing and mixed data, and optional causal effect estimation and
+counterfactual analysis through DoWhy.
+
 ## Discovery Algorithms
 
-::::{grid} 3
+::::{grid} 1 2 2 2
 :gutter: 3
 
 :::{grid-item-card} {fas}`circle-nodes;1.2em;sd-text-primary` &nbsp; CDNOTS · CDNOTS+
@@ -95,12 +107,26 @@ Causal Edge Discovery for Autoregressive processes. Per-pair minimum-lag selecti
 :shadow: md
 :class-header: sd-bg-primary sd-text-white
 
-**Grow-shrink refinement**
+**Hybrid · grow-shrink refinement**
 ^^^
 Refine the lagged edges of a directed candidate graph (CDNOTS by default, or any method's graph): a shrink step prunes, then grow rounds add missed lagged parents. **GRACE** prunes with neural L0 gates and can keep parents that change only a target's noise scale; **REAP** prunes by regression (partial F-tests), with no training.
 
 +++
 {bdg-light}`any candidate graph` {bdg-primary-line}`gates (GRACE)` {bdg-secondary-line}`regression (REAP)`
+:::
+
+:::{grid-item-card} {fas}`scale-balanced;1.2em;sd-text-primary` &nbsp; LGES · GES · Lasso-VAR
+:link: algorithms
+:link-type: doc
+:shadow: md
+:class-header: sd-bg-primary sd-text-white
+
+**Score-based**
+^^^
+**LGES**, **TGES** and **GES** search Markov equivalence classes for the best BIC score on lag-embedded data, forbidding edges from the future into the past. **Lasso-VAR**, **VARLiNGAM** and **Granger causality** read lagged (and, for VARLiNGAM, contemporaneous) edges off a fitted vector autoregression.
+
++++
+{bdg-primary-line}`BIC score` {bdg-secondary-line}`linear` {bdg-light}`VAR`
 :::
 
 ::::
@@ -225,7 +251,7 @@ Not sure which CI test or settings fit your data? `inspect_df(df)["recommendatio
 
 If you use Causal-TS in your research, please cite:
 
-> Fesanghary. "Causal-TS: A Python Library for Causal Discovery in High-Dimensional and Nonstationary Time Series." [arXiv:2607.24673](https://arxiv.org/abs/2607.24673), 2026.
+> Fesanghary. "Causal-TS: A Python Library for Causal Discovery in Stationary and Nonstationary Time Series." [arXiv:2607.24673](https://arxiv.org/abs/2607.24673), 2026.
 >
 > Fesanghary. "CEDAR: Causal Edge Discovery for Autoregressive Processes." [arXiv:2607.20696](https://arxiv.org/abs/2607.20696), 2026.
 >
@@ -238,7 +264,7 @@ If you use Causal-TS in your research, please cite:
 :::{dropdown} BibTeX
 ```bibtex
 @article{fesanghary2026causalts,
-  title={Causal-TS: A Python Library for Causal Discovery in High-Dimensional and Nonstationary Time Series},
+  title={Causal-TS: A Python Library for Causal Discovery in Stationary and Nonstationary Time Series},
   author={Fesanghary, Mohammad},
   journal={arXiv preprint arXiv:2607.24673},
   year={2026}

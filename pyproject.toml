@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "causalts"
 version = "0.28.0"
-description = "Causal Discovery for Time Series"
+description = "Causal discovery (structure learning) for stationary and nonstationary multivariate time series in Python"
 readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.10"
@@ -16,14 +16,25 @@ authors = [
 ]
 keywords = [
   "causal-discovery",
-  "time-series",
-  "nonstationary",
   "causal-inference",
+  "structure-learning",
+  "causal-graphs",
+  "causality",
+  "causal-machine-learning",
+  "graphical-models",
+  "time-series",
+  "time-series-analysis",
+  "multivariate-time-series",
+  "nonstationary",
   "conditional-independence",
+  "granger-causality",
+  "pytorch",
+  "gpu",
 ]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Science/Research",
+  "Intended Audience :: Developers",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
@@ -32,6 +43,8 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+  "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
   "numpy>=1.24",
@@ -55,6 +68,8 @@ causal-ts = "causalts.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/bloomberg/causal-ts"
+Documentation = "https://causal-ts.readthedocs.io/en/latest/"
+Paper = "https://arxiv.org/abs/2607.24673"
 Repository = "https://github.com/bloomberg/causal-ts"
 Issues = "https://github.com/bloomberg/causal-ts/issues"
 Changelog = "https://github.com/bloomberg/causal-ts/blob/main/CHANGELOG.md"

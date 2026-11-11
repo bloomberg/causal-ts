@@ -89,7 +89,7 @@ html { scroll-behavior: smooth; }
   border-radius: 8px;
 }
 
-/* Amber "TS" in navbar brand and hero h1 */
+/* Amber "TS" in navbar brand and hero brand */
 .ct-logo-ts {
   color: var(--ct-amber) !important;
 }
@@ -138,7 +138,8 @@ html { scroll-behavior: smooth; }
   text-align: left;
 }
 
-.ct-hero h1 {
+.ct-hero .ct-brand {
+  line-height: 1.2;
   font-size: 2.8rem;
   font-weight: 800;
   margin-bottom: 0.6rem;
@@ -429,6 +430,12 @@ table.docutils tr:nth-child(even) td {
 /* Homepage needs full width for hero/grid sections */
 .bd-main .bd-content .bd-article-container:has(.ct-hero) {
   max-width: 100%;
+}
+
+/* Homepage H1 (the page title for search engines) sits below the hero */
+.bd-article:has(.ct-hero) h1 {
+  font-size: 1.9rem;
+  margin-top: 2.5rem;
 }
 
 /* ── Section headings ────────────────────────────────────────── */
