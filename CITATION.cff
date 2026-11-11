@@ -1,0 +1,37 @@
+---
+cff-version: 1.2.0
+message: "If you use Causal-TS, please cite the software paper below."
+title: "Causal-TS"
+type: software
+abstract: >-
+  Causal discovery (causal structure learning) for stationary and
+  nonstationary multivariate time series in Python.
+authors:
+  - family-names: Fesanghary
+    given-names: Mohammad
+  - family-names: Gopal
+    given-names: Achintya
+  - family-names: Sadeghi
+    given-names: Agathe
+repository-code: "https://github.com/bloomberg/causal-ts"
+url: "https://causal-ts.readthedocs.io/en/latest/"
+license: GPL-3.0-or-later
+version: 0.28.0
+date-released: "2026-11-07"
+keywords:
+  - causal discovery
+  - causal structure learning
+  - time series
+  - nonstationarity
+  - conditional independence
+preferred-citation:
+  type: article
+  title: >-
+    Causal-TS: A Python Library for Causal Discovery in Stationary and
+    Nonstationary Time Series
+  authors:
+    - family-names: Fesanghary
+      given-names: Mohammad
+  journal: "arXiv preprint arXiv:2607.24673"
+  url: "https://arxiv.org/abs/2607.24673"
+  year: 2026
