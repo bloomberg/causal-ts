@@ -92,7 +92,7 @@ html_baseurl = os.environ.get(
     "READTHEDOCS_CANONICAL_URL", "https://causal-ts.readthedocs.io/en/latest/"
 )
 html_static_path = ["_static"]
-html_css_files = ["css/custom.css"]
+html_css_files = ["css/custom.css", "css/home.css"]
 html_logo = "_static/img/cts_.png"
 html_favicon = "_static/img/favicon_.png"
 html_show_sourcelink = False
