@@ -1,24 +1,37 @@
 # Causal-TS
 
-[![Release](https://img.shields.io/github/v/release/bloomberg/causal-ts?display_name=tag)](CHANGELOG.md)
+**Causal discovery for stationary and nonstationary multivariate time series
+in Python.**
+
+[![PyPI](https://img.shields.io/pypi/v/causalts)](https://pypi.org/project/causalts/)
+[![Python](https://img.shields.io/pypi/pyversions/causalts)](https://pypi.org/project/causalts/)
+[![arXiv](https://img.shields.io/badge/arXiv-2607.24673-b31b1b.svg)](https://arxiv.org/abs/2607.24673)
 [![Documentation](https://img.shields.io/readthedocs/causal-ts/latest?label=docs)](https://causal-ts.readthedocs.io/en/latest/)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/bloomberg/causal-ts/badge)](https://scorecard.dev/viewer/?uri=github.com/bloomberg/causal-ts)
 [![Lint](https://github.com/bloomberg/causal-ts/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/marketplace/actions/super-linter)
 [![Tests](https://github.com/bloomberg/causal-ts/actions/workflows/test.yml/badge.svg)](https://github.com/bloomberg/causal-ts/actions/workflows/test.yml)
-[![Contributor-Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-fbab2c.svg)](CODE_OF_CONDUCT.md)
+[![Contributor-Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-fbab2c.svg)](https://github.com/bloomberg/causal-ts/blob/main/CODE_OF_CONDUCT.md)
 
 ## About the Project
 
 📚 **[Full documentation is on Read the Docs](https://causal-ts.readthedocs.io/en/latest/)** — algorithm deep-dives, CI test guide, CLI reference, and worked example notebooks.
 
-Causal-TS is a Python framework for causal discovery in time series data. It implements five discovery algorithms, a suite of conditional independence tests (linear and nonlinear, GPU-accelerated where it helps), latent-confounder correction, DoWhy-based effect estimation, and built-in visualization and evaluation tools.
+Causal-TS (`causalts` on PyPI) is an open-source Python library for causal
+discovery (also called causal structure learning) from stationary and
+nonstationary multivariate time series. It learns lagged and contemporaneous
+causal graphs with constraint-based, score-based and hybrid methods;
+provides linear and nonlinear conditional-independence tests on CPU and GPU;
+and supports graph refinement, regime discovery, latent-confounder correction,
+missing and mixed data, and optional causal effect estimation and
+counterfactual analysis through DoWhy.
 
 **Algorithms:**
 
 - **CDNOTS** — Constraint-based discovery handling nonstationarity via a time-index node.
 - **CDNOTS+** — PCMCI+-style two-phase skeleton (MCI conditioning on discovered parents), avoiding over-conditioning on dense graphs.
 - **CEDAR** — Pairwise discovery for autoregressive processes using minimum-lag selection. O(d²) pairs.
-- **GRACE / REAP** — Grow-shrink refinement of a directed candidate graph (CDNOTS by default, or any method's graph), by neural L0 gates (GRACE) or by regression (REAP).
+- **GRACE / REAP** — Hybrid grow-shrink refinement of a directed candidate graph (CDNOTS by default, or any method's graph), by neural L0 gates (GRACE) or by regression (REAP).
+- **Score-based** — LGES, TGES and GES (BIC score search over lag-embedded data), plus Lasso-VAR, VARLiNGAM and Granger causality.
 
 **Also:** `causal-ts inspect` / `inspect_df` recommend a configuration from the data; LUCID corrects a discovered graph for latent confounders; effect estimation, SCMs and counterfactuals through DoWhy; regime discovery; missing and mixed discrete-continuous data; PCMCI/PCMCI+/LPCMCI through tigramite.
 
@@ -34,7 +47,8 @@ Causal-TS is a Python framework for causal discovery in time series data. It imp
 | `linsig` | Path-space (linear signature) | moderate |
 | `kci` | Nonlinear (kernel) | slow |
 | `dfcit` | Distribution-free | moderate |
-| `gcm` / `wgcm` / `pcm` | Residual score (regression) | fast |
+| `gcm` | Residual score (regression) | fast |
+| `wgcm` / `pcm` | Residual score (regression) | moderate |
 | `cmiknn-gpu` | Nonparametric (k-NN) | slow |
 | `cmiknn-mixed-gpu` | Mixed discrete-continuous (k-NN) | slow |
 
@@ -79,6 +93,18 @@ To let a coding agent drive causal-ts, run `causal-ts install-skill` — see the
 
 ## Quick Start
 
+On your own data (a CSV with one column per variable, rows in time order):
+
+```bash
+causal-ts inspect data.csv                                       # data health + recommended settings
+causal-ts discover data.csv -a cdnots --ci-test raft --max-lag 3 # learn the causal graph
+```
+
+Use the CI test and settings that `inspect` recommends; `raft` is a fast
+nonlinear choice, while the default `parcorr-gpu` assumes linear relations.
+
+### Reproducible example with known ground truth
+
 ```python
 from causalts.synthetic_data.synthetic_datasets import load_dataset
 from causalts.ci_tests import RAFTCI
@@ -117,15 +143,15 @@ of proposed features (and known issues).
 Contributions are what make the open source community such an amazing place to
 learn, inspire, and create. Any contributions you make are **greatly
 appreciated**. For detailed contributing guidelines, please see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[CONTRIBUTING.md](https://github.com/bloomberg/causal-ts/blob/main/CONTRIBUTING.md).
 
 ## License
 
-Distributed under the `GPL-3.0-or-later` License. See [LICENSE](LICENSE) for
+Distributed under the `GPL-3.0-or-later` License. See [LICENSE](https://github.com/bloomberg/causal-ts/blob/main/LICENSE) for
 more information.
 
 This project includes modified code from third-party packages. See
-[NOTICE](NOTICE) for details on original authorship and licensing.
+[NOTICE](https://github.com/bloomberg/causal-ts/blob/main/NOTICE) for details on original authorship and licensing.
 
 ## Contact
 
@@ -142,7 +168,7 @@ We thank the open source contributors to Tigramite and causal-learn whose implem
 
 If you use causal-ts in your research, please cite the following papers:
 
-1. **Causal-TS: A Python Library for Causal Discovery in High-Dimensional and Nonstationary Time Series**
+1. **Causal-TS: A Python Library for Causal Discovery in Stationary and Nonstationary Time Series**
    Mohammad Fesanghary
    arXiv preprint [arXiv:2607.24673](https://arxiv.org/abs/2607.24673), 2026.
 
@@ -168,7 +194,7 @@ If you use causal-ts in your research, please cite the following papers:
 
 ```bibtex
 @article{fesanghary2026causalts,
-  title={Causal-TS: A Python Library for Causal Discovery in High-Dimensional and Nonstationary Time Series},
+  title={Causal-TS: A Python Library for Causal Discovery in Stationary and Nonstationary Time Series},
   author={Fesanghary, Mohammad},
   journal={arXiv preprint arXiv:2607.24673},
   year={2026}
@@ -220,7 +246,7 @@ Thanks goes to these wonderful people
 <table>
   <tbody>
     <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/fesanghary"><img src="https://avatars.githubusercontent.com/u/12377980?s=100" width="100px;" alt="Mohammad Fesanghary"/><br /><sub><b>Mohammad Fesanghary</b></sub></a><br /><a href="https://github.com/bloomberg/causal-ts/commits?author=fesanghary" title="Code">💻</a> <a href="https://github.com/bloomberg/causal-ts/commits?author=fesanghary" title="Documentation">📖</a> <a href="#example-fesanghary" title="Examples">💡</a> <a href="https://github.com/bloomberg/causal-ts/commits?author=fesanghary" title="Tests">⚠️</a> <a href="#infra-fesanghary" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="#maintenance-fesanghary" title="Maintenance">🚧</a> <a href="https://github.com/bloomberg/causal-ts/pulls?q=is%3Apr+reviewed-by%3Afesanghary" title="Reviewed Pull Requests">👀</a> <a href="https://github.com/bloomberg/causal-ts/issues?q=author%3Afesanghary" title="Bug reports">🐛</a> <a href="#ideas-fesanghary" title="Ideas, Planning, & Feedback">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/fesanghary"><img src="https://avatars.githubusercontent.com/u/12377980?s=100" width="100px;" alt="Mohammad Fesanghary"/><br /><sub><b>Mohammad Fesanghary</b></sub></a><br /><a href="https://github.com/bloomberg/causal-ts/commits?author=fesanghary" title="Code">💻</a> <a href="https://github.com/bloomberg/causal-ts/commits?author=fesanghary" title="Documentation">📖</a> <a href="#example-fesanghary" title="Examples">💡</a> <a href="https://github.com/bloomberg/causal-ts/commits?author=fesanghary" title="Tests">⚠️</a> <a href="#infra-fesanghary" title="Infrastructure (Hosting, Build-Tools, etc)">🚇</a> <a href="#maintenance-fesanghary" title="Maintenance">🚧</a> <a href="https://github.com/bloomberg/causal-ts/pulls?q=is%3Apr+reviewed-by%3Afesanghary" title="Reviewed Pull Requests">👀</a> <a href="https://github.com/bloomberg/causal-ts/issues?q=author%3Afesanghary" title="Bug reports">🐛</a> <a href="#ideas-fesanghary" title="Ideas, Planning, & Feedback">🤔</a> <a href="#promotion-fesanghary" title="Promotion">📣</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Arun-Verma"><img src="https://avatars.githubusercontent.com/u/5639113?s=100" width="100px;" alt="Arun Verma"/><br /><sub><b>Arun Verma</b></sub></a><br /><a href="https://github.com/bloomberg/causal-ts/commits?author=Arun-Verma" title="Documentation">📖</a> <a href="#example-Arun-Verma" title="Examples">💡</a> <a href="#promotion-Arun-Verma" title="Promotion">📣</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/fbourgey"><img src="https://avatars.githubusercontent.com/u/10298716?s=100" width="100px;" alt="Florian Bourgey"/><br /><sub><b>Florian Bourgey</b></sub></a><br /><a href="https://github.com/bloomberg/causal-ts/commits?author=fbourgey" title="Documentation">📖</a> <a href="#maintenance-fbourgey" title="Maintenance">🚧</a> <a href="#ideas-fbourgey" title="Ideas, Planning, & Feedback">🤔</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/mittal-aakriti"><img src="https://avatars.githubusercontent.com/u/31776192?s=100" width="100px;" alt="Aakriti Mittal"/><br /><sub><b>Aakriti Mittal</b></sub></a><br /><a href="#tutorial-mittal-aakriti" title="Tutorials">✅</a></td>

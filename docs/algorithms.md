@@ -1,10 +1,10 @@
 # Algorithms
 
-Causal-TS implements five discovery algorithms for time series in three families: the constraint-based **CDNOTS** and **CDNOTS+**, the pairwise **CEDAR** for autoregressive processes, and the grow-shrink refinements **GRACE** and **REAP**, which refine a candidate graph from any method (CDNOTS by default). Latent-confounder correction ([LUCID](api/confounders.md)) and [regime discovery](examples/regime_discovery.ipynb) work on top of any of them.
+Causal-TS covers the main families of time-series causal discovery: the constraint-based **CDNOTS** and **CDNOTS+**, the pairwise **CEDAR** for autoregressive processes, the hybrid grow-shrink refinements **GRACE** and **REAP**, which refine a candidate graph from any method (CDNOTS by default), and the score-based **LGES**, **TGES**, **GES**, **Lasso-VAR**, **VARLiNGAM** and **Granger causality**. Latent-confounder correction ([LUCID](api/confounders.md)) and [regime discovery](examples/regime_discovery.ipynb) work on top of any of them.
 
 For a recommended configuration for your data, run `inspect_df(df)` or `causal-ts inspect data.csv` (see [Choosing a configuration](getting_started/index.md#choosing-a-configuration)).
 
-::::{grid} 4
+::::{grid} 1 2 3 3
 :gutter: 3
 
 :::{grid-item-card}
@@ -54,9 +54,22 @@ Pairwise · Autoregressive
 
 **GRACE · REAP**
 
-Grow-shrink refinement
+Hybrid · grow-shrink refinement
 
 {bdg-primary-line}`any candidate graph`
+:::
+
+:::{grid-item-card}
+:shadow: sm
+:text-align: center
+
+{fas}`scale-balanced;2em;sd-text-primary`
+
+**LGES · GES · Lasso-VAR**
+
+Score-based
+
+{bdg-primary-line}`BIC score · VAR`
 :::
 
 ::::
@@ -68,6 +81,9 @@ Grow-shrink refinement
 | CEDAR | O(d²) pairs, plus MCI pruning | {fas}`check;sd-text-success` C node (`include_C`) | Lagged edges oriented by time |
 | GRACE | Candidate graph (CDNOTS by default) + O(d²) grow tests + neural training | {fas}`check;sd-text-success` via the candidate graph | Lagged edges (oriented by time): gates, then grow rounds and retraining; lag-0 edges are not refined |
 | REAP | Candidate graph + O(d²) grow tests + regressions | {fas}`check;sd-text-success` via the candidate graph | Lagged edges: backward elimination by partial F-tests, then three grow → re-shrink rounds (no training); optional lag-0 step |
+| LGES / TGES / GES | None (BIC score search over the lag-embedded variables) | {fas}`xmark;sd-text-danger` | CPDAG with no edges into the past; TGES orients more edges by time tier |
+| Lasso-VAR / Granger | None (L1-penalised VAR) | {fas}`xmark;sd-text-danger` | Lagged edges only, oriented by time |
+| VARLiNGAM | None (VAR + LiNGAM on the residuals) | {fas}`xmark;sd-text-danger` | Lagged and contemporaneous edges; lag-0 directions from non-Gaussian noise |
 
 :::{note}
 **Cost of the PC skeleton:** `d` is the number of variables and `p` the largest conditioning set tested (bounded by the maximum degree of the true graph). Each of the roughly d²·L candidate lagged pairs is tested against conditioning sets of size 0..`p` drawn from its neighbours, so the number of tests grows polynomially in `d` with exponent set by `p`. For sparse graphs `p` is small (typically 2–4) and discovery is tractable; for dense graphs `p` grows with `d`.
@@ -218,9 +234,26 @@ result.plot()
 **DoWhy integration:** `result.estimate_effect(...)`, `result.fit_scm()`, `result.counterfactual(...)` are available directly on the returned `CedarResult`.
 :::
 
+## {fas}`scale-balanced;1em;sd-text-primary` Score-based methods
+
+**No CI tests: score a whole graph, or read edges off a fitted VAR** {bdg-primary}`BIC score` {bdg-secondary}`linear`
+
+- **LGES**, **TGES** and **GES** embed the series with its lagged copies and search Markov equivalence classes for the graph with the best BIC score, forbidding every edge from the present into the past. LGES (Less Greedy Equivalence Search) inserts edges more conservatively than GES; TGES adds time tiers to the score and orients the remaining undirected edges by them.
+- **Lasso-VAR**, **Granger causality** and **VARLiNGAM** fit a vector autoregression: a lagged parent is a non-zero coefficient in a fitted vector autoregression (L1-penalised for Lasso-VAR, with a cross-validated penalty, and for Granger). VARLiNGAM also orients contemporaneous edges from non-Gaussian residuals.
+
+All assume linear relations (scored with a Gaussian BIC for the GES family) and have no nonstationarity node. Each returns the graph as a `(d, d, max_lag+1)` array plus a dict (the VAR-based three also return their coefficients), not a result object. The [score-based step-by-step](examples/score_based_step_by_step.ipynb) notebook walks through a GES search by hand, and the [baseline comparison](examples/baseline_comparison.ipynb) runs them next to CDNOTS, CDNOTS+ and CEDAR.
+
+```python
+from causalts.lges import lges_discovery, tges_discovery
+from causalts.baselines import ges_discovery, lasso_var_discovery
+
+G_lges, info = lges_discovery(df, max_lag=3)            # BIC penalty 0.5·log(n)
+G_lasso, coefs, info = lasso_var_discovery(df, max_lag=3)
+```
+
 ## {fas}`code-merge;1em;sd-text-primary` GRACE · REAP
 
-**Grow-shrink refinement of a candidate graph** {bdg-primary}`any candidate graph` {bdg-secondary}`gates | regression`
+**Hybrid grow-shrink refinement of a candidate graph** {bdg-primary}`any candidate graph` {bdg-secondary}`gates | regression`
 
 Both take a directed, lag-resolved candidate graph — CDNOTS by default (built with the CI test you pass as `ci_test_class`, or by name through `discover_df` / `causal-ts discover --ci-test`), or any method's graph as `candidate_graph` — and refine its **lagged** edges: a shrink step prunes the candidate parents, then grow rounds test the lagged pairs outside the graph, add the hits and shrink again. Lag-0 edges of the candidate graph are not carried over. They differ in the shrink step and in what they can find:
 
