@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `extract_subgraph` reads a lag-0 `<--` / `<-o` mark in a string graph as the reversed edge,
+  so `direction="parents"` / `"children"` no longer return the wrong neighbours.
 * `tigramite_graph_to_binary` reads `bytes` (`S`) edge-mark graphs instead of returning an
   empty graph.
 * `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` no longer count a

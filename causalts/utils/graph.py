@@ -22,6 +22,8 @@ def extract_subgraph(
     graph : ndarray, shape (d, d, max_lag+1)
         Full causal graph. ``graph[i, j, lag] != 0`` means
         variable *i* at time *t-lag* causes variable *j* at time *t*.
+        Tigramite edge-mark graphs are accepted too: at lag 0, ``"<--"``
+        and ``"<-o"`` at ``[i, j, 0]`` are read as the edge *j* -> *i*.
     target : int or str
         Target variable -- index or name (requires *var_names*).
     depth : int, optional
@@ -65,11 +67,15 @@ def extract_subgraph(
             raise ValueError(f"target index {target_idx} out of range [0, {d})")
 
     # Convert to boolean for traversal
-    graph_bool = (
-        np.asarray(graph).astype(bool)
-        if graph.dtype.kind in ("U", "S")
-        else (graph != 0)
-    )
+    if graph.dtype.kind in ("U", "S"):
+        marks = np.char.strip(np.asarray(graph).astype(str))
+        graph_bool = marks != ""
+        # A lag-0 link is stored at both [i, j, 0] and [j, i, 0]; "<--" and
+        # "<-o" at [i, j, 0] are the edge j -> i, not i -> j.
+        mirror = np.isin(marks[:, :, 0], ("<--", "<-o"))
+        graph_bool[:, :, 0] = (graph_bool[:, :, 0] & ~mirror) | mirror.T
+    else:
+        graph_bool = graph != 0
 
     included = {target_idx}
     frontier = {target_idx}

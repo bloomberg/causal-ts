@@ -158,6 +158,28 @@ def test_extract_subgraph_parents_only():
     assert set(indices) == {0, 1, 2}
 
 
+@pytest.mark.parametrize("mirror", ["<--", "<-o"])
+def test_extract_subgraph_string_graph_follows_lag0_direction(mirror):
+    from causalts.utils.graph import extract_subgraph
+
+    # 0 -> 1 at lag 0, stored with its mirror at [1, 0, 0]; 2 -> 0 at lag 1.
+    g = np.full((3, 3, 2), "", dtype="<U3")
+    g[0, 1, 0], g[1, 0, 0] = "-->", mirror
+    g[2, 0, 1] = "-->"
+
+    _, parents, _ = extract_subgraph(g, target=0, direction="parents")
+    _, children, _ = extract_subgraph(g, target=0, direction="children")
+    _, both, _ = extract_subgraph(g, target=0)
+    assert parents == [0, 2]
+    assert children == [0, 1]
+    assert both == [0, 1, 2]
+
+    _, parents_of_1, _ = extract_subgraph(g, target=1, direction="parents")
+    _, children_of_1, _ = extract_subgraph(g, target=1, direction="children")
+    assert parents_of_1 == [0, 1]
+    assert children_of_1 == [1]
+
+
 def test_compare_graphs_smoke():
     from causalts.plotting import compare_graphs
 
