@@ -266,7 +266,26 @@ def test_plot_lag_metrics_latent_mark_is_not_an_edge(tau):
     plt.close("all")
 
 
-@pytest.mark.parametrize("mark", ["o-o", "x-x", "<->"])
+def test_compare_functions_read_object_dtype_marks():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import compare_graphs, plot_lag_metrics
+
+    # Marks loaded from a DataFrame or CSV arrive as object arrays.
+    gt = np.full((2, 2, 1), "", dtype=object)
+    gt[0, 1, 0], gt[1, 0, 0] = "-->", "<--"
+    disc = np.full((2, 2, 1), "", dtype=object)
+    disc[0, 1, 0] = disc[1, 0, 0] = "<->"
+    _, ax = plot_lag_metrics(gt, disc, metrics=["TP", "FP", "FN"])
+    np.testing.assert_array_equal(ax.images[0].get_array()[:, 0], [0, 0, 1])
+    bad = gt.copy()
+    bad[0, 1, 0] = bad[1, 0, 0] = "o-o"
+    with pytest.raises(ValueError, match="must be a DAG"):
+        compare_graphs(bad, disc)
+    plt.close("all")
+
+
+@pytest.mark.parametrize("mark", ["o-o", "x-x", "<->", "o->", "<-o", "->"])
 def test_compare_functions_reject_non_dag_ground_truth(mark):
     from causalts.plotting import (
         compare_graphs,
