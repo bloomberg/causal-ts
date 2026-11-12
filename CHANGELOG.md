@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 * `tigramite_graph_to_binary` reads `bytes` (`S`) edge-mark graphs instead of returning an
   empty graph.
+* `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` no longer count a
+  `<->` mark as an edge, and raise `ValueError` for a ground truth with `o-o`, `x-x` or `<->`.
 
 ## [0.28.0]
 

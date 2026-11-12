@@ -21,21 +21,38 @@ from matplotlib.patches import Ellipse, FancyArrowPatch
 from ._core import compute_node_positions
 
 _MIRROR_MARKS = ("<--", "<-o")
+_LATENT_MARK = "<->"
+_DAG_MARKS = ("", "-->", "<--")
 
 
-def _to_bool(graph):
+def _to_bool(graph, ground_truth=False):
     """Convert a graph array to a boolean ``[cause, effect, lag]`` array.
 
     Numeric graphs: any nonzero entry is an edge. String (tigramite edge-mark)
-    graphs: any non-empty mark is an edge, except at lag 0, where a link is
-    stored at both ``[i, j, 0]`` and ``[j, i, 0]``. There ``"<--"`` and
-    ``"<-o"`` at ``[i, j, 0]`` are the edge ``j -> i``, not ``i -> j``, as in
-    ``tigramite_graph_to_binary``.
+    graphs: any non-empty mark is an edge, except ``"<->"`` and lag-0 mirror
+    marks. ``"<->"`` is a latent common cause, which asserts there is no
+    direct edge, so it is never counted, as in ``tigramite_graph_to_binary``.
+    At lag 0 a link is stored at both ``[i, j, 0]`` and ``[j, i, 0]``; there
+    ``"<--"`` and ``"<-o"`` at ``[i, j, 0]`` are the edge ``j -> i``, not
+    ``i -> j``.
+
+    With ``ground_truth=True`` the graph must be a DAG: any mark other than
+    ``"-->"`` and ``"<--"`` (e.g. ``"o-o"``, ``"x-x"``, ``"<->"``, ``"o->"``)
+    raises ``ValueError`` instead of being miscounted.
     """
     graph = _as_3d(graph)
+    if graph.dtype.kind == "O" and all(isinstance(v, str) for v in graph.flat):
+        graph = graph.astype(str)  # e.g. marks from a DataFrame or CSV
     if graph.dtype.kind in ("U", "S"):  # string dtype
         marks = np.char.strip(graph.astype(str))
-        edges = marks != ""
+        if ground_truth:
+            found = sorted(set(np.unique(marks)) - set(_DAG_MARKS))
+            if found:
+                raise ValueError(
+                    "graph_true must be a DAG (binary, or '-->' / '<--' marks); "
+                    f"it contains {', '.join(repr(m) for m in found)}"
+                )
+        edges = (marks != "") & (marks != _LATENT_MARK)
         mirror = np.isin(marks[:, :, 0], _MIRROR_MARKS)
         # Render a mirror at [i, j, 0] as j -> i rather than only dropping it,
         # so a graph holding just one half of a lag-0 pair keeps the edge.
@@ -98,9 +115,12 @@ def compare_graphs(
     Parameters
     ----------
     graph_true : array-like, shape (N, N, tau_max+1)
-        Ground truth graph. Values are 0/1 or string (``'-->'`` etc.).
+        Ground truth DAG. Values are 0/1 or string (``'-->'`` / ``'<--'``);
+        any other mark (``'o-o'``, ``'x-x'``, ``'<->'``, ``'o->'``, ...) raises
+        ``ValueError``.
     graph_discovered : array-like, shape (N, N, tau_max+1)
-        Discovered graph. Same format as *graph_true*.
+        Discovered graph, 0/1 or any tigramite edge mark. ``'<->'`` (latent
+        confounder) is never counted as an edge.
     var_names : list of str, optional
         Variable names. Defaults to ``['0', '1', ...]``.
     fig_ax : tuple (fig, ax), optional
@@ -168,7 +188,7 @@ def compare_graphs(
     -------
     fig, ax   or   fig, ax, node_pos_dict
     """
-    gt = _to_bool(graph_true)
+    gt = _to_bool(graph_true, ground_truth=True)
     disc = _to_bool(graph_discovered)
 
     if fn_linewidth is None:
@@ -619,9 +639,12 @@ def plot_lag_metrics(
     Parameters
     ----------
     graph_true : array-like, shape (N, N, tau_max+1)
-        Ground truth graph (0/1).
+        Ground truth DAG. Values are 0/1 or string (``'-->'`` / ``'<--'``);
+        any other mark (``'o-o'``, ``'x-x'``, ``'<->'``, ``'o->'``, ...) raises
+        ``ValueError``.
     graph_discovered : array-like, shape (N, N, tau_max+1)
-        Discovered graph (0/1).
+        Discovered graph, 0/1 or any tigramite edge mark. ``'<->'`` (latent
+        confounder) is never counted as an edge.
     metrics : list of str, optional
         Metric rows to show. Default ``["Precision", "Recall", "F1"]``.
         Valid names: ``"Precision"``, ``"Recall"``, ``"F1"``, ``"TP"``,
@@ -642,7 +665,7 @@ def plot_lag_metrics(
     -------
     fig, ax
     """
-    gt = _to_bool(graph_true)
+    gt = _to_bool(graph_true, ground_truth=True)
     disc = _to_bool(graph_discovered)
 
     N = gt.shape[0]
@@ -748,9 +771,12 @@ def plot_pvalue_distribution(
         Matrix of p-values. Use ``NaN`` for untested pairs.
         Also accepts a CausalGraph object with a ``.pvalue_matrix`` attribute.
     graph_true : array-like, shape (N, N, tau_max+1)
-        Ground truth graph (0/1).
+        Ground truth DAG. Values are 0/1 or string (``'-->'`` / ``'<--'``);
+        any other mark (``'o-o'``, ``'x-x'``, ``'<->'``, ``'o->'``, ...) raises
+        ``ValueError``.
     graph_discovered : array-like, shape (N, N, tau_max+1), optional
-        Discovered graph (0/1). When given, only edges present in this
+        Discovered graph, 0/1 or any tigramite edge mark (``'<->'`` is never
+        counted as an edge). When given, only edges present in this
         graph are included and the histogram splits into TP vs FP.
     bins : int, optional
         Number of histogram bins. Default 30.
@@ -777,7 +803,7 @@ def plot_pvalue_distribution(
     if hasattr(pvalue_matrix, "pvalue_matrix"):
         pvalue_matrix = pvalue_matrix.pvalue_matrix
     pvals = _as_3d(pvalue_matrix, dtype=float)
-    gt = _to_bool(graph_true)
+    gt = _to_bool(graph_true, ground_truth=True)
 
     N = gt.shape[0]
 
