@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+* `tigramite_graph_to_binary` reads `bytes` (`S`) edge-mark graphs instead of returning an
+  empty graph.
+
 ## [0.28.0]
 
 ### Added
