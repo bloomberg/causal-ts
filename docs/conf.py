@@ -83,8 +83,16 @@ master_doc = "index"
 
 # HTML output
 html_theme = "pydata_sphinx_theme"
+# Page titles read "<page heading> — Causal-TS documentation".
+html_title = "Causal-TS documentation"
+html_short_title = "Causal-TS"
+# Canonical <link rel="canonical">: Read the Docs supplies the default version's
+# URL; local builds fall back to stable.
+html_baseurl = os.environ.get(
+    "READTHEDOCS_CANONICAL_URL", "https://causal-ts.readthedocs.io/en/latest/"
+)
 html_static_path = ["_static"]
-html_css_files = ["css/custom.css"]
+html_css_files = ["css/custom.css", "css/home.css"]
 html_logo = "_static/img/cts_.png"
 html_favicon = "_static/img/favicon_.png"
 html_show_sourcelink = False
