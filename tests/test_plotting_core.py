@@ -8,20 +8,25 @@ import pytest
 
 matplotlib.use("Agg")
 
-import matplotlib.pyplot as plt
-import networkx as nx
-import numpy as np
-from matplotlib.colors import to_rgba
-from matplotlib.markers import MarkerStyle
-from matplotlib.patches import ArrowStyle, Ellipse, FancyArrowPatch, FancyBboxPatch
+import matplotlib.pyplot as plt  # noqa: E402
+import networkx as nx  # noqa: E402
+import numpy as np  # noqa: E402
+from matplotlib.colors import to_rgba  # noqa: E402
+from matplotlib.markers import MarkerStyle  # noqa: E402
+from matplotlib.patches import (  # noqa: E402
+    ArrowStyle,
+    Ellipse,
+    FancyArrowPatch,
+    FancyBboxPatch,
+)
 
-from causalts.plotting import (
+from causalts.plotting import (  # noqa: E402
     plot_graph,
     plot_lagfuncs,
     plot_time_series_graph,
     setup_matrix,
 )
-from causalts.plotting._core import (
+from causalts.plotting._core import (  # noqa: E402
     _auto_shells,
     _check_matrices,
     _default_kwargs_for_layout,
