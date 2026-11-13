@@ -1,3 +1,6 @@
+# Copyright 2026 Bloomberg Finance L.P.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Score- and regression-based methods through ``causal-ts discover`` and discover_df.
 
 Also covers passing a result with C-node rows/columns as a GRACE/REAP candidate graph.

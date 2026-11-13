@@ -30,6 +30,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* CI-test result caches no longer write a blank line after every row on Windows.
+* `causalts.__version__` in an uninstalled source checkout is `0+unknown` instead of a
+  stale `0.14.0-dev`.
 * `discover --json` and `deconfound --json` print only the JSON document to stdout;
   progress, warnings and library output go to stderr.
 * `check_stationarity_observed` (and so `inspect`) no longer prints the statsmodels

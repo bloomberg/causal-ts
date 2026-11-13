@@ -284,7 +284,7 @@ class CIT_Base(object):
     def flush_cache(self):
         """Flush any buffered cache rows to disk."""
         if self.cache_file is not None and self._cache_buffer:
-            with open(self.cache_file, "a") as fout:
+            with open(self.cache_file, "a", newline="") as fout:
                 csv_writer = csv.writer(fout)
                 csv_writer.writerows(self._cache_buffer)
             self._cache_buffer.clear()

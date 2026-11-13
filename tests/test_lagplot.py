@@ -418,10 +418,11 @@ def test_alpha_and_n_jobs_do_not_change_markers():
         v, 3, 100, 1, pvalues=True, alpha=0.05, n_jobs=2
     )
     np.testing.assert_array_equal(S, Sa)
-    np.testing.assert_array_equal(Sa, Sj)
+    # Worker processes can sum in a different BLAS order (1 ulp on Windows).
+    np.testing.assert_allclose(Sa, Sj, rtol=1e-12, atol=1e-15)
     assert par == para == parj
     np.testing.assert_array_equal(P < 0.05, Pa < 0.05)
-    np.testing.assert_array_equal(Pa, Pj)
+    np.testing.assert_allclose(Pa, Pj, rtol=1e-12, atol=1e-15)
     # Below alpha the values are exact; at or above they are lower bounds.
     np.testing.assert_array_equal(np.where(Pa < 0.05, Pa, 0), np.where(P < 0.05, P, 0))
     assert (Pa[P >= 0.05] >= 0.05).all()

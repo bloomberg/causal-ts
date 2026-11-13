@@ -1,3 +1,6 @@
+# Copyright 2026 Bloomberg Finance L.P.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 import numpy as np
 import pandas as pd
 import pytest
