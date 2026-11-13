@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `discover --json` and `deconfound --json` print only the JSON document to stdout;
+  progress, warnings and library output go to stderr.
 * `check_stationarity_observed` (and so `inspect`) no longer prints the statsmodels
   `adfuller` `FutureWarning` once per column.
 * `extract_subgraph` reads a lag-0 `<--` / `<-o` mark in a string graph as the reversed edge,

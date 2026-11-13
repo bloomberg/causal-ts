@@ -196,7 +196,7 @@ Not every strategy works with every algorithm:
 | `--ground-truth PATH` | — | `.npy` ground truth for instant evaluation |
 | `--save-plot / --no-plot` | on | Save graph plot images |
 | `--plot-format` | `png` | `png`, `pdf`, or `svg` |
-| `--json` | off | Echo the run summary — including a named edge list and a `diagnostics` block — as JSON to stdout |
+| `--json` | off | Echo the run summary — including a named edge list and a `diagnostics` block — as JSON to stdout. Stdout then carries only the JSON (progress and warnings go to stderr), so it can be piped straight to `jq` or `json.loads` |
 | `--pvalues / --no-pvalues` | off | Include per-edge p-values (CDNOTS family and CEDAR). Off by default as a memory safeguard on very high-dimensional data; safe to enable at low/moderate `d`. Not available for GRACE, GRACE-SS or REAP (GRACE emits gate values; REAP always writes `edge_pvalue.npy`). |
 
 With `--json`, the `edges` list gives `{source, target, lag, pvalue}` per edge
@@ -298,7 +298,7 @@ causal-ts deconfound GRAPH --data data.csv
 | `--threshold FLOAT` | `0.25` | Tetrad factor-consistency threshold (`--strategy tetrad` only) |
 | `--alpha FLOAT` | `1e-10` | Significance level for the PDS filter (`--strategy pds` only) |
 | `--var-names` | — | Comma-separated variable names |
-| `--json` | off | Echo the run summary as JSON to stdout |
+| `--json` | off | Echo the run summary as JSON to stdout (stdout carries only the JSON; progress goes to stderr) |
 
 ## `ci-test-info`
 

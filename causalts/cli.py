@@ -258,7 +258,24 @@ def _parse_gate_threshold(ctx, param, value):
 
 def _log(ctx, msg):
     if not ctx.obj.get("quiet"):
-        click.echo(msg)
+        # With --json, stdout carries only the JSON document; progress goes to stderr.
+        click.echo(msg, err=bool(ctx.obj.get("json_stdout")))
+
+
+def _json_only_stdout(ctx):
+    """Send everything but the final JSON document to stderr; return the real stdout.
+
+    Library code (e.g. GRACE/REAP progress, plugin algorithms) may ``print`` to
+    stdout, so redirect ``sys.stdout`` for the rest of the command and restore it
+    when the click context closes, also on errors.
+    """
+    import sys
+
+    ctx.obj["json_stdout"] = True
+    real_stdout = sys.stdout
+    sys.stdout = sys.stderr
+    ctx.call_on_close(lambda: setattr(sys, "stdout", real_stdout))
+    return real_stdout
 
 
 def _seed_all(seed):
@@ -728,6 +745,7 @@ def discover(
     window_frac,
 ):
     """Run causal discovery on a time series file (CSV, parquet, or feather)."""
+    json_stdout = _json_only_stdout(ctx) if output_json else None
     if algorithm == "reap":
         # REAP is GRACE's regression-based refinement (run_reap = refine="shrink").
         if refine == "gates":
@@ -1531,13 +1549,14 @@ def discover(
         }
         click.echo(
             f"  Precision={metrics['Precision']:.3f}  Recall={metrics['TPR']:.3f}"
-            f"  F1={metrics['F1']:.3f}  SHD={metrics['SHD']}"
+            f"  F1={metrics['F1']:.3f}  SHD={metrics['SHD']}",
+            err=output_json,
         )
 
     if output_json:
         import json as _json
 
-        click.echo(_json.dumps(summary, indent=2, default=str))
+        click.echo(_json.dumps(summary, indent=2, default=str), file=json_stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -1900,6 +1919,7 @@ def deconfound(
     correction. `tetrad` and `pds` always apply one fixed correction regardless of
     the data, and exist mainly as comparators.
     """
+    json_stdout = _json_only_stdout(ctx) if output_json else None
     import json as _json
 
     from .inspection import edges_from_graph
@@ -1987,7 +2007,7 @@ def deconfound(
     _log(ctx, f"Results saved to {outdir}")
 
     if output_json:
-        click.echo(_json.dumps(summary, indent=2, default=str))
+        click.echo(_json.dumps(summary, indent=2, default=str), file=json_stdout)
 
 
 # ---------------------------------------------------------------------------
