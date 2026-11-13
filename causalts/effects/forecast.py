@@ -221,7 +221,7 @@ def _fit_auto_ets(y: np.ndarray, seasonal_period: int | None = None):
         warnings.warn(
             f"every AR candidate failed to fit; last error: {ar_errors[-1]!r}",
             RuntimeWarning,
-            stacklevel=2,
+            stacklevel=3,
         )
 
     if best_model is None:
