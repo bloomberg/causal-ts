@@ -178,9 +178,9 @@ def _fit_auto_ets(y: np.ndarray, seasonal_period: int | None = None):
                 pred = np.asarray(res.forecast(val_size))
                 mse = np.mean((y_val - pred) ** 2)
                 if mse < best_mse:
-                    best_mse = mse
                     res_full = AutoReg(y, lags=p).fit()
                     best_model = _ARWrapper(res_full, T)
+                    best_mse = mse
             except Exception as exc:
                 ar_errors.append(exc)
                 continue
@@ -208,10 +208,10 @@ def _fit_auto_ets(y: np.ndarray, seasonal_period: int | None = None):
                 pred = np.asarray(m.forecast(val_size))
                 mse = np.mean((y_val - pred) ** 2)
                 if mse < best_mse:
-                    best_mse = mse
                     best_model = ExponentialSmoothing(y, **cfg).fit(
                         optimized=True, use_brute=False
                     )
+                    best_mse = mse
             except Exception:
                 continue
 
