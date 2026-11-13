@@ -16,4 +16,5 @@ from .compare import (  # noqa: F401
     plot_pvalue_distribution,
 )
 from .corrplot import compute_association_matrix, corr_table, corrplot  # noqa: F401
+from .lagplot import compute_lag_dependence, plot_lag_dependence  # noqa: F401
 from .pairs import pairs_panel  # noqa: F401

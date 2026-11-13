@@ -170,6 +170,15 @@ def test_cmiknn_default_settings_keep_their_cache_key():
     # Only non-default settings extend the key, so existing caches stay valid.
     assert CMIKNN(_data()).param_hash == "T120-k0.2"
     assert CMIKNN(_data(), seed=7).param_hash == "T120-k0.2-seed7"
+    every = CMIKNN(
+        _data(),
+        sig_samples=50,
+        transform="standardize",
+        shuffle_neighbors=3,
+        early_stop=False,
+        target_quantile=0.1,
+    )
+    assert every.param_hash == "T120-k0.2-ss50-trstandardize-sn3-esFalse-q0.1"
 
 
 # --- one cache key, one answer: X/Y swaps and Z order (opt-in) -------------

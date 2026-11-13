@@ -11,10 +11,12 @@ permissions: read-all
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
+        # The full extras matrix runs on Ubuntu (the default `os`, left out so the
+        # existing check names stay unchanged); macOS and Windows run the core tests.
         include:
           - python-version: "3.10"
             install-target: ".[dev,dowhy,tigramite]"
@@ -31,10 +33,22 @@ jobs:
           - python-version: "3.14"
             install-target: ".[dev]"
             profile: core
+          - python-version: "3.12"
+            os: macos-latest
+            install-target: ".[dev]"
+            profile: core
+          - python-version: "3.12"
+            os: windows-latest
+            install-target: ".[dev]"
+            profile: core
     permissions:
       contents: read
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: harden runner
+        if: runner.os == 'Linux'
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a
         with:
           egress-policy: audit
@@ -58,4 +72,15 @@ jobs:
           python -m pip install -e "${{ matrix.install-target }}"
 
       - name: run tests
+        if: ${{ !(matrix.python-version == '3.12' && matrix.profile == 'all-extras') }}
         run: python -m pytest tests/ -v --tb=short
+
+      - name: run tests with coverage
+        if: ${{ matrix.python-version == '3.12' && matrix.profile == 'all-extras' }}
+        run: |
+          python -m pytest tests/ -v --tb=short \
+            --cov=causalts --cov-branch --cov-report=term-missing:skip-covered
+          {
+            echo "## Test coverage (line + branch, causalts/)"
+            python -m coverage report --format=markdown --skip-covered
+          } >> "$GITHUB_STEP_SUMMARY"

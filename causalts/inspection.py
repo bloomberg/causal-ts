@@ -658,6 +658,14 @@ def discover_df(
     (transformed) data, so for them a named ``ci_test`` is turned into the
     ``ci_test_class`` factory they call, as the CLI does.
 
+    The score-based methods ``"lges"``, ``"tges"``, ``"ges"``,
+    ``"lasso-var"``, ``"granger"`` and ``"varlingam"`` run through
+    :func:`~causalts.baselines.run_baseline` and return a
+    :class:`~causalts.baselines.BaselineResult`; they take no ``ci_test``,
+    ``include_C``, ``c_preset`` or ``alpha`` (``device`` is ignored), and
+    ``**kwargs`` carries their own options (``mode``, ``lambda_value``,
+    ``cv_folds``, ``threshold``).
+
     To run a recommendation from :func:`recommend_config`, call
     ``discover_df(df, algorithm=rec["algorithm"], ci_test=rec["ci_test"], ...)``
     for the CDNOTS graph, or ``algorithm=rec["refine"], **rec["refine_params"]``
@@ -690,12 +698,45 @@ def discover_df(
     Raises
     ------
     ValueError
-        If ``algorithm`` is unknown; if both ``ci_test`` and ``ci_test_class``
+        If ``algorithm`` is unknown; if ``ci_test``, ``include_C=True``, a
+        ``c_preset`` or ``alpha`` is passed to a score-based
+        method; if both ``ci_test`` and ``ci_test_class``
         are passed; if ``ci_test`` is passed to GRACE-SS with
         ``use_ci_skeleton=False``; or if ``ci_test="cmiknn-mixed-gpu"`` is used
         with CEDAR or GRACE-SS, which do not track discrete columns.
     """
     df = numeric_frame(df)
+    from .baselines import BASELINE_ALGORITHMS, run_baseline
+
+    if algorithm in BASELINE_ALGORITHMS:
+        bad = [
+            name
+            for name, given in (
+                ("ci_test", ci_test is not None),
+                ("include_C", include_C),
+                ("c_preset", c_preset != "linear"),
+                ("alpha", alpha is not None),
+            )
+            if given
+        ]
+        if bad:
+            raise ValueError(
+                f"{', '.join(bad)} {'does' if len(bad) == 1 else 'do'} not apply "
+                f"to algorithm={algorithm!r}: it takes no CI test, C node or "
+                "significance level."
+            )
+        impute = kwargs.pop("impute", None)
+        impute_kwargs = kwargs.pop("impute_kwargs", None) or {}
+        if impute not in (None, "var_em"):
+            raise ValueError(
+                f"impute={impute!r} does not apply to algorithm={algorithm!r}; "
+                "use impute='var_em'."
+            )
+        if impute == "var_em" and df.isna().any().any():
+            from .imputation import var_em_impute
+
+            df = var_em_impute(df, **impute_kwargs)
+        return run_baseline(algorithm, df, max_lag, **kwargs)
     test_device = device or "cpu"
     # dfcit sizes its block-shuffle null from alpha (so p < alpha is reachable).
     # Mirror how each engine resolves its thresholds below (unset: engine default).

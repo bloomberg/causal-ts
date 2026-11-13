@@ -101,3 +101,14 @@ jobs:
           done
           git status --porcelain -- examples/
           test -z "$(git status --porcelain -- examples/)"
+      - name: SPDX licence headers
+        run: |
+          # Shipped code plus the paper-reproduction scripts.
+          missing=$(git ls-files 'causalts/*.py' 'tests/*.py' 'docs/*.py' \
+            'experiments/cedar/*.py' 'experiments/grace/*.py' \
+            | xargs grep -L "SPDX-License-Identifier" || true)
+          if [ -n "$missing" ]; then
+            echo "::error::Python files without an SPDX-License-Identifier header:"
+            echo "$missing"
+            exit 1
+          fi

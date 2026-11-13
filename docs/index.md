@@ -3,6 +3,10 @@ myst:
   html_meta:
     "description": "Causal-TS is a Python library for causal discovery (causal structure learning) in stationary and nonstationary multivariate time series: constraint-based (CDNOTS, CDNOTS+, CEDAR), score-based (LGES, TGES, GES) and hybrid (GRACE, REAP) methods, CPU and GPU conditional-independence tests, LUCID latent-confounder correction and DoWhy effect estimation."
     "google-site-verification": "B1Vaoes-7BZBNEdL2FxoOcN4tFdqkJJAhCxmVv5qR_Q"
+    "property=og:title": "Causal-TS: causal discovery for time series in Python"
+    "property=og:image": "https://causal-ts.readthedocs.io/en/latest/_static/img/social_preview.png"
+    "property=og:image:alt": "Causal-TS: causal discovery for time series in Python"
+    "name=twitter:card": "summary_large_image"
 ---
 
 ```{toctree}
@@ -37,7 +41,7 @@ cli
 
 <div class="ct-stats-strip">
   <div class="ct-stat">
-    <span class="ct-stat-num">5</span>
+    <span class="ct-stat-num">11</span>
     <span class="ct-stat-label">Algorithms</span>
   </div>
   <div class="ct-stat-div"></div>

@@ -76,7 +76,7 @@ causal-ts discover DATA.csv [OPTIONS]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-a, --algorithm` | `cdnots` | `cdnots`, `cdnots+`, `cedar`, `grace`, `grace-ss`, `reap` |
+| `-a, --algorithm` | `cdnots` | `cdnots`, `cdnots+`, `cedar`, `grace`, `grace-ss`, `reap`, and the score-based `lges`, `tges`, `ges`, `lasso-var`, `granger`, `varlingam` |
 | `--ci-test` | `parcorr-gpu` | CI test — see `ci-test-info`. For `grace`, `grace-ss` and `reap` it builds the candidate graph; unset, they pick `parcorr-gpu` on CUDA, else CPU `parcorr` |
 | `--max-lag INT` | `3` | Maximum time lag |
 | `--alpha FLOAT` | `0.01` for `cdnots+`, else `0.05` | Significance level for `cdnots`, `cdnots+`, `grace`, `grace-ss`, `reap`; Cedar uses `--alpha-cond1`/`--alpha-cond2` |
@@ -146,6 +146,33 @@ its own, reached from Python with `include_C_in_model=True`:
 and {func}`causalts.grace.runners.run_reap` conditions its regressions on C for
 a supplied candidate graph too.
 
+### Score-based methods
+
+`lges`, `tges` and `ges` (BIC score search over the lag-embedded series),
+`lasso-var` and `granger` (LASSO vector autoregression) and `varlingam` run
+{func}`causalts.baselines.run_baseline`. They take no CI test, C node,
+significance level, lag list or p-values: passing `--ci-test`, `--include-c`,
+`--c-preset`, `--alpha`, `--lag-list` or `--pvalues` with them is an error.
+They need complete data: missing values are an error unless you pass
+`--impute var_em` (the other `--impute` strategies are an error). The options
+below are recorded under `method_params` in `summary.json`.
+`lges`, `tges`, `ges` and `varlingam` return lag-0 edges; an unoriented lag-0
+CPDAG edge appears in both directions in `estimated_graph.npy` and the edge
+list, and as `o-o` in `edge_marks.npy`. `lasso-var` and `granger` are lagged
+only, and `varlingam` fits a VAR, so all three need `--max-lag` ≥ 1; `lges`,
+`tges` and `ges` also run at `--max-lag 0` (plain score search on the
+variables). `lasso-var`, `granger` and `varlingam` also
+write `coefficients.npy`.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--lambda-value FLOAT` | see description | BIC penalty; larger gives sparser graphs. `lges`, `tges`: the absolute penalty per parameter (default `0.5·log(n)`). `ges`: a multiplier on `log(n)` (default `0.5`), as in causal-learn |
+| `--lges-mode` | `lges` | `lges`, `tges`: `lges` (safe + conservative inserts), `lges-safe` (safe inserts only) or `ges` (plain GES) |
+| `--cv-folds INT` | `5` | `lasso-var`: cross-validation folds for the LASSO penalty |
+| `--coef-threshold FLOAT` | `0.05` (`varlingam`), any non-zero (`granger`) | `varlingam`, `granger`: minimum absolute coefficient for an edge |
+
+These four flags are an error with any other algorithm.
+
 ### Missing data
 
 | Flag | Default | Description |
@@ -160,6 +187,7 @@ Not every strategy works with every algorithm:
 | `cdnots`, `cdnots+` | yes | yes | yes |
 | `cedar` | yes | yes | not supported |
 | `grace`, `reap` | not supported when values are missing | yes | replaced by `var_em` (with a warning) |
+| `lges`, `tges`, `ges`, `lasso-var`, `granger`, `varlingam` | error if values are missing; `pairwise_complete` is an error | yes (imputed once; `--validate` windows reuse the filled data) | error |
 
 ### Output & evaluation
 
@@ -168,7 +196,7 @@ Not every strategy works with every algorithm:
 | `--ground-truth PATH` | — | `.npy` ground truth for instant evaluation |
 | `--save-plot / --no-plot` | on | Save graph plot images |
 | `--plot-format` | `png` | `png`, `pdf`, or `svg` |
-| `--json` | off | Echo the run summary — including a named edge list and a `diagnostics` block — as JSON to stdout |
+| `--json` | off | Echo the run summary — including a named edge list and a `diagnostics` block — as JSON to stdout. Stdout then carries only the JSON (progress and warnings go to stderr), so it can be piped straight to `jq` or `json.loads` |
 | `--pvalues / --no-pvalues` | off | Include per-edge p-values (CDNOTS family and CEDAR). Off by default as a memory safeguard on very high-dimensional data; safe to enable at low/moderate `d`. Not available for GRACE, GRACE-SS or REAP (GRACE emits gate values; REAP always writes `edge_pvalue.npy`). |
 
 With `--json`, the `edges` list gives `{source, target, lag, pvalue}` per edge
@@ -270,7 +298,7 @@ causal-ts deconfound GRAPH --data data.csv
 | `--threshold FLOAT` | `0.25` | Tetrad factor-consistency threshold (`--strategy tetrad` only) |
 | `--alpha FLOAT` | `1e-10` | Significance level for the PDS filter (`--strategy pds` only) |
 | `--var-names` | — | Comma-separated variable names |
-| `--json` | off | Echo the run summary as JSON to stdout |
+| `--json` | off | Echo the run summary as JSON to stdout (stdout carries only the JSON; progress goes to stderr) |
 
 ## `ci-test-info`
 

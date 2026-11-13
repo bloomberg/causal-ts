@@ -139,7 +139,7 @@ class CIT_Base(object):  # noqa: F811
 
     def save_incremental_cache(self, key, param_hash, pval, stat):
         if self.cache_file is not None:
-            with open(self.cache_file, "a") as fout:
+            with open(self.cache_file, "a", newline="") as fout:
                 csv_writer = csv.writer(fout)
                 csv_writer.writerow([key, param_hash, pval, stat])
 

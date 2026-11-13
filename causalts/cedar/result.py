@@ -131,6 +131,13 @@ class CedarResult(CausalResult):
                 # symmetry, so zero it out here.
                 vm = vm.copy()
                 vm[:, :, 0] = 0.0
+            elif vm is not None:
+                # A lag-0 pair kept in both directions carries one Cond1
+                # statistic per direction; the plotting layer requires lag-0
+                # symmetry, so show the larger-magnitude one on both.
+                vm = vm.copy()
+                v0, v0t = vm[:, :, 0], vm[:, :, 0].T
+                vm[:, :, 0] = np.where(np.abs(v0) >= np.abs(v0t), v0, v0t)
         else:
             vm = val_matrix
         return super().plot(val_matrix=vm, **kwargs)
@@ -145,6 +152,7 @@ class CedarResult(CausalResult):
         y_base=0.2,
         fig_name=None,
         add_lagfunc_args=None,
+        wrap_labels=None,
     ):
         """Plot lag importance (dcor / pearson scores) as a matrix of bar charts.
 
@@ -167,24 +175,26 @@ class CedarResult(CausalResult):
             If given, save figure to this path instead of showing.
         add_lagfunc_args : dict or None
             Extra kwargs forwarded to ``matrix.add_lagfuncs``.
+        wrap_labels : int or None
+            Wrap variable names longer than this many characters (see
+            :func:`causalts.plotting.plot_lag_dependence`).
 
         Returns
         -------
         matplotlib.figure.Figure
         """
-        from ..plotting._core import plot_lagfuncs
+        from ..plotting._core import lag_grid_layout, plot_lagfuncs
 
         matrix = plot_lagfuncs(
             val_matrix=self.lag_importance,
             name=fig_name,
             setup_args={
-                "var_names": self.var_names,
+                **lag_grid_layout(self.var_names, figsize, wrap_labels),
                 "x_base": x_base,
                 "y_base": y_base,
                 "minimum": minimum,
                 "maximum": maximum,
                 "plot_gridlines": show_gridlines,
-                "figsize": figsize,
             },
             add_lagfunc_args=add_lagfunc_args or {},
         )
