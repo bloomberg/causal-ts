@@ -239,6 +239,10 @@ class LeveneRegimeDetector:
         )
 
     def _find_breakpoints(self, signal: np.ndarray) -> list[int]:
+        # Checked here because _binary_segmentation skips any split whose test
+        # raises, which would turn a bad method into "no changepoints".
+        if self.method not in ("levene", "bartlett"):
+            raise ValueError(f"Unknown method: {self.method!r}")
         return _binary_segmentation(
             signal,
             self._test_fn,
@@ -700,7 +704,11 @@ def _auto_switch_cost(
     log_startprob: np.ndarray,
     target_cps: int,
 ) -> float:
-    """Binary-search for the switch_cost that yields ~target_cps transitions."""
+    """Binary-search for the smallest switch_cost giving at most target_cps transitions.
+
+    Returns the upper end of the final bracket, the cost already seen to meet
+    the target; the midpoint can still fall on the too-many-switches side.
+    """
     lo, hi = 0.0, 100_000.0
     for _ in range(30):
         mid = (lo + hi) / 2
@@ -710,7 +718,7 @@ def _auto_switch_cost(
             lo = mid
         else:
             hi = mid
-    return (lo + hi) / 2
+    return hi
 
 
 class HMMRegimeDetector:

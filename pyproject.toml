@@ -148,3 +148,7 @@ testpaths = ["tests"]
 markers = [
   "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
+
+[tool.coverage.run]
+# The retired SyPI implementation is kept for benchmarking only.
+omit = ["causalts/cedar/legacy.py"]
