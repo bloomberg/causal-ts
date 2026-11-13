@@ -117,14 +117,17 @@ def _compute_one_pair(
         Target variable (aligned to lag window).
     n_lags : int
         Number of lags.
-    method : str
-        "dcor" (unbiased), "dcor_biased", "pearson", or "lasso".
+    method : str or callable
+        "dcor" (unbiased), "dcor_biased", "pearson", "lasso", or a callable
+        ``metric(source, target) -> float`` applied to each lag.
 
     Returns
     -------
     ndarray, shape (n_lags,)
     """
-    if method == "lasso":
+    if callable(method):
+        func = method
+    elif method == "lasso":
         return _lasso_pair(sources, target_col, n_lags)
     elif method == "dcor":
         func = _dcor_pair_unbiased
@@ -220,9 +223,12 @@ def compute_lag_importance(
         Normalized time series data.
     max_lag : int
         Maximum lag to consider.
-    method : str
-        "dcor" (default, unbiased U-centered), "dcor_biased", "pearson", or
-        "lasso" (LassoCV per pair, matching SyPI Mastakouri et al. 2021).
+    method : str or callable
+        "dcor" (default, unbiased U-centered), "dcor_biased", "pearson",
+        "partial_dcor" (dcor against the target's AR(1) residual), "lasso"
+        (LassoCV per pair, matching SyPI Mastakouri et al. 2021), or a
+        callable ``metric(source, target) -> float`` applied to each
+        (pair, lag) on the NaN-free rows.
     include_lag0 : bool
         Whether to include contemporaneous effects (lag 0).
     n_jobs : int

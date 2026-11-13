@@ -15,10 +15,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `lasso-var`, `granger` and `varlingam` (new flags `--lambda-value`, `--lges-mode`,
   `--cv-folds`, `--coef-threshold`), returning a `BaselineResult`. `run_grace` and
   `run_reap` accept a result as `candidate_graph`, dropping its C nodes.
+* `causalts.plotting.plot_lag_dependence` / `compute_lag_dependence`: per-lag dependence
+  of every variable pair from raw data (dcor, partial dcor, Pearson, Lasso or a callable),
+  with optional significance markers. `adjust="parents"` scores each lag after removing
+  both variables' selected parents (MCI-style); `true_graph=` marks found, missed and
+  false lags. New section in the plotting notebook.
 
 ### Changed
 
 * `compare_graphs`: `legend_loc` defaults to `"best"` (was `"lower left"`).
+* Lag-function grids (`plot_lag_dependence`, `CedarResult.plot_lag_importance`) label
+  rows "causes", columns "targets at time t", put the legend under the grid and stand
+  long row names upright; `plot_lag_importance` gains `wrap_labels=`.
 
 ### Fixed
 
