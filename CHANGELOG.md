@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   empty graph.
 * `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` no longer count a
   `<->` mark as an edge, and raise `ValueError` for a ground truth with `o-o`, `x-x` or `<->`.
+* `CondIndTest.run_test_raw(x, y)` with the default `z=None` runs the unconditional test
+  instead of raising `TypeError` in the cache-key helper.
 
 ## [0.28.0]
 

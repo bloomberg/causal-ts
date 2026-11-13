@@ -687,7 +687,7 @@ class CondIndTest(metaclass=abc.ABCMeta):
         if z is None:
             # Get the array to test on
             array = np.vstack((x.T, y.T))
-            XYZ = (X, Y, None)
+            XYZ = (X, Y, [])
             if has_data_type:
                 data_type = np.vstack((x_type.T, y_type.T))
 
