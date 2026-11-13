@@ -16,8 +16,8 @@ authors:
 repository-code: "https://github.com/bloomberg/causal-ts"
 url: "https://causal-ts.readthedocs.io/en/latest/"
 license: GPL-3.0-or-later
-version: 0.28.0
-date-released: "2026-11-07"
+version: 0.28.1
+date-released: "2026-11-13"
 keywords:
   - causal discovery
   - causal structure learning

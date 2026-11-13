@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.28.1]
+
 ### Added
 
 * Score-based methods in `causal-ts discover` and `discover_df`: `lges`, `tges`, `ges`,
@@ -302,7 +304,8 @@ API:
 * Comprehensive documentation and example notebooks
 * Synthetic data generators (nonstationary, mixed discrete-continuous, Lorenz-96)
 
-[unreleased]: https://github.com/bloomberg/causal-ts/compare/v0.28.0...HEAD
+[unreleased]: https://github.com/bloomberg/causal-ts/compare/v0.28.1...HEAD
+[0.28.1]: https://github.com/bloomberg/causal-ts/compare/v0.28.0...v0.28.1
 [0.28.0]: https://github.com/bloomberg/causal-ts/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/bloomberg/causal-ts/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/bloomberg/causal-ts/compare/v0.25.2...v0.26.0

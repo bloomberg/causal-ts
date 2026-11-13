@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "causalts"
-version = "0.28.0"
+version = "0.28.1"
 description = "Causal discovery (structure learning) for stationary and nonstationary multivariate time series in Python"
 readme = "README.md"
 license = "GPL-3.0-or-later"
