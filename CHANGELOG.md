@@ -11,53 +11,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-* `causal-ts discover --algorithm` and `discover_df` accept `lges`, `tges`, `ges`,
-  `lasso-var`, `granger` and `varlingam` (new flags `--lambda-value`, `--lges-mode`,
-  `--cv-folds`, `--coef-threshold`), returning a `BaselineResult`. `run_grace` and
-  `run_reap` accept a result as `candidate_graph`, dropping its C nodes.
-* `causalts.plotting.plot_lag_dependence` / `compute_lag_dependence`: per-lag dependence
-  of every variable pair from raw data (dcor, partial dcor, Pearson, Lasso or a callable),
-  with optional significance markers. `adjust="parents"` scores each lag after removing
-  both variables' selected parents (MCI-style); `true_graph=` marks found, missed and
-  false lags. New section in the plotting notebook.
+* Score-based methods in `causal-ts discover` and `discover_df`: `lges`, `tges`, `ges`,
+  `lasso-var`, `granger`, `varlingam` (returns a `BaselineResult`). `run_grace` and
+  `run_reap` accept a result as `candidate_graph`.
+* `plot_lag_dependence` / `compute_lag_dependence`: per-lag dependence of every pair from
+  raw data, optionally parent-adjusted (`adjust="parents"`) and marked against a
+  `true_graph`.
 
 ### Changed
 
-* `compare_graphs`: `legend_loc` defaults to `"best"` (was `"lower left"`).
-* Lag-function grids (`plot_lag_dependence`, `CedarResult.plot_lag_importance`) label
-  rows "causes", columns "targets at time t", put the legend under the grid and stand
-  long row names upright; `plot_lag_importance` gains `wrap_labels=`.
+* `compare_graphs` places its legend at `"best"`; lag-function grids get clearer axis labels
+  and `wrap_labels=`.
+* CI also runs the core tests on macOS and Windows and reports coverage.
 
 ### Fixed
 
-* Cedar with `include_C=True` no longer drops a lagged edge whose strongest lag is 0: C cells
-  and X-X lag 0 are left out of the BH-FDR family (new `exclude_mask` in `select_lags` /
-  `select_all_significant_lags`), so lags are selected as without C.
-* Cedar's MCI pruning no longer conditions on the edge's own target, which removed both
-  directions of a lag-0 pair; with `include_lag0=True` Cedar can now emit `o-o` pairs. Shared
-  conditioning columns are counted once, so MCI p-values can change slightly.
-* CPU `parcorr` returns p = 1 for a constant column instead of NaN, which kept every edge
-  touching it (#111). Clear CI-test caches (`cache_dir`) written before this fix: they still
-  hold the NaN results.
-* CI-test result caches no longer write a blank line after every row on Windows.
-* `causalts.__version__` in an uninstalled source checkout is `0+unknown` instead of a
-  stale `0.14.0-dev`.
-* `discover --json` and `deconfound --json` print only the JSON document to stdout;
-  progress, warnings and library output go to stderr.
-* `check_stationarity_observed` (and so `inspect`) no longer prints the statsmodels
-  `adfuller` `FutureWarning` once per column.
-* `extract_subgraph` reads a lag-0 `<--` / `<-o` mark in a string graph as the reversed edge,
-  so `direction="parents"` / `"children"` no longer return the wrong neighbours.
-* `tigramite_graph_to_binary` reads `bytes` (`S`) edge-mark graphs instead of returning an
-  empty graph.
-* `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` no longer count a
-  `<->` mark as an edge, and raise `ValueError` for a ground truth with any mark other than
-  `-->` / `<--` (e.g. `o-o`, `x-x`, `<->`, `o->`).
-* The CPU `cmiknn` cache key includes `sig_samples`, `transform`, `shuffle_neighbors`,
-  `early_stop` and `target_quantile` when they are not the default, so a p-value cached under
-  one setting is no longer returned to a run with another. Clear CPU `cmiknn` caches written
-  before this fix if a run used non-default settings: those results sit under the unchanged
-  default key.
+* Cedar with `include_C=True` keeps lagged edges whose strongest lag is 0, and MCI pruning
+  no longer conditions on the edge's own target (lag-0 pairs can now be `o-o`).
+* CPU `parcorr` gives p = 1 for a constant column instead of NaN (#111).
+* The CPU `cmiknn` cache key includes every setting that changes the p-value.
+* Clear CI-test caches (`cache_dir`) written before this release: they may hold the NaN
+  `parcorr` results or `cmiknn` results under the wrong settings.
+* `discover --json` / `deconfound --json` print only the JSON to stdout.
+* `extract_subgraph` reads lag-0 `<--` / `<-o` marks as reversed edges;
+  `tigramite_graph_to_binary` reads `bytes` mark graphs.
+* `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` no longer count `<->`
+  as an edge and reject a ground truth with any mark other than `-->` / `<--`.
+* No statsmodels `adfuller` `FutureWarning` from `inspect`; no blank lines in CI-test caches
+  on Windows; `__version__` is `0+unknown` (not `0.14.0-dev`) in an uninstalled checkout.
 
 ## [0.28.0]
 
