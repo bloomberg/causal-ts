@@ -61,6 +61,13 @@ _LAZY_ALGO_REGISTRY: dict[str, tuple[str, str]] = {
     "grace": ("causalts.grace.gated_discovery", "run_cdnots_gated"),
     "grace-ss": ("causalts.grace.gated_discovery", "run_stability_selection"),
     "reap": ("causalts.grace.runners", "run_reap"),
+    # Score- and regression-based methods: no CI test (pass ci_test=None).
+    "lges": ("causalts.baselines", "run_lges"),
+    "tges": ("causalts.baselines", "run_tges"),
+    "ges": ("causalts.baselines", "run_ges"),
+    "lasso-var": ("causalts.baselines", "run_lasso_var"),
+    "granger": ("causalts.baselines", "run_granger"),
+    "varlingam": ("causalts.baselines", "run_varlingam"),
 }
 
 

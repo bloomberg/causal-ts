@@ -139,7 +139,16 @@ from .algorithms import list_algorithms as _list_algorithms  # noqa: E402
 
 ALGORITHM_CHOICES = _list_algorithms()
 # Everything else in ALGORITHM_CHOICES is a third-party plugin (see .algorithms).
-_BUILTIN_ALGORITHMS = ("cdnots", "cdnots+", "cedar", "grace", "grace-ss", "reap")
+from .baselines import BASELINE_ALGORITHMS as _BASELINE_ALGORITHMS  # noqa: E402
+
+_BUILTIN_ALGORITHMS = (
+    "cdnots",
+    "cdnots+",
+    "cedar",
+    "grace",
+    "grace-ss",
+    "reap",
+) + _BASELINE_ALGORITHMS
 PLOT_FORMAT_CHOICES = ["png", "pdf", "svg"]
 DATASET_CHOICES = ["ex1", "ex2", "ex3", "henon"]
 LAG_SEL_CHOICES = ["partial_dcor", "dcor", "dcor_biased", "pearson", "lasso"]
@@ -553,6 +562,32 @@ def inspect(data, var_names, max_lag):
     default=0.6,
     help="Stability threshold for GRACE-SS.",
 )
+@click.option(
+    "--lambda-value",
+    type=float,
+    default=None,
+    help="BIC penalty, larger = sparser. LGES and TGES: the absolute penalty per "
+    "parameter (default 0.5*log(n)). GES: a multiplier on log(n) (default 0.5).",
+)
+@click.option(
+    "--lges-mode",
+    type=click.Choice(["lges", "lges-safe", "ges"]),
+    default=None,
+    help="LGES and TGES: insert strategy (default lges).",
+)
+@click.option(
+    "--cv-folds",
+    type=int,
+    default=None,
+    help="LASSO-VAR: cross-validation folds for the LASSO penalty (default 5).",
+)
+@click.option(
+    "--coef-threshold",
+    type=float,
+    default=None,
+    help="VARLiNGAM and Granger: minimum absolute coefficient for an edge "
+    "(default 0.05 for VARLiNGAM; any non-zero coefficient for Granger).",
+)
 @click.option("--max-epochs", type=int, default=150, help="Training epochs (GRACE).")
 @click.option(
     "--batch-size", type=int, default=None, help="Batch size (GRACE, auto if omitted)."
@@ -581,8 +616,9 @@ def inspect(data, var_names, max_lag):
     type=click.Choice(["pairwise_complete", "var_em", "causal_iterative"]),
     default=None,
     help=(
-        "Missing-value strategy. Works with all algorithms (cdnots, cedar, grace, "
-        "grace-ss). 'pairwise_complete': CI tests drop NaN rows per test. "
+        "Missing-value strategy. Works with cdnots, cdnots+, cedar, grace, grace-ss "
+        "and reap; lges, tges, ges, lasso-var, granger and varlingam take var_em "
+        "only. 'pairwise_complete': CI tests drop NaN rows per test. "
         "'var_em': fill via VAR-EM before discovery. "
         "'causal_iterative': VAR-EM + Markov-blanket Ridge (cdnots only)."
     ),
@@ -672,6 +708,10 @@ def discover(
     shrink_effect_floor,
     contemporaneous,
     stability_threshold,
+    lambda_value,
+    lges_mode,
+    cv_folds,
+    coef_threshold,
     max_epochs,
     batch_size,
     patience,
@@ -816,6 +856,67 @@ def discover(
                     else ""
                 ),
             )
+    is_baseline = algorithm in _BASELINE_ALGORITHMS
+    baseline_kw = {}
+    for flag, value, owners, key in (
+        ("--lambda-value", lambda_value, ("lges", "tges", "ges"), "lambda_value"),
+        ("--lges-mode", lges_mode, ("lges", "tges"), "mode"),
+        ("--cv-folds", cv_folds, ("lasso-var",), "cv_folds"),
+        ("--coef-threshold", coef_threshold, ("varlingam", "granger"), "threshold"),
+    ):
+        if value is None:
+            continue
+        if algorithm not in owners:
+            raise click.BadParameter(
+                f"{flag} applies only to --algorithm {' or '.join(owners)} "
+                f"(got --algorithm {algorithm}).",
+                param_hint=flag,
+            )
+        baseline_kw[key] = value
+    if is_baseline:
+        # Score- and regression-based methods: no CI test, no C node, no alpha.
+        explicit = [
+            flag
+            for flag, param in (
+                ("--ci-test", "ci_test"),
+                ("--c-preset", "c_preset"),
+                ("--alpha", "alpha"),
+                ("--lag-list", "lag_list"),
+            )
+            if ctx.get_parameter_source(param) != click.core.ParameterSource.DEFAULT
+        ]
+        if (
+            include_c
+            and ctx.get_parameter_source("include_c")
+            != click.core.ParameterSource.DEFAULT
+        ):
+            explicit.append("--include-c")
+        if want_pvalues:
+            explicit.append("--pvalues")
+        if impute in ("pairwise_complete", "causal_iterative"):
+            explicit.append(f"--impute {impute}")
+        if explicit:
+            raise click.BadParameter(
+                f"{', '.join(explicit)} {'does' if len(explicit) == 1 else 'do'} not "
+                f"apply to --algorithm {algorithm}: it takes no CI test, C node, "
+                "significance level, lag list or p-values, and needs complete "
+                "data (use --impute var_em to fill missing values). Drop "
+                f"{'it' if len(explicit) == 1 else 'them'}.",
+                param_hint=explicit[0],
+            )
+        if algorithm in ("lasso-var", "granger") and max_lag < 1:
+            raise click.BadParameter(
+                f"--algorithm {algorithm} finds lagged edges only and needs "
+                f"--max-lag >= 1 (got {max_lag}).",
+                param_hint="--max-lag",
+            )
+        if algorithm == "varlingam" and max_lag < 1:
+            raise click.BadParameter(
+                "--algorithm varlingam fits a VAR and needs at least one lag "
+                f"(--max-lag >= 1, got {max_lag}).",
+                param_hint="--max-lag",
+            )
+        include_c = False
     if is_grace and refine == "shrink" and impute == "pairwise_complete":
         raise click.BadParameter(
             "REAP needs complete data; use --impute var_em.",
@@ -839,9 +940,15 @@ def discover(
     var_name_list = list(df.columns)
 
     _log(ctx, f"Data shape: {df.shape}, variables: {var_name_list}")
-    _log(ctx, f"Algorithm: {algorithm}, CI test: {ci_test}, max_lag: {max_lag}")
+    _log(
+        ctx,
+        f"Algorithm: {algorithm}, CI test: {None if is_baseline else ci_test}, "
+        f"max_lag: {max_lag}",
+    )
 
-    if ci_test == "cmiknn-mixed-gpu":
+    if is_baseline:
+        ci = None
+    elif ci_test == "cmiknn-mixed-gpu":
         if algorithm in ("cedar", "grace-ss"):
             raise click.BadParameter(
                 f"cmiknn-mixed-gpu is not supported with --algorithm {algorithm} "
@@ -876,12 +983,12 @@ def discover(
 
     summary = {
         "algorithm": algorithm,
-        "ci_test": ci_test,
+        "ci_test": None if is_baseline else ci_test,
         "data_file": os.path.abspath(data),
         "data_shape": list(df.shape),
         "var_names": var_name_list,
         "max_lag": max_lag,
-        "alpha": alpha,
+        "alpha": None if is_baseline else alpha,
         "seed": ctx.obj["seed"],
         "device": str(device),
         "timestamp": datetime.now().isoformat(),
@@ -906,6 +1013,7 @@ def discover(
         "grace",
         "grace-ss",
         "reap",
+        *_BASELINE_ALGORITHMS,
     ):
         _log(
             ctx,
@@ -1220,6 +1328,63 @@ def discover(
             f"GRACE-SS complete. Graph shape: {grace_ss_res.cg_tig.shape}, {n_edges} edges, {elapsed:.1f}s",
         )
 
+    elif is_baseline:
+        _log(ctx, f"Running {algorithm}...")
+        from .baselines import run_baseline
+
+        if impute == "var_em":
+            if df.isna().any().any():
+                from .imputation import var_em_impute
+
+                _log(ctx, "Imputation strategy: var_em")
+                # Impute once; the --validate windows reuse this frame.
+                df = var_em_impute(df, **_impute_kwargs)
+            else:
+                _log(ctx, "Warning: --impute var_em set but no NaN values; skipping.")
+        summary["impute"] = impute
+        summary["impute_kwargs"] = _impute_kwargs
+        try:
+            base_res = run_baseline(algorithm, df, max_lag, **baseline_kw)
+        except ValueError as e:
+            raise click.ClickException(str(e))
+        np.save(os.path.join(outdir, "estimated_graph.npy"), base_res.cg_tig)
+        summary["output_files"]["graph"] = "estimated_graph.npy"
+        if base_res.coefficients is not None:
+            np.save(os.path.join(outdir, "coefficients.npy"), base_res.coefficients)
+            summary["output_files"]["coefficients"] = "coefficients.npy"
+        if base_res.contemporaneous:
+            # Unoriented CPDAG edges at lag 0 sit in both directions in
+            # estimated_graph.npy (and the edge list); the marks keep them 'o-o'.
+            np.save(os.path.join(outdir, "edge_marks.npy"), base_res.to_marks())
+            summary["output_files"]["edge_marks"] = "edge_marks.npy"
+        summary["include_C"] = False
+        summary["contemporaneous"] = base_res.contemporaneous
+        summary["method_params"] = baseline_kw
+        score = base_res.info.get("score")
+        if score is not None and np.isfinite(score):
+            summary["score"] = float(score)  # BIC score (LGES, TGES, GES)
+
+        if save_plot:
+            try:
+                result = base_res.plot()
+                fig = result[0] if isinstance(result, tuple) else result
+                fname = f"network.{plot_format}"
+                fig.savefig(os.path.join(outdir, fname), dpi=150, bbox_inches="tight")
+                plt.close(fig)
+                summary["output_files"]["network_plot"] = fname
+            except Exception as e:
+                _log(ctx, f"Warning: could not save network plot: {e}")
+
+        n_edges = int(base_res.cg_tig.astype(bool).sum())
+        elapsed = _time.time() - t0
+        summary["elapsed_seconds"] = round(elapsed, 1)
+        summary["n_edges"] = n_edges
+        _log(
+            ctx,
+            f"{algorithm} complete. Graph shape: {base_res.cg_tig.shape}, "
+            f"{n_edges} edges, {elapsed:.1f}s",
+        )
+
     else:
         # Third-party algorithm from the plugin registry. The built-ins get
         # bespoke branches above because each saves extra artifacts (gate values,
@@ -1259,6 +1424,10 @@ def discover(
             from .bootstrap import temporal_bootstrap
 
             def _disc(sub):
+                if is_baseline:
+                    from .baselines import run_baseline
+
+                    return run_baseline(algorithm, sub, max_lag, **baseline_kw).cg_tig
                 # Fresh CI test per window; mirror the main run's exact config
                 # by closing over this command's parameters.
                 _ci = _make_ci_test(

@@ -136,6 +136,32 @@ appended last) where `cg_tig[cause, effect, lag]` marks
 .. autofunction:: causalts.grace.grow.grow_candidates
 ```
 
+## Score- and regression-based methods
+
+LGES, TGES, GES, LASSO-VAR, Granger and VARLiNGAM, also reachable as
+`causal-ts discover --algorithm lges` (and so on) and through
+`discover_df(algorithm=...)`.
+
+```{eval-rst}
+.. autofunction:: causalts.baselines.run_baseline
+
+.. autoclass:: causalts.baselines.BaselineResult
+   :members:
+   :show-inheritance:
+
+.. autofunction:: causalts.lges.lges_discovery
+
+.. autofunction:: causalts.lges.tges_discovery
+
+.. autofunction:: causalts.baselines.ges_discovery
+
+.. autofunction:: causalts.baselines.lasso_var_discovery
+
+.. autofunction:: causalts.baselines.granger_discovery
+
+.. autofunction:: causalts.baselines.varlingam_discovery
+```
+
 ## Regime discovery
 
 Detect regimes (change points, hidden states, distribution shifts) and discover

@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+* `causal-ts discover --algorithm` and `discover_df` accept `lges`, `tges`, `ges`,
+  `lasso-var`, `granger` and `varlingam` (new flags `--lambda-value`, `--lges-mode`,
+  `--cv-folds`, `--coef-threshold`), returning a `BaselineResult`. `run_grace` and
+  `run_reap` accept a result as `candidate_graph`, dropping its C nodes.
+
 ### Fixed
 
 * `extract_subgraph` reads a lag-0 `<--` / `<-o` mark in a string graph as the reversed edge,
