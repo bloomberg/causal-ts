@@ -26,6 +26,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* With statsmodels 0.15, `CausalForecaster`'s fallback model fits its AR candidates again; a removed
+  `AutoReg` argument made them fail silently, so only exponential smoothing was chosen.
 * `CausalForecaster.predict` keeps each prediction on its own row after a missing value
   (later predictions were shifted one row).
 * `HMMRegimeDetector` stays within its switch budget; `LeveneRegimeDetector` raises on an

@@ -171,12 +171,12 @@ def _fit_auto_ets(y: np.ndarray, seasonal_period: int | None = None):
             if len(y_train) <= p + 5:
                 continue
             try:
-                res = AutoReg(y_train, lags=p, old_names=False).fit()
+                res = AutoReg(y_train, lags=p).fit()
                 pred = np.asarray(res.forecast(val_size))
                 mse = np.mean((y_val - pred) ** 2)
                 if mse < best_mse:
                     best_mse = mse
-                    res_full = AutoReg(y, lags=p, old_names=False).fit()
+                    res_full = AutoReg(y, lags=p).fit()
                     best_model = _ARWrapper(res_full, T)
             except Exception:
                 continue
@@ -214,7 +214,7 @@ def _fit_auto_ets(y: np.ndarray, seasonal_period: int | None = None):
     if best_model is None:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            res = AutoReg(y, lags=1, old_names=False).fit()
+            res = AutoReg(y, lags=1).fit()
             best_model = _ARWrapper(res, T)
 
     return best_model
