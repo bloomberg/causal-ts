@@ -611,6 +611,7 @@ def select_lags(
     strategy: str = "max_importance",
     include_lag0: bool = False,
     fdr_correction: bool = True,
+    exclude_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """Select one lag per (cause, effect) pair.
 
@@ -629,6 +630,9 @@ def select_lags(
         Whether lag 0 is valid.
     fdr_correction : bool
         Apply Benjamini-Hochberg FDR correction across all hypotheses.
+    exclude_mask : ndarray of bool, shape (d, d, max_lag+1), optional
+        (cause, effect, lag) cells that are not hypotheses: left out of the
+        BH-FDR family (so they do not enlarge it) and never significant.
 
     Returns
     -------
@@ -647,12 +651,16 @@ def select_lags(
         for lag in range(start_lag, lag_pvalues.shape[2]):
             np.fill_diagonal(mask[:, :, lag], False)
 
+        if exclude_mask is not None:
+            mask &= ~exclude_mask
         flat_pvals = lag_pvalues[mask]
         adjusted = _bh_fdr(flat_pvals, alpha)
         adj_pvalues = lag_pvalues.copy()
         adj_pvalues[mask] = adjusted
     else:
         adj_pvalues = lag_pvalues
+    if exclude_mask is not None:
+        adj_pvalues = np.where(exclude_mask, np.inf, adj_pvalues)
 
     for c_idx in range(d):
         for e_idx in range(d):
@@ -681,6 +689,7 @@ def select_all_significant_lags(
     alpha: float = 0.05,
     include_lag0: bool = False,
     fdr_correction: bool = True,
+    exclude_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """Return boolean mask of all significant lags per (cause, effect) pair.
 
@@ -696,6 +705,9 @@ def select_all_significant_lags(
         Whether lag 0 is valid.
     fdr_correction : bool
         Apply BH-FDR correction.
+    exclude_mask : ndarray of bool, shape (d, d, max_lag+1), optional
+        (cause, effect, lag) cells that are not hypotheses: left out of the
+        BH-FDR family (so they do not enlarge it) and never significant.
 
     Returns
     -------
@@ -711,12 +723,16 @@ def select_all_significant_lags(
         for lag in range(start_lag, lag_pvalues.shape[2]):
             np.fill_diagonal(mask[:, :, lag], False)
 
+        if exclude_mask is not None:
+            mask &= ~exclude_mask
         flat_pvals = lag_pvalues[mask]
         adjusted = _bh_fdr(flat_pvals, alpha)
         adj_pvalues = lag_pvalues.copy()
         adj_pvalues[mask] = adjusted
     else:
         adj_pvalues = lag_pvalues
+    if exclude_mask is not None:
+        adj_pvalues = np.where(exclude_mask, np.inf, adj_pvalues)
 
     significant = np.zeros_like(lag_pvalues, dtype=bool)
     for c_idx in range(d):

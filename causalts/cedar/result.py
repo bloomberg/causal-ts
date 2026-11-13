@@ -131,6 +131,13 @@ class CedarResult(CausalResult):
                 # symmetry, so zero it out here.
                 vm = vm.copy()
                 vm[:, :, 0] = 0.0
+            elif vm is not None:
+                # A lag-0 pair kept in both directions carries one Cond1
+                # statistic per direction; the plotting layer requires lag-0
+                # symmetry, so show the larger-magnitude one on both.
+                vm = vm.copy()
+                v0, v0t = vm[:, :, 0], vm[:, :, 0].T
+                vm[:, :, 0] = np.where(np.abs(v0) >= np.abs(v0t), v0, v0t)
         else:
             vm = val_matrix
         return super().plot(val_matrix=vm, **kwargs)

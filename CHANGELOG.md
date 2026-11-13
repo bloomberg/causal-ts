@@ -30,6 +30,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* Cedar with `include_C=True` no longer drops a lagged edge whose strongest lag is 0: C cells
+  and X-X lag 0 are left out of the BH-FDR family (new `exclude_mask` in `select_lags` /
+  `select_all_significant_lags`), so lags are selected as without C.
+* Cedar's MCI pruning no longer conditions on the edge's own target, which removed both
+  directions of a lag-0 pair; with `include_lag0=True` Cedar can now emit `o-o` pairs. Shared
+  conditioning columns are counted once, so MCI p-values can change slightly.
 * CPU `parcorr` returns p = 1 for a constant column instead of NaN, which kept every edge
   touching it (#111). Clear CI-test caches (`cache_dir`) written before this fix: they still
   hold the NaN results.
