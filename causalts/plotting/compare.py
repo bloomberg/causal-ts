@@ -101,7 +101,7 @@ def compare_graphs(
     fn_linewidth=None,
     title=None,
     show_legend=True,
-    legend_loc="lower left",
+    legend_loc="best",
     legend_fontsize=None,
     legend_framealpha=0.8,
     legend_markerscale=1.0,
@@ -172,7 +172,8 @@ def compare_graphs(
     show_legend : bool, optional
         Whether to show the TP / FP / FN legend. Default *True*.
     legend_loc : str, optional
-        Legend location (any valid matplotlib ``loc``). Default ``'lower left'``.
+        Legend location (any valid matplotlib ``loc``). Default ``'best'``: matplotlib
+        places it where it overlaps the drawn graph least.
     legend_fontsize : float, optional
         Font size for legend text. Defaults to ``label_fontsize - 1``.
     legend_framealpha : float, optional

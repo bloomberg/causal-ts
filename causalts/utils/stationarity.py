@@ -16,6 +16,7 @@ functions:
 
 from __future__ import annotations
 
+import inspect
 import warnings
 
 import numpy as np
@@ -52,6 +53,14 @@ def check_stationarity_observed(data, alpha=0.05):
     """
     from statsmodels.tsa.stattools import adfuller, kpss
 
+    # statsmodels >= 0.15 warns that adfuller will return a result object;
+    # ask for the plain tuple where supported (older versions lack the flag).
+    adf_kw = (
+        {"result_object": False}
+        if "result_object" in inspect.signature(adfuller).parameters
+        else {}
+    )
+
     arr, cols = _to_2d(data)
     T, N = arr.shape
     results = []
@@ -63,7 +72,7 @@ def check_stationarity_observed(data, alpha=0.05):
         kpss_p = np.nan
         if len(x) >= 12 and np.std(x) > 0:
             try:
-                adf_p = adfuller(x, autolag="AIC")[1]
+                adf_p = adfuller(x, autolag="AIC", **adf_kw)[1]
             except Exception:
                 adf_p = np.nan
             try:

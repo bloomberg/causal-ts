@@ -16,8 +16,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `--cv-folds`, `--coef-threshold`), returning a `BaselineResult`. `run_grace` and
   `run_reap` accept a result as `candidate_graph`, dropping its C nodes.
 
+### Changed
+
+* `compare_graphs`: `legend_loc` defaults to `"best"` (was `"lower left"`).
+
 ### Fixed
 
+* `check_stationarity_observed` (and so `inspect`) no longer prints the statsmodels
+  `adfuller` `FutureWarning` once per column.
 * `extract_subgraph` reads a lag-0 `<--` / `<-o` mark in a string graph as the reversed edge,
   so `direction="parents"` / `"children"` no longer return the wrong neighbours.
 * `tigramite_graph_to_binary` reads `bytes` (`S`) edge-mark graphs instead of returning an
