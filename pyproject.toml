@@ -133,6 +133,10 @@ exclude = [
 # undefined names (F821-F823) still run, so a corrupted pair fails CI.
 per-file-ignores = [
   "__init__.py:F401",
+  # Test modules legitimately import after a statement: `matplotlib.use("Agg")`
+  # must run before anything pulls in pyplot, and `pytest.importorskip(...)`
+  # must run before importing the optional dependency it guards.
+  "tests/*:E402",
   "examples/scripts/*.py:E1,E2,E3,E4,E5,E7,W,F401,F541,F811,F824,F841",
 ]
 
