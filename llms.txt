@@ -7,7 +7,7 @@
 - **CDNOTS** — Constraint-based causal discovery for nonstationary time series. Detects nonstationarity via a time-index variable C. Fast with linear CI tests, works well for small-to-medium dimensionality.
 - **CEDAR** — Causal Edge Discovery for AutoRegressive processes. Uses lag selection (distance correlation) followed by pairwise CI testing. Most scalable algorithm (linear in d). Includes MCI pruning.
 - **GRACE** (`run_grace`) — Hybrid method: a directed candidate graph (CDNOTS by default, or any method's graph) + neural gated refinement with L0 regularization (Hard Concrete gates). Best for high-dimensional data (d >= 20). Automatically prunes false positives.
-- **REAP** (`run_reap`) — Same candidate graph, refined by a regression-based grow-shrink: grow rounds add missed lagged parents, then backward elimination drops each target's weak parents by partial F-tests. No training, much faster than GRACE.
+- **REAP** (`run_reap`) — Same candidate graph, refined by a regression-based grow-shrink: backward elimination drops each target's weak parents by partial F-tests, then grow rounds add missed lagged parents and shrink again. No training, much faster than GRACE.
 - **LGES / TGES / GES** (`causalts.lges.lges_discovery`, `tges_discovery`, `causalts.baselines.ges_discovery`) — Score-based: embed the series with its lagged copies and search Markov equivalence classes for the best BIC score, forbidding edges from the present into the past. LGES (Less Greedy Equivalence Search) inserts edges more conservatively than GES; TGES adds time tiers and orients more edges by them. Linear-Gaussian score, no nonstationarity node.
 - **Lasso-VAR / Granger / VARLiNGAM** (`causalts.baselines.lasso_var_discovery`, `granger_discovery`, `varlingam_discovery`) — Score-based (VAR): a lagged parent is a non-zero coefficient of a fitted (L1-penalised for Lasso-VAR and Granger) vector autoregression. Lagged edges only, except VARLiNGAM, which also orients contemporaneous edges from non-Gaussian residuals. Linear, no nonstationarity node.
 - **LUCID** — Not a discovery algorithm but a *correction* applied to a discovered graph, for when the causal-sufficiency assumption fails (unobserved common causes). Infers from the VAR-residual spectrum whether latent confounding is **sparse** (few affected variables) or **pervasive** (a factor loading on everything), then applies the matching correction — the two need opposite treatments and the wrong one is damaging. Composes with any engine via `res.deconfound()`.
@@ -30,6 +30,7 @@ causal-ts -s 42 -d cpu discover data.csv -a cedar --lag-method dcor --max-lag 5
 # Print CI test selection guide
 causal-ts ci-test-info
 causal-ts -s 42 discover data.csv -a grace --max-lag 3 --gate-threshold 0.5
+causal-ts discover data.csv -a lges --max-lag 3  # also tges, ges, lasso-var, granger, varlingam (no CI test)
 
 # Correct a discovered graph for latent confounders (LUCID)
 # GRAPH is the estimated_graph.npy that `discover` saved; --data is the same series.
