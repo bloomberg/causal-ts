@@ -30,6 +30,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* CPU `parcorr` returns p = 1 for a constant column instead of NaN, which kept every edge
+  touching it (#111). Clear CI-test caches written before this fix.
 * CI-test result caches no longer write a blank line after every row on Windows.
 * `causalts.__version__` in an uninstalled source checkout is `0+unknown` instead of a
   stale `0.14.0-dev`.
