@@ -409,3 +409,21 @@ def test_predict_stays_aligned_after_interior_nan():
     assert np.flatnonzero(np.isnan(pred)).tolist() == [0, 11]
     ok = ~np.isnan(pred)
     np.testing.assert_allclose(pred[ok], df["y"].to_numpy()[ok], atol=1e-8)
+
+
+def test_fit_auto_ets_selects_ar_for_ar_process():
+    # The AR candidates sit in a try/except: an AutoReg API break (statsmodels
+    # 0.15 removed old_names) made every one fail silently, so only ETS won.
+    rng = np.random.default_rng(1)
+    y = np.zeros(300)
+    for t in range(1, 300):
+        y[t] = 0.9 * y[t - 1] + rng.standard_normal()
+    assert isinstance(_fit_auto_ets(y), _ARWrapper)
+
+
+@pytest.mark.parametrize("lags", [1, 2, 3])
+def test_autoreg_calls_used_by_the_fallback_still_work(lags):
+    from statsmodels.tsa.ar_model import AutoReg
+
+    y = np.random.default_rng(0).standard_normal(100)
+    assert np.asarray(AutoReg(y, lags=lags).fit().forecast(5)).shape == (5,)
