@@ -9,6 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+* `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` accept
+  `undirected=` and `conflict=` for discovered `o-o` and `x-x` marks:
+  `"drop"`, `"bidirected"` (the default, so existing results are unchanged) or
+  `"adjacency"`, which draws the edge undirected and scores it as a correct
+  adjacency with unknown orientation. `plot_lag_metrics` reports separate
+  adjacency precision / recall / F1, TP / FP / FN and SHD rows.
+
 ## [0.28.1]
 
 ### Added

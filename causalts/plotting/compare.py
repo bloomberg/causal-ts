@@ -20,45 +20,117 @@ from matplotlib.patches import Ellipse, FancyArrowPatch
 
 from ._core import compute_node_positions
 
-_MIRROR_MARKS = ("<--", "<-o")
 _LATENT_MARK = "<->"
 _DAG_MARKS = ("", "-->", "<--")
+_POLICIES = ("drop", "bidirected", "adjacency")
 
 
-def _to_bool(graph, ground_truth=False):
-    """Convert a graph array to a boolean ``[cause, effect, lag]`` array.
+def _validate_policies(undirected, conflict):
+    """Reject unknown ``o-o`` / ``x-x`` policies."""
+    if undirected not in _POLICIES:
+        raise ValueError(f"undirected must be one of {_POLICIES}, got {undirected!r}")
+    if conflict not in _POLICIES:
+        raise ValueError(f"conflict must be one of {_POLICIES}, got {conflict!r}")
 
-    Numeric graphs: any nonzero entry is an edge. String (tigramite edge-mark)
-    graphs: any non-empty mark is an edge, except ``"<->"`` and lag-0 mirror
-    marks. ``"<->"`` is a latent common cause, which asserts there is no
-    direct edge, so it is never counted, as in ``tigramite_graph_to_binary``.
-    At lag 0 a link is stored at both ``[i, j, 0]`` and ``[j, i, 0]``; there
-    ``"<--"`` and ``"<-o"`` at ``[i, j, 0]`` are the edge ``j -> i``, not
-    ``i -> j``.
+
+def _resolve_graph(
+    graph, ground_truth=False, undirected="bidirected", conflict="bidirected"
+):
+    """Resolve edge marks into directed claims and unoriented adjacencies.
+
+    Numeric graphs are returned as directed edges, with no adjacencies.
+
+    String (tigramite edge-mark) graphs: ``"-->"`` / ``"o->"`` are directed
+    claims; ``"<--"`` / ``"<-o"`` are reversed claims at lag 0 and forward
+    claims at later lags, as in ``tigramite_graph_to_binary``. ``"<->"`` is a
+    latent common cause, which asserts there is no direct edge, so it is
+    never counted.
+
+    ``"o-o"`` (unoriented) is handled by ``undirected`` and ``"x-x"``
+    (conflicting) by ``conflict``:
+
+    - ``"drop"``: omitted.
+    - ``"bidirected"``: counted as a directed edge in place, which reproduces
+      the historical plotting behaviour (at lag 0, a symmetrically stored
+      pair becomes ``i -> j`` and ``j -> i``).
+    - ``"adjacency"``: returned in the adjacency mask instead. Lag-0
+      adjacencies are canonical -- only the upper triangle is set, so a pair
+      stored at both ``[i, j, 0]`` and ``[j, i, 0]`` counts once. At later
+      lags the claim stays at its cell, because the mirror is a different
+      temporal link.
 
     With ``ground_truth=True`` the graph must be a DAG: any mark other than
     ``"-->"`` and ``"<--"`` (e.g. ``"o-o"``, ``"x-x"``, ``"<->"``, ``"o->"``)
     raises ``ValueError`` instead of being miscounted.
+
+    Returns
+    -------
+    directed, adjacency : tuple of ndarray
+        Boolean arrays shaped like the input. ``adjacency[i, j, tau]`` is an
+        adjacency claim with unknown orientation.
     """
+    _validate_policies(undirected, conflict)
+
     graph = _as_3d(graph)
     if graph.dtype.kind == "O" and all(isinstance(v, str) for v in graph.flat):
         graph = graph.astype(str)  # e.g. marks from a DataFrame or CSV
-    if graph.dtype.kind in ("U", "S"):  # string dtype
-        marks = np.char.strip(graph.astype(str))
+    directed = np.zeros(graph.shape, dtype=bool)
+    adjacency = np.zeros(graph.shape, dtype=bool)
+    if graph.dtype.kind not in ("U", "S"):
+        return graph.astype(bool), adjacency
+
+    marks = np.char.strip(graph.astype(str))
+    if ground_truth:
+        found = sorted(set(np.unique(marks)) - set(_DAG_MARKS))
+        if found:
+            raise ValueError(
+                "graph_true must be a DAG (binary, or '-->' / '<--' marks); "
+                f"it contains {', '.join(repr(m) for m in found)}"
+            )
+
+    for tau in range(marks.shape[2]):
+        layer = marks[:, :, tau]
+        forward = (layer == "-->") | (layer == "o->")
+        reverse = (layer == "<--") | (layer == "<-o")
+        directed[:, :, tau] = forward
+        if tau == 0:
+            directed[:, :, tau] |= reverse.T
+        else:
+            directed[:, :, tau] |= reverse
+        # Keep the historical lenient handling of unrecognised non-empty
+        # marks in a discovered graph, but never treat "<->" as an edge.
+        known = forward | reverse | np.isin(layer, ("o-o", "x-x", _LATENT_MARK))
+        directed[:, :, tau] |= (layer != "") & ~known
         if ground_truth:
-            found = sorted(set(np.unique(marks)) - set(_DAG_MARKS))
-            if found:
-                raise ValueError(
-                    "graph_true must be a DAG (binary, or '-->' / '<--' marks); "
-                    f"it contains {', '.join(repr(m) for m in found)}"
-                )
-        edges = (marks != "") & (marks != _LATENT_MARK)
-        mirror = np.isin(marks[:, :, 0], _MIRROR_MARKS)
-        # Render a mirror at [i, j, 0] as j -> i rather than only dropping it,
-        # so a graph holding just one half of a lag-0 pair keeps the edge.
-        edges[:, :, 0] = (edges[:, :, 0] & ~mirror) | mirror.T
-        return edges
-    return graph.astype(bool)
+            continue
+        for mark, policy in (("o-o", undirected), ("x-x", conflict)):
+            if policy == "drop":
+                continue
+            cells = layer == mark
+            if policy == "bidirected":
+                directed[:, :, tau] |= cells
+            elif tau == 0:
+                adjacency[:, :, 0] |= np.triu(cells | cells.T, 1)
+            else:
+                adjacency[:, :, tau] |= cells
+    return directed, adjacency
+
+
+def _to_bool(graph, ground_truth=False):
+    """Backward-compatible wrapper around :func:`_resolve_graph`."""
+    return _resolve_graph(graph, ground_truth=ground_truth)[0]
+
+
+def _adjacency_truth(directed):
+    """Adjacency truth for matching unoriented claims.
+
+    Lag-0 links are stored in one direction only, so symmetrise that slice;
+    at later lags the reverse cell is a different temporal link and must not
+    be folded in.
+    """
+    adjacent = directed.copy()
+    adjacent[:, :, 0] |= directed[:, :, 0].T
+    return adjacent
 
 
 def _as_3d(graph, dtype=None):
@@ -106,6 +178,9 @@ def compare_graphs(
     legend_framealpha=0.8,
     legend_markerscale=1.0,
     return_pos=False,
+    undirected="bidirected",
+    conflict="bidirected",
+    adjacency_color="tab:blue",
 ):
     """Compare a discovered causal graph against ground truth.
 
@@ -120,7 +195,23 @@ def compare_graphs(
         ``ValueError``.
     graph_discovered : array-like, shape (N, N, tau_max+1)
         Discovered graph, 0/1 or any tigramite edge mark. ``'<->'`` (latent
-        confounder) is never counted as an edge.
+        confounder) is never counted as an edge. ``'o-o'`` and ``'x-x'`` are
+        resolved according to *undirected* and *conflict*.
+    undirected : str, optional
+        How to score a discovered ``'o-o'`` (unoriented) mark: ``'drop'``
+        omits it (the ``tigramite_graph_to_binary`` default), ``'bidirected'``
+        counts it as a directed edge in place (the historical plotting
+        behaviour, kept as the default so existing results do not change), and
+        ``'adjacency'`` draws it as an undirected line and scores it as a
+        correct adjacency with unknown orientation. At lag 0 the pair is
+        counted once, in the upper triangle.
+    conflict : str, optional
+        How to score a discovered ``'x-x'`` (conflicting) mark. Same choices
+        as *undirected*.
+    adjacency_color : str, optional
+        Color for correct adjacency claims when *undirected* or *conflict* is
+        ``'adjacency'``. Spurious adjacency claims use *fp_color*. Default
+        ``'tab:blue'``.
     var_names : list of str, optional
         Variable names. Defaults to ``['0', '1', ...]``.
     fig_ax : tuple (fig, ax), optional
@@ -190,7 +281,9 @@ def compare_graphs(
     fig, ax   or   fig, ax, node_pos_dict
     """
     gt = _to_bool(graph_true, ground_truth=True)
-    disc = _to_bool(graph_discovered)
+    disc, adjacency = _resolve_graph(
+        graph_discovered, undirected=undirected, conflict=conflict
+    )
 
     if fn_linewidth is None:
         fn_linewidth = arrow_linewidth * 0.4
@@ -208,7 +301,7 @@ def compare_graphs(
     # ------------------------------------------------------------------
     # Build a networkx graph for layout computation (union of all edges)
     # ------------------------------------------------------------------
-    union = gt | disc
+    union = gt | disc | adjacency
     # Ignore self-loops at lag 0
     for i in range(N):
         union[i, i, 0] = False
@@ -278,6 +371,44 @@ def compare_graphs(
         )
 
     # ------------------------------------------------------------------
+    # Classify adjacency claims and the true edges they cover
+    # ------------------------------------------------------------------
+    # Lag-0 adjacencies are canonical (upper triangle, counted once). A
+    # correct adjacency covers the true directed edge, so it is not also
+    # reported as missed.
+    adj_correct = {}  # (i, j) -> lags
+    adj_spurious = {}
+    covered = np.zeros(gt.shape, dtype=bool)
+    for i in range(N):
+        for j in range(N):
+            for tau in range(tau_max + 1):
+                if not adjacency[i, j, tau]:
+                    continue
+                if tau == 0:
+                    a, b = (i, j) if i < j else (j, i)
+                    already_directed = disc[a, b, 0] or disc[b, a, 0]
+                    is_true = gt[a, b, 0] or gt[b, a, 0]
+                else:
+                    a, b = i, j
+                    already_directed = disc[a, b, tau]
+                    is_true = gt[a, b, tau]
+                if is_true:
+                    # A correct adjacency covers the true directed edge even
+                    # when a directed claim is also present, so it is not
+                    # reported as missed.
+                    if tau == 0:
+                        covered[a, b, 0] = covered[b, a, 0] = True
+                    else:
+                        covered[a, b, tau] = True
+                if already_directed:
+                    # A directed claim at the same pair already draws it.
+                    continue
+                if is_true:
+                    adj_correct.setdefault((a, b), []).append(tau)
+                else:
+                    adj_spurious.setdefault((a, b), []).append(tau)
+
+    # ------------------------------------------------------------------
     # Classify edges per (i, j) pair
     # ------------------------------------------------------------------
     # For each directed pair (i→j), collect per-lag status
@@ -296,7 +427,7 @@ def compare_graphs(
                     lags_tp.append(tau)
                 elif in_disc and not in_gt:
                     lags_fp.append(tau)
-                elif in_gt and not in_disc:
+                elif in_gt and not in_disc and not covered[i, j, tau]:
                     lags_fn.append(tau)
             if lags_tp or lags_fp or lags_fn:
                 edge_info[(i, j)] = (lags_tp, lags_fp, lags_fn)
@@ -306,7 +437,7 @@ def compare_graphs(
     # ------------------------------------------------------------------
     seen = {}  # (i,j) -> list of rad values already used
 
-    def _draw_arrow(ax, i, j, color, linestyle, lw, label_text, zorder=0):
+    def _draw_arrow(ax, i, j, color, linestyle, lw, label_text, zorder=0, arrow=True):
         """Draw a curved arrow from node i to node j."""
         n1 = node_patches[i]
         n2 = node_patches[j]
@@ -337,7 +468,9 @@ def compare_graphs(
 
         seen.setdefault(key, []).append(rad)
 
-        arrowstyle = "Simple, head_width=2, head_length=2, tail_width=1"
+        arrowstyle = (
+            "Simple, head_width=2, head_length=2, tail_width=1" if arrow else "-"
+        )
         e_p = FancyArrowPatch(
             coor1,
             coor2,
@@ -461,6 +594,35 @@ def compare_graphs(
                     ax, i, j, fn_color, fn_style, fn_linewidth, fn_label, zorder=-1
                 )
 
+    # Undirected adjacency claims: correct ones in their own colour, spurious
+    # ones as false positives. No arrowhead, because orientation is unknown.
+    for (i, j), lags in adj_correct.items():
+        label = ",".join(str(l) for l in sorted(lags))  # noqa: E741
+        _draw_arrow(
+            ax,
+            i,
+            j,
+            adjacency_color,
+            "solid",
+            arrow_linewidth,
+            label,
+            zorder=0,
+            arrow=False,
+        )
+    for (i, j), lags in adj_spurious.items():
+        label = ",".join(str(l) for l in sorted(lags))  # noqa: E741
+        _draw_arrow(
+            ax,
+            i,
+            j,
+            fp_color,
+            fp_style,
+            fp_linewidth,
+            label,
+            zorder=0,
+            arrow=False,
+        )
+
     ax.set_aspect("equal")
 
     # ------------------------------------------------------------------
@@ -482,6 +644,14 @@ def compare_graphs(
                 label="FN (missed)",
             ),
         ]
+        if adj_correct:
+            legend_handles.append(
+                mpatches.Patch(
+                    facecolor=adjacency_color,
+                    edgecolor=adjacency_color,
+                    label="Adjacency (correct, unoriented)",
+                )
+            )
         ax.legend(
             handles=legend_handles,
             loc=legend_loc,
@@ -634,6 +804,8 @@ def plot_lag_metrics(
     cmap="YlGn",
     annotate=True,
     title=None,
+    undirected="bidirected",
+    conflict="bidirected",
 ):
     """Heatmap of precision / recall / F1 broken down by lag.
 
@@ -645,12 +817,26 @@ def plot_lag_metrics(
         ``ValueError``.
     graph_discovered : array-like, shape (N, N, tau_max+1)
         Discovered graph, 0/1 or any tigramite edge mark. ``'<->'`` (latent
-        confounder) is never counted as an edge.
+        confounder) is never counted as an edge. ``'o-o'`` and ``'x-x'`` are
+        resolved according to *undirected* and *conflict*.
     metrics : list of str, optional
-        Metric rows to show. Default ``["Precision", "Recall", "F1"]``.
+        Metric rows to show. Default ``["Precision", "Recall", "F1"]``, plus
+        the adjacency rows when *undirected* or *conflict* is ``'adjacency'``
+        and the discovered graph contains such a claim.
         Valid names: ``"Precision"``, ``"Recall"``, ``"F1"``, ``"TP"``,
         ``"FP"``, ``"FN"``, ``"SHD"``; unknown names are shown as 0. The
+        adjacency variants are ``"Adjacency Precision"``,
+        ``"Adjacency Recall"``, ``"Adjacency F1"``, ``"Adjacency TP"``,
+        ``"Adjacency FP"``, ``"Adjacency FN"`` and ``"Adjacency SHD"``. The
         colour scale is fixed to [0, 1], so count metrics saturate.
+    undirected : str, optional
+        ``'drop'``, ``'bidirected'`` or ``'adjacency'`` for discovered
+        ``'o-o'`` marks; see :func:`compare_graphs`. Directed metrics exclude
+        claims in the adjacency mask, and a correct adjacency covers the true
+        edge so it is not also a directed false negative. Default
+        ``'bidirected'``.
+    conflict : str, optional
+        Same choices as *undirected*, for discovered ``'x-x'`` marks.
     fig_ax : tuple (fig, ax), optional
         Existing figure and axes.
     figsize : tuple, optional
@@ -667,30 +853,65 @@ def plot_lag_metrics(
     fig, ax
     """
     gt = _to_bool(graph_true, ground_truth=True)
-    disc = _to_bool(graph_discovered)
+    disc, adjacency = _resolve_graph(
+        graph_discovered, undirected=undirected, conflict=conflict
+    )
 
     N = gt.shape[0]
     tau_max = gt.shape[2] - 1
 
     if metrics is None:
         metrics = ["Precision", "Recall", "F1"]
+        if "adjacency" in (undirected, conflict) and adjacency.any():
+            metrics = metrics + [
+                "Adjacency Precision",
+                "Adjacency Recall",
+                "Adjacency F1",
+            ]
 
     # Build per-lag mask (exclude self-loops at lag 0)
     mask = np.ones(gt.shape, dtype=bool)
     for i in range(N):
         mask[i, i, 0] = False
 
+    upper = np.triu_indices(N, 1)
+    adjacency_truth = _adjacency_truth(gt)
+    # A directed claim also asserts the adjacency; the mask keeps the two
+    # scorings from double-counting the same pair.
+    adjacency_claims = disc | adjacency
+
     # Compute metrics per lag
     data = np.zeros((len(metrics), tau_max + 1))
     for tau in range(tau_max + 1):
-        gt_tau = gt[:, :, tau][mask[:, :, tau]]
-        disc_tau = disc[:, :, tau][mask[:, :, tau]]
+        if tau == 0:
+            gt_tau = gt[:, :, 0][mask[:, :, 0]]
+            disc_tau = disc[:, :, 0][mask[:, :, 0]]
+            covered = adjacency[:, :, 0] & adjacency_truth[:, :, 0]
+            covered = covered | covered.T
+            covered_tau = covered[mask[:, :, 0]]
+            claimed = (adjacency_claims[:, :, 0] | adjacency_claims[:, :, 0].T)[upper]
+            true_adj = (gt[:, :, 0] | gt[:, :, 0].T)[upper]
+        else:
+            gt_tau = gt[:, :, tau][mask[:, :, tau]]
+            disc_tau = disc[:, :, tau][mask[:, :, tau]]
+            covered_tau = (adjacency[:, :, tau] & gt[:, :, tau])[mask[:, :, tau]]
+            claimed = adjacency_claims[:, :, tau][mask[:, :, tau]]
+            true_adj = gt[:, :, tau][mask[:, :, tau]]
+
         tp = int(np.sum(gt_tau & disc_tau))
         fp = int(np.sum(~gt_tau & disc_tau))
-        fn = int(np.sum(gt_tau & ~disc_tau))
+        fn = int(np.sum(gt_tau & ~disc_tau & ~covered_tau))
         prec = tp / max(tp + fp, 1)
         rec = tp / max(tp + fn, 1)
         f1 = 2 * prec * rec / max(prec + rec, 1e-12)
+
+        adj_tp = int(np.sum(claimed & true_adj))
+        adj_fp = int(np.sum(~true_adj & claimed))
+        adj_fn = int(np.sum(true_adj & ~claimed))
+        adj_prec = adj_tp / max(adj_tp + adj_fp, 1)
+        adj_rec = adj_tp / max(adj_tp + adj_fn, 1)
+        adj_f1 = 2 * adj_prec * adj_rec / max(adj_prec + adj_rec, 1e-12)
+
         metric_map = {
             "Precision": prec,
             "Recall": rec,
@@ -699,6 +920,13 @@ def plot_lag_metrics(
             "FP": fp,
             "FN": fn,
             "SHD": fp + fn,
+            "Adjacency Precision": adj_prec,
+            "Adjacency Recall": adj_rec,
+            "Adjacency F1": adj_f1,
+            "Adjacency TP": adj_tp,
+            "Adjacency FP": adj_fp,
+            "Adjacency FN": adj_fn,
+            "Adjacency SHD": adj_fp + adj_fn,
         }
         for mi, m in enumerate(metrics):
             data[mi, tau] = metric_map.get(m, 0)
@@ -759,6 +987,8 @@ def plot_pvalue_distribution(
     non_edge_color="grey",
     log_scale=False,
     title=None,
+    undirected="bidirected",
+    conflict="bidirected",
 ):
     """Histogram of p-values split by true edges vs non-edges.
 
@@ -779,6 +1009,14 @@ def plot_pvalue_distribution(
         Discovered graph, 0/1 or any tigramite edge mark (``'<->'`` is never
         counted as an edge). When given, only edges present in this
         graph are included and the histogram splits into TP vs FP.
+        Under the ``'adjacency'`` policy an ``'o-o'`` / ``'x-x'`` pair that
+        matches a true edge in either direction is counted as a TP, because
+        the orientation is unknown rather than wrong.
+    undirected : str, optional
+        ``'drop'``, ``'bidirected'`` or ``'adjacency'`` for discovered
+        ``'o-o'`` marks; see :func:`compare_graphs`. Default ``'bidirected'``.
+    conflict : str, optional
+        Same choices as *undirected*, for discovered ``'x-x'`` marks.
     bins : int, optional
         Number of histogram bins. Default 30.
     fig_ax : tuple (fig, ax), optional
@@ -805,6 +1043,14 @@ def plot_pvalue_distribution(
         pvalue_matrix = pvalue_matrix.pvalue_matrix
     pvals = _as_3d(pvalue_matrix, dtype=float)
     gt = _to_bool(graph_true, ground_truth=True)
+    _validate_policies(undirected, conflict)
+    if graph_discovered is not None:
+        disc, adjacency = _resolve_graph(
+            graph_discovered, undirected=undirected, conflict=conflict
+        )
+    else:
+        disc = np.zeros(gt.shape, dtype=bool)
+        adjacency = np.zeros(gt.shape, dtype=bool)
 
     N = gt.shape[0]
 
@@ -815,11 +1061,22 @@ def plot_pvalue_distribution(
 
     # If discovered graph provided, restrict to discovered edges only
     masked = graph_discovered is not None
+    matched_adj = np.zeros(gt.shape, dtype=bool)
     if masked:
-        valid &= _to_bool(graph_discovered)
+        claims = disc.copy()
+        if adjacency.any():
+            # Lag-0 adjacencies are canonical; include the mirror cell so the
+            # pair's p-value is not lost when only that cell was tested.
+            adj_cells = adjacency.copy()
+            adj_cells[:, :, 0] |= adjacency[:, :, 0].T
+            claims |= adj_cells
+            matched_adj = adjacency & _adjacency_truth(gt)
+            matched_adj[:, :, 0] |= matched_adj[:, :, 0].T
+        valid &= claims
 
-    pvals_true = pvals[valid & gt]
-    pvals_non = pvals[valid & ~gt]
+    is_true = gt | matched_adj
+    pvals_true = pvals[valid & is_true]
+    pvals_non = pvals[valid & ~is_true]
 
     if fig_ax is None:
         fig, ax = plt.subplots(figsize=figsize or (7, 4))
