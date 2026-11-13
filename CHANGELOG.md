@@ -17,6 +17,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   empty graph.
 * `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` no longer count a
   `<->` mark as an edge, and raise `ValueError` for a ground truth with `o-o`, `x-x` or `<->`.
+* The CPU `cmiknn` cache key includes `sig_samples`, `transform`, `shuffle_neighbors`,
+  `early_stop` and `target_quantile` when they are not the default, so a p-value cached under
+  one setting is no longer returned to a run with another.
 
 ## [0.28.0]
 

@@ -671,8 +671,19 @@ class CMIKNN(CMIknn):
         L = 0 if data is None else data.shape[0]
         seed = kwargs.pop("seed", 42)
         if param_hash is None:
-            # The seed only when not the default, so default-seed caches stay valid.
-            param_hash = f"T{L}-k{k}" + ("" if seed == 42 else f"-seed{seed}")
+            # Every setting that changes the p-value, each one only when it is
+            # not the default, so caches written with the defaults stay valid.
+            param_hash = f"T{L}-k{k}"
+            for tag, value, default in (
+                ("seed", seed, 42),
+                ("ss", sig_samples, 500),
+                ("tr", kwargs.get("transform", "ranks"), "ranks"),
+                ("sn", kwargs.get("shuffle_neighbors", 5), 5),
+                ("es", early_stop, True),
+                ("q", target_quantile, 0.05),
+            ):
+                if value != default:
+                    param_hash += f"-{tag}{value}"
         super().__init__(
             seed=seed,
             knn=k,

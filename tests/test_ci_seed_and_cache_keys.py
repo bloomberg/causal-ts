@@ -8,6 +8,7 @@ import pytest
 import torch
 
 from causalts.ci_tests import DFCITGPU, GCMIGPU, KCIGPU, LinSigCIGPU, SplitKCIGPU
+from causalts.ci_tests.cmiknn import CMIKNN
 from causalts.ci_tests.cmiknn_gpu import CMIknnGPU
 
 DEVICE = "cpu"
@@ -139,20 +140,36 @@ SHARED = {
         lambda **k: CMIknnGPU(_data(), device=DEVICE, sig_samples=50, **k),
         lambda **k: CMIknnGPU(_data(), device=DEVICE, sig_samples=61, **k),
     ),
+    "cmiknn-sig-samples": (
+        lambda **k: CMIKNN(_data(), sig_samples=50, early_stop=False, **k),
+        lambda **k: CMIKNN(_data(), sig_samples=61, early_stop=False, **k),
+    ),
+    "cmiknn-transform": (
+        lambda **k: CMIKNN(_data(), sig_samples=50, **k),
+        lambda **k: CMIKNN(_data(), sig_samples=50, transform="standardize", **k),
+    ),
 }
 
 
 @pytest.mark.parametrize("name", SHARED)
 def test_settings_sharing_a_cache_dir_get_their_own_entries(name, tmp_path):
     first, second = SHARED[name]
-    # An independent pair for DFCIT: on a dependent one both settings give 0.
-    x, y, z = (0, 2, [1]) if name.startswith("dfcit") else (0, 1, [2])
+    # An independent pair for DFCIT and the CMIKNN transform: on a dependent
+    # one both settings give 0.
+    independent = name.startswith("dfcit") or name == "cmiknn-transform"
+    x, y, z = (0, 2, [1]) if independent else (0, 1, [2])
     a = first(cache_dir=str(tmp_path))
     p_first = a(x, y, z)[0]
     a.flush_cache()
     want = second()(x, y, z)[0]
     assert want != p_first  # the settings really differ on this test
     assert second(cache_dir=str(tmp_path))(x, y, z)[0] == want
+
+
+def test_cmiknn_default_settings_keep_their_cache_key():
+    # Only non-default settings extend the key, so existing caches stay valid.
+    assert CMIKNN(_data()).param_hash == "T120-k0.2"
+    assert CMIKNN(_data(), seed=7).param_hash == "T120-k0.2-seed7"
 
 
 # --- one cache key, one answer: X/Y swaps and Z order (opt-in) -------------
