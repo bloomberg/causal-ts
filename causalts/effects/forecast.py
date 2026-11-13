@@ -78,6 +78,24 @@ class _ARWrapper:
         return self._result.aic
 
 
+def _feature_frame(
+    data: pd.DataFrame,
+    parents: list[tuple[str, int]],
+    exog_cols: list[str] | None = None,
+) -> pd.DataFrame:
+    """Lagged-parent and exogenous features, one row per row of ``data``."""
+    frames = {}
+    for var, lag in parents:
+        col_name = f"{var}_lag{lag}" if lag > 0 else var
+        frames[col_name] = data[var].shift(lag)
+
+    if exog_cols:
+        for col in exog_cols:
+            frames[f"exog_{col}"] = data[col]
+
+    return pd.DataFrame(frames, index=data.index)
+
+
 def _build_feature_matrix(
     data: pd.DataFrame,
     parents: list[tuple[str, int]],
@@ -95,16 +113,7 @@ def _build_feature_matrix(
             "Cannot build a forecasting model without predictors."
         )
 
-    frames = {}
-    for var, lag in parents:
-        col_name = f"{var}_lag{lag}" if lag > 0 else var
-        frames[col_name] = data[var].shift(lag)
-
-    if exog_cols:
-        for col in exog_cols:
-            frames[f"exog_{col}"] = data[col]
-
-    X = pd.DataFrame(frames)
+    X = _feature_frame(data, parents, exog_cols)
     y = data[target].copy()
 
     valid = X.notna().all(axis=1) & y.notna()
@@ -154,6 +163,8 @@ def _fit_auto_ets(y: np.ndarray, seasonal_period: int | None = None):
 
     best_mse = np.inf
     best_model = None
+    ar_attempted = 0
+    ar_errors: list[Exception] = []
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -161,15 +172,17 @@ def _fit_auto_ets(y: np.ndarray, seasonal_period: int | None = None):
         for p in [1, 2, 3]:
             if len(y_train) <= p + 5:
                 continue
+            ar_attempted += 1
             try:
-                res = AutoReg(y_train, lags=p, old_names=False).fit()
+                res = AutoReg(y_train, lags=p).fit()
                 pred = np.asarray(res.forecast(val_size))
                 mse = np.mean((y_val - pred) ** 2)
                 if mse < best_mse:
-                    best_mse = mse
-                    res_full = AutoReg(y, lags=p, old_names=False).fit()
+                    res_full = AutoReg(y, lags=p).fit()
                     best_model = _ARWrapper(res_full, T)
-            except Exception:
+                    best_mse = mse
+            except Exception as exc:
+                ar_errors.append(exc)
                 continue
 
         configs: list[dict] = [
@@ -195,17 +208,26 @@ def _fit_auto_ets(y: np.ndarray, seasonal_period: int | None = None):
                 pred = np.asarray(m.forecast(val_size))
                 mse = np.mean((y_val - pred) ** 2)
                 if mse < best_mse:
-                    best_mse = mse
                     best_model = ExponentialSmoothing(y, **cfg).fit(
                         optimized=True, use_brute=False
                     )
+                    best_mse = mse
             except Exception:
                 continue
+
+    if ar_attempted and len(ar_errors) == ar_attempted:
+        # Outside the suppressed block: a statsmodels API change once made every
+        # AR candidate fail silently, leaving only exponential smoothing.
+        warnings.warn(
+            f"every AR candidate failed to fit; last error: {ar_errors[-1]!r}",
+            RuntimeWarning,
+            stacklevel=3,
+        )
 
     if best_model is None:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            res = AutoReg(y, lags=1, old_names=False).fit()
+            res = AutoReg(y, lags=1).fit()
             best_model = _ARWrapper(res, T)
 
     return best_model
@@ -400,10 +422,13 @@ class CausalForecaster:
         for target in targets:
             if target in self.models_:
                 parents = self.parents_[target]
-                X, _ = _build_feature_matrix(data_ext, parents, target, self.exog_cols_)
-                max_lag = max((lag for _, lag in parents), default=0)
+                # Predict row by row where every feature is available, so rows
+                # after an interior gap stay aligned with their timestamps.
+                X = _feature_frame(data_ext, parents, self.exog_cols_)
+                valid = X.notna().all(axis=1).to_numpy()
                 preds = np.full(len(data), np.nan)
-                preds[max_lag : max_lag + len(X)] = self.models_[target].predict(X)
+                if valid.any():
+                    preds[valid] = self.models_[target].predict(X.loc[valid])
                 results[target] = preds
             elif target in self.exog_models_:
                 fitted = np.asarray(self.exog_models_[target].fittedvalues)

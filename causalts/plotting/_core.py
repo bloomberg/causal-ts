@@ -1193,7 +1193,10 @@ def _default_kwargs_for_layout(
         }
     if name in ("kamada_kawai", "kk"):
         return {"weight": "weight"}
-    if name in ("spectral", "circular", "shell", "random", "spiral", "planar"):
+    if name == "random":
+        # nx.random_layout takes no scale; it draws from [0, 1)^2.
+        return {"center": None, "seed": seed}
+    if name in ("spectral", "circular", "shell", "spiral", "planar"):
         return {"center": None, "scale": 1.0}
     if name in ("kk_enhanced",):
         return {
@@ -2106,6 +2109,12 @@ def _check_matrices(graph, val_matrix, link_width, link_attribute):
 def _barycenter_order(graph, max_iter=10):
     """Compute variable ordering that minimizes edge crossings (barycenter heuristic)."""
     graph_bool = graph.astype(bool) if graph.dtype != bool else graph
+    if graph_bool.ndim == 2:
+        # (N, N, 1) graphs arrive squeezed to (N, N).
+        graph_bool = graph_bool[:, :, None]
+    elif graph_bool.ndim == 4:
+        # Aux graphs (N, N, tau, tau): only adjacency matters here.
+        graph_bool = graph_bool.any(axis=3)
     N = graph_bool.shape[0]
 
     # Build undirected neighbor adjacency (i connects to j if any lag has an edge)
@@ -2706,6 +2715,15 @@ class setup_matrix:
         self.lag_label_suffix = lag_label_suffix
         self.lag_array = lag_array
         self.x_base = 1 if x_base is None else x_base
+        if lag_array is not None and not (
+            float(self.x_base).is_integer() and self.x_base >= 1
+        ):
+            # With lag_array the ticks are lag indices: only a whole-number step
+            # keeps one label per tick.
+            raise ValueError(
+                f"x_base must be a positive whole number when lag_array is given, "
+                f"got {self.x_base!r}."
+            )
         self.legend_width = legend_width
         self.legend_fontsize = legend_fontsize
         self.label_space_left = label_space_left
@@ -3067,7 +3085,9 @@ class setup_matrix:
             for ij in list(self.axes_dict):
                 i = ij[0]
                 j = ij[1]
-                self.axes_dict[(i, j)].set_xticklabels(self.lag_array[:: self.x_base])
+                self.axes_dict[(i, j)].set_xticklabels(
+                    self.lag_array[:: int(self.x_base)]
+                )
 
         if name is not None:
             self.fig.savefig(name)

@@ -26,6 +26,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* With statsmodels 0.15, `CausalForecaster`'s fallback model fits its AR candidates again; a removed
+  `AutoReg` argument made them fail silently, so only exponential smoothing was chosen.
+  `CausalForecaster.fit` now emits a `RuntimeWarning` when every AR candidate fails to fit.
+* `CausalForecaster.predict` keeps each prediction on its own row after a missing value
+  (later predictions were shifted one row).
+* `HMMRegimeDetector` stays within its switch budget; `LeveneRegimeDetector` raises on an
+  unknown `method`.
+* Plotting: `plot_time_series_graph(order="auto")` handles lag-0-only and 4-D graphs,
+  `node_layout="random"` works, and `setup_matrix(lag_array=...)` works with the default
+  `x_base`.
 * Cedar with `include_C=True` keeps lagged edges whose strongest lag is 0, and MCI pruning
   no longer conditions on the edge's own target (lag-0 pairs can now be `o-o`).
 * CPU `parcorr` gives p = 1 for a constant column instead of NaN (#111).
