@@ -163,6 +163,8 @@ def _fit_auto_ets(y: np.ndarray, seasonal_period: int | None = None):
 
     best_mse = np.inf
     best_model = None
+    ar_attempted = 0
+    ar_errors: list[Exception] = []
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -170,6 +172,7 @@ def _fit_auto_ets(y: np.ndarray, seasonal_period: int | None = None):
         for p in [1, 2, 3]:
             if len(y_train) <= p + 5:
                 continue
+            ar_attempted += 1
             try:
                 res = AutoReg(y_train, lags=p).fit()
                 pred = np.asarray(res.forecast(val_size))
@@ -178,7 +181,8 @@ def _fit_auto_ets(y: np.ndarray, seasonal_period: int | None = None):
                     best_mse = mse
                     res_full = AutoReg(y, lags=p).fit()
                     best_model = _ARWrapper(res_full, T)
-            except Exception:
+            except Exception as exc:
+                ar_errors.append(exc)
                 continue
 
         configs: list[dict] = [
@@ -210,6 +214,15 @@ def _fit_auto_ets(y: np.ndarray, seasonal_period: int | None = None):
                     )
             except Exception:
                 continue
+
+    if ar_attempted and len(ar_errors) == ar_attempted:
+        # Outside the suppressed block: a statsmodels API change once made every
+        # AR candidate fail silently, leaving only exponential smoothing.
+        warnings.warn(
+            f"every AR candidate failed to fit; last error: {ar_errors[-1]!r}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     if best_model is None:
         with warnings.catch_warnings():

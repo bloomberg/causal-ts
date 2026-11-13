@@ -411,19 +411,43 @@ def test_predict_stays_aligned_after_interior_nan():
     np.testing.assert_allclose(pred[ok], df["y"].to_numpy()[ok], atol=1e-8)
 
 
-def test_fit_auto_ets_selects_ar_for_ar_process():
-    # The AR candidates sit in a try/except: an AutoReg API break (statsmodels
-    # 0.15 removed old_names) made every one fail silently, so only ETS won.
-    rng = np.random.default_rng(1)
-    y = np.zeros(300)
-    for t in range(1, 300):
-        y[t] = 0.9 * y[t - 1] + rng.standard_normal()
-    assert isinstance(_fit_auto_ets(y), _ARWrapper)
+def test_fit_auto_ets_fits_every_ar_candidate(monkeypatch):
+    # Every AR candidate must fit; the try/except in _fit_auto_ets would otherwise
+    # hide an AutoReg API break (statsmodels 0.15 removed old_names).
+    import statsmodels.tsa.ar_model as ar_model
+
+    real = ar_model.AutoReg
+    fitted_lags = []
+
+    def spy(*args, **kwargs):
+        model = real(*args, **kwargs)  # forwards kwargs, so a bad one still raises
+        fit = model.fit
+
+        def recording_fit(*a, **k):
+            res = fit(*a, **k)
+            fitted_lags.append(kwargs["lags"])
+            return res
+
+        model.fit = recording_fit
+        return model
+
+    monkeypatch.setattr(ar_model, "AutoReg", spy)
+    _fit_auto_ets(np.random.default_rng(0).standard_normal(120))
+    # The best_model-is-None fallback only uses lags=1, so 2 and 3 prove the
+    # candidate loop itself fitted.
+    assert {1, 2, 3} <= set(fitted_lags)
 
 
-@pytest.mark.parametrize("lags", [1, 2, 3])
-def test_autoreg_calls_used_by_the_fallback_still_work(lags):
-    from statsmodels.tsa.ar_model import AutoReg
+def test_fit_auto_ets_warns_when_every_ar_candidate_fails(monkeypatch):
+    import statsmodels.tsa.ar_model as ar_model
 
-    y = np.random.default_rng(0).standard_normal(100)
-    assert np.asarray(AutoReg(y, lags=lags).fit().forecast(5)).shape == (5,)
+    real = ar_model.AutoReg
+
+    def broken(*args, **kwargs):
+        if len(args[0]) < 120:  # candidates fit on the training split
+            raise TypeError("simulated API break")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ar_model, "AutoReg", broken)
+    with pytest.warns(RuntimeWarning, match="every AR candidate failed"):
+        _fit_auto_ets(np.random.default_rng(0).standard_normal(120))
