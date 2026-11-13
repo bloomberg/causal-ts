@@ -136,11 +136,12 @@ appended last) where `cg_tig[cause, effect, lag]` marks
 .. autofunction:: causalts.grace.grow.grow_candidates
 ```
 
-## Score- and regression-based methods
+## Score-based
 
-LGES, TGES, GES, LASSO-VAR, Granger and VARLiNGAM, also reachable as
-`causal-ts discover --algorithm lges` (and so on) and through
-`discover_df(algorithm=...)`.
+LGES, TGES and GES search for the best-scoring (BIC) equivalence class on the lag-embedded
+variables, with edges into the past forbidden. Lasso-VAR, VARLiNGAM and Granger causality
+read edges off a fitted vector autoregression. All six are also reachable as
+`causal-ts discover --algorithm lges` (and so on) and through `discover_df(algorithm=...)`.
 
 ```{eval-rst}
 .. autofunction:: causalts.baselines.run_baseline
@@ -157,9 +158,9 @@ LGES, TGES, GES, LASSO-VAR, Granger and VARLiNGAM, also reachable as
 
 .. autofunction:: causalts.baselines.lasso_var_discovery
 
-.. autofunction:: causalts.baselines.granger_discovery
-
 .. autofunction:: causalts.baselines.varlingam_discovery
+
+.. autofunction:: causalts.baselines.granger_discovery
 ```
 
 ## Regime discovery

@@ -37,7 +37,7 @@ cli
 
 <div class="ct-stats-strip">
   <div class="ct-stat">
-    <span class="ct-stat-num">5</span>
+    <span class="ct-stat-num">11</span>
     <span class="ct-stat-label">Algorithms</span>
   </div>
   <div class="ct-stat-div"></div>
