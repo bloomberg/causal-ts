@@ -892,7 +892,7 @@ def discover(
             )
         baseline_kw[key] = value
     if is_baseline:
-        # Score- and regression-based methods: no CI test, no C node, no alpha.
+        # Score-based methods: no CI test, no C node, no alpha.
         explicit = [
             flag
             for flag, param in (

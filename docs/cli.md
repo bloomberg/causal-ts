@@ -76,7 +76,7 @@ causal-ts discover DATA.csv [OPTIONS]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-a, --algorithm` | `cdnots` | `cdnots`, `cdnots+`, `cedar`, `grace`, `grace-ss`, `reap`, and the score- and regression-based `lges`, `tges`, `ges`, `lasso-var`, `granger`, `varlingam` |
+| `-a, --algorithm` | `cdnots` | `cdnots`, `cdnots+`, `cedar`, `grace`, `grace-ss`, `reap`, and the score-based `lges`, `tges`, `ges`, `lasso-var`, `granger`, `varlingam` |
 | `--ci-test` | `parcorr-gpu` | CI test — see `ci-test-info`. For `grace`, `grace-ss` and `reap` it builds the candidate graph; unset, they pick `parcorr-gpu` on CUDA, else CPU `parcorr` |
 | `--max-lag INT` | `3` | Maximum time lag |
 | `--alpha FLOAT` | `0.01` for `cdnots+`, else `0.05` | Significance level for `cdnots`, `cdnots+`, `grace`, `grace-ss`, `reap`; Cedar uses `--alpha-cond1`/`--alpha-cond2` |
@@ -146,7 +146,7 @@ its own, reached from Python with `include_C_in_model=True`:
 and {func}`causalts.grace.runners.run_reap` conditions its regressions on C for
 a supplied candidate graph too.
 
-### Score- and regression-based methods
+### Score-based methods
 
 `lges`, `tges` and `ges` (BIC score search over the lag-embedded series),
 `lasso-var` and `granger` (LASSO vector autoregression) and `varlingam` run

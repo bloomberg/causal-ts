@@ -658,7 +658,7 @@ def discover_df(
     (transformed) data, so for them a named ``ci_test`` is turned into the
     ``ci_test_class`` factory they call, as the CLI does.
 
-    The score- and regression-based methods ``"lges"``, ``"tges"``, ``"ges"``,
+    The score-based methods ``"lges"``, ``"tges"``, ``"ges"``,
     ``"lasso-var"``, ``"granger"`` and ``"varlingam"`` run through
     :func:`~causalts.baselines.run_baseline` and return a
     :class:`~causalts.baselines.BaselineResult`; they take no ``ci_test``,
@@ -699,7 +699,7 @@ def discover_df(
     ------
     ValueError
         If ``algorithm`` is unknown; if ``ci_test``, ``include_C=True``, a
-        ``c_preset`` or ``alpha`` is passed to a score- or regression-based
+        ``c_preset`` or ``alpha`` is passed to a score-based
         method; if both ``ci_test`` and ``ci_test_class``
         are passed; if ``ci_test`` is passed to GRACE-SS with
         ``use_ci_skeleton=False``; or if ``ci_test="cmiknn-mixed-gpu"`` is used

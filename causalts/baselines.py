@@ -396,12 +396,12 @@ _BASELINE_METHODS = {
     "varlingam": ("causalts.baselines.varlingam_discovery", True),
 }
 
-#: Names of the score- and regression-based methods :func:`run_baseline` runs.
+#: Names of the score-based methods :func:`run_baseline` runs.
 BASELINE_ALGORITHMS = tuple(_BASELINE_METHODS)
 
 
 class BaselineResult(CausalResult):
-    """Result of a score- or regression-based method run by :func:`run_baseline`.
+    """Result of a score-based method run by :func:`run_baseline`.
 
     Inherits plotting and the DoWhy bridge from
     :class:`~causalts.result.CausalResult`.
@@ -442,7 +442,7 @@ class BaselineResult(CausalResult):
 
 
 def run_baseline(algorithm, df, max_lag=1, **kwargs):
-    """Run a score- or regression-based method by name and wrap its output.
+    """Run a score-based method by name and wrap its output.
 
     Parameters
     ----------
