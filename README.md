@@ -6,6 +6,7 @@ in Python.**
 [![PyPI](https://img.shields.io/pypi/v/causalts)](https://pypi.org/project/causalts/)
 [![Python](https://img.shields.io/pypi/pyversions/causalts)](https://pypi.org/project/causalts/)
 [![arXiv](https://img.shields.io/badge/arXiv-2607.24673-b31b1b.svg)](https://arxiv.org/abs/2607.24673)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24205661.svg)](https://doi.org/10.5281/zenodo.24205661)
 [![Documentation](https://img.shields.io/readthedocs/causal-ts/latest?label=docs)](https://causal-ts.readthedocs.io/en/latest/)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/bloomberg/causal-ts/badge)](https://scorecard.dev/viewer/?uri=github.com/bloomberg/causal-ts)
 [![Lint](https://github.com/bloomberg/causal-ts/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/marketplace/actions/super-linter)

@@ -13,6 +13,7 @@ authors:
     given-names: Achintya
   - family-names: Sadeghi
     given-names: Agathe
+doi: 10.5281/zenodo.24205661
 repository-code: "https://github.com/bloomberg/causal-ts"
 url: "https://causal-ts.readthedocs.io/en/latest/"
 license: GPL-3.0-or-later
