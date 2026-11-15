@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   arguments by keyword.
 * `WrappedGraph.summary()` and `run_cdnots_gated(verbose=True)` print correctly;
   `set_up_logging` cleans up after a failed setup.
+* `import causalts.plotting` no longer loads `dcor` and numba; parallel docs builds crashed
+  on numba's cache.
 
 ### Changed
 

@@ -40,6 +40,21 @@ def test_heavy_module_not_imported_eagerly(mod):
     assert loaded == "False", f"{mod} was imported eagerly by `import causalts`"
 
 
+@pytest.mark.parametrize("mod", ["dcor", "numba"])
+def test_plotting_import_does_not_load_numba(mod):
+    """``import causalts.plotting`` must not compile numba code: parallel Sphinx
+    workers import it for autodoc and crashed racing on numba's cache."""
+    loaded = _run(f"import sys, causalts.plotting; print({mod!r} in sys.modules)")
+    assert loaded == "False", f"{mod} was imported by `import causalts.plotting`"
+    # Introspection of the module (doctest, autodoc :members:) must not load it.
+    code = (
+        "import sys, inspect, causalts.plotting._lag_adjust as m; "
+        "inspect.getmembers(m); [inspect.unwrap(v) for _, v in inspect.getmembers(m)]; "
+        f"print({mod!r} in sys.modules)"
+    )
+    assert _run(code) == "False", f"introspecting _lag_adjust imported {mod}"
+
+
 @pytest.mark.parametrize("name", LAZY_NAMES)
 def test_lazy_name_resolves_by_attribute(name):
     assert _run(f"import causalts; print(causalts.{name}.__name__)")
