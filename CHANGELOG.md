@@ -11,14 +11,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
-* `extract_subgraph` reads a lag-0 `<--` / `<-o` mark in a string graph as the reversed edge,
-  so `direction="parents"` / `"children"` no longer return the wrong neighbours.
-* `tigramite_graph_to_binary` reads `bytes` (`S`) edge-mark graphs instead of returning an
-  empty graph.
-* `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` no longer count a
-  `<->` mark as an edge, and raise `ValueError` for a ground truth with `o-o`, `x-x` or `<->`.
+* `CausalForecaster.forecast_horizon(targets=...)` with a subset of variables no longer
+  returns NaN from the second step on.
+* `plot_time_series_graph(order=...)` lists variables top to bottom, as documented (also
+  `order="auto"`); single-variable graphs plot; `plot_lagfuncs(dpi=...)` is honoured.
+* The deprecated `causalts.ci_tests.cit_base` import gives the unified `CIT_Base`; pass its
+  arguments by keyword.
+* `WrappedGraph.summary()` and `run_cdnots_gated(verbose=True)` print correctly;
+  `set_up_logging` cleans up after a failed setup.
+* `import causalts.plotting` no longer loads `dcor` and numba; parallel docs builds crashed
+  on numba's cache.
 * `CondIndTest.run_test_raw(x, y)` with the default `z=None` runs the unconditional test
   instead of raising `TypeError` in the cache-key helper.
+
+### Changed
+
+* More tests: forecasting, plotting, the DoWhy bridge, GRACE, the CLI, the Tigramite
+  wrappers and the data generators.
+
+## [0.28.1]
+
+### Added
+
+* Score-based methods in `causal-ts discover` and `discover_df`: `lges`, `tges`, `ges`,
+  `lasso-var`, `granger`, `varlingam` (returns a `BaselineResult`). `run_grace` and
+  `run_reap` accept a result as `candidate_graph`.
+* `plot_lag_dependence` / `compute_lag_dependence`: per-lag dependence of every pair from
+  raw data, optionally parent-adjusted (`adjust="parents"`) and marked against a
+  `true_graph`.
+
+### Changed
+
+* `compare_graphs` places its legend at `"best"`; lag-function grids get clearer axis labels
+  and `wrap_labels=`.
+* CI also runs the core tests on macOS and Windows and reports coverage.
+
+### Fixed
+
+* With statsmodels 0.15, `CausalForecaster`'s fallback model fits its AR candidates again; a removed
+  `AutoReg` argument made them fail silently, so only exponential smoothing was chosen.
+  `CausalForecaster.fit` now emits a `RuntimeWarning` when every AR candidate fails to fit.
+* `CausalForecaster.predict` keeps each prediction on its own row after a missing value
+  (later predictions were shifted one row).
+* `HMMRegimeDetector` stays within its switch budget; `LeveneRegimeDetector` raises on an
+  unknown `method`.
+* Plotting: `plot_time_series_graph(order="auto")` handles lag-0-only and 4-D graphs,
+  `node_layout="random"` works, and `setup_matrix(lag_array=...)` works with the default
+  `x_base`.
+* Cedar with `include_C=True` keeps lagged edges whose strongest lag is 0, and MCI pruning
+  no longer conditions on the edge's own target (lag-0 pairs can now be `o-o`).
+* CPU `parcorr` gives p = 1 for a constant column instead of NaN (#111).
+* The CPU `cmiknn` cache key includes every setting that changes the p-value.
+* Clear CI-test caches (`cache_dir`) written before this release: they may hold the NaN
+  `parcorr` results or `cmiknn` results under the wrong settings.
+* `discover --json` / `deconfound --json` print only the JSON to stdout.
+* `extract_subgraph` reads lag-0 `<--` / `<-o` marks as reversed edges;
+  `tigramite_graph_to_binary` reads `bytes` mark graphs.
+* `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` no longer count `<->`
+  as an edge and reject a ground truth with any mark other than `-->` / `<--`.
+* No statsmodels `adfuller` `FutureWarning` from `inspect`; no blank lines in CI-test caches
+  on Windows; `__version__` is `0+unknown` (not `0.14.0-dev`) in an uninstalled checkout.
 
 ## [0.28.0]
 
@@ -272,7 +324,8 @@ API:
 * Comprehensive documentation and example notebooks
 * Synthetic data generators (nonstationary, mixed discrete-continuous, Lorenz-96)
 
-[unreleased]: https://github.com/bloomberg/causal-ts/compare/v0.28.0...HEAD
+[unreleased]: https://github.com/bloomberg/causal-ts/compare/v0.28.1...HEAD
+[0.28.1]: https://github.com/bloomberg/causal-ts/compare/v0.28.0...v0.28.1
 [0.28.0]: https://github.com/bloomberg/causal-ts/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/bloomberg/causal-ts/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/bloomberg/causal-ts/compare/v0.25.2...v0.26.0

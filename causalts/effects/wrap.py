@@ -508,7 +508,7 @@ class WrappedGraph:
         print(f"Data:         T={len(self._df)}")
 
         # Edge list
-        print("\\nDiscovered edges:")
+        print("\nDiscovered edges:")
         for i in range(d):
             for j in range(d):
                 for lag in range(max_lag + 1):

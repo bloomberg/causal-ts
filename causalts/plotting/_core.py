@@ -23,6 +23,7 @@ Public License v3.0. Ensure proper attribution when using or modifying this code
 
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import re
 import warnings
 from copy import deepcopy
 from operator import sub
@@ -1192,7 +1193,10 @@ def _default_kwargs_for_layout(
         }
     if name in ("kamada_kawai", "kk"):
         return {"weight": "weight"}
-    if name in ("spectral", "circular", "shell", "random", "spiral", "planar"):
+    if name == "random":
+        # nx.random_layout takes no scale; it draws from [0, 1)^2.
+        return {"center": None, "seed": seed}
+    if name in ("spectral", "circular", "shell", "spiral", "planar"):
         return {"center": None, "scale": 1.0}
     if name in ("kk_enhanced",):
         return {
@@ -1566,7 +1570,7 @@ def plot_graph(
     else:
         fig, ax = fig_ax
 
-    graph = np.copy(graph.squeeze())
+    graph = np.copy(_squeeze_lags(graph))
 
     if graph.ndim == 4:
         raise ValueError(
@@ -1655,7 +1659,8 @@ def plot_graph(
         diagonal = False
 
     if np.count_nonzero(graph == "") == graph.size or diagonal:
-        graph[0, 1, 0] = "xxx"  # Workaround, will not be plotted...
+        if N > 1:
+            graph[0, 1, 0] = "xxx"  # Workaround, will not be plotted...
         no_links = True
     else:
         no_links = False
@@ -2102,9 +2107,22 @@ def _check_matrices(graph, val_matrix, link_width, link_attribute):
     return graph, val_matrix, link_width, link_attribute
 
 
+def _squeeze_lags(graph):
+    """Drop singleton lag axes, keeping the two variable axes even when N = 1."""
+    graph = np.asarray(graph)
+    extra = tuple(ax for ax in range(2, graph.ndim) if graph.shape[ax] == 1)
+    return graph.squeeze(axis=extra) if extra else graph
+
+
 def _barycenter_order(graph, max_iter=10):
     """Compute variable ordering that minimizes edge crossings (barycenter heuristic)."""
     graph_bool = graph.astype(bool) if graph.dtype != bool else graph
+    if graph_bool.ndim == 2:
+        # (N, N, 1) graphs arrive squeezed to (N, N).
+        graph_bool = graph_bool[:, :, None]
+    elif graph_bool.ndim == 4:
+        # Aux graphs (N, N, tau, tau): only adjacency matters here.
+        graph_bool = graph_bool.any(axis=3)
     N = graph_bool.shape[0]
 
     # Build undirected neighbor adjacency (i connects to j if any lag has an edge)
@@ -2284,7 +2302,7 @@ def plot_time_series_graph(
         no_coloring = False
 
     # Save original graph before string conversion for barycenter ordering
-    graph_orig = np.copy(np.asarray(graph).squeeze())
+    graph_orig = np.copy(_squeeze_lags(graph))
 
     graph, val_matrix, link_width, link_attribute = _check_matrices(
         graph, val_matrix, link_width, link_attribute
@@ -2300,9 +2318,9 @@ def plot_time_series_graph(
         max_lag = tau_max + 1
 
     if np.count_nonzero(graph == "") == graph.size:
-        if graph.ndim == 4:
+        if N > 1 and graph.ndim == 4:
             graph[0, 1, 0, 0] = "---"
-        else:
+        elif N > 1:
             graph[0, 1, 0] = "---"
         no_links = True
     else:
@@ -2485,10 +2503,12 @@ def plot_time_series_graph(
         )
         pos_tmp[i][np.isnan(pos_tmp[i])] = 0.0
 
+    # ``order`` lists variables top to bottom; ``row_of[v]`` is the row of v.
+    row_of = {v: r for r, v in enumerate(order)}
     pos = {}
     for n in range(N):
         for tau in range(max_lag):
-            pos[n * max_lag + tau] = pos_tmp[order[n] * max_lag + tau]
+            pos[n * max_lag + tau] = pos_tmp[row_of[n] * max_lag + tau]
 
     node_rings = {
         0: {
@@ -2690,12 +2710,30 @@ class setup_matrix:
         lag_units="",
         lag_array=None,
         label_fontsize=10,
+        row_title=None,
+        col_title=None,
+        legend_loc="right",
+        row_label_rotation=0,
+        row_label_lines=1,
+        lag_label_suffix="",
     ):
         self.tau_max = tau_max
+        self.legend_loc = legend_loc
         self.labels = []
         self.lag_units = lag_units
+        #: Text after "lag tau" on the x axis (e.g. " of the cause").
+        self.lag_label_suffix = lag_label_suffix
         self.lag_array = lag_array
         self.x_base = 1 if x_base is None else x_base
+        if lag_array is not None and not (
+            float(self.x_base).is_integer() and self.x_base >= 1
+        ):
+            # With lag_array the ticks are lag indices: only a whole-number step
+            # keeps one label per tick.
+            raise ValueError(
+                f"x_base must be a positive whole number when lag_array is given, "
+                f"got {self.x_base!r}."
+            )
         self.legend_width = legend_width
         self.legend_fontsize = legend_fontsize
         self.label_space_left = label_space_left
@@ -2704,6 +2742,26 @@ class setup_matrix:
 
         self.fig = pyplot.figure(figsize=figsize)
         self.axes_dict = {}
+        fig_w, fig_h = self.fig.get_size_inches()
+        if row_title is not None:
+            self.fig.text(
+                0.05 / fig_w,
+                0.5,
+                row_title,
+                rotation=90,
+                fontsize=label_fontsize,
+                ha="left",
+                va="center",
+            )
+        if col_title is not None:
+            self.fig.text(
+                0.55,
+                1 - 0.05 / fig_h,
+                col_title,
+                fontsize=label_fontsize,
+                ha="center",
+                va="top",
+            )
 
         if var_names is None:
             var_names = range(N)
@@ -2717,15 +2775,30 @@ class setup_matrix:
                         self.fig.transFigure, self.axes_dict[(i, j)].transAxes
                     )
                     self.axes_dict[(i, j)].text(
-                        0.01,
+                        (
+                            0.01
+                            if row_title is None
+                            else (
+                                0.33
+                                + (
+                                    0.09 * row_label_lines + 0.06
+                                    if row_label_rotation
+                                    else 0.0
+                                )
+                            )
+                            / fig_w
+                        ),
                         0.5,
                         f"{var_names[i]}",
                         fontsize=label_fontsize,
-                        horizontalalignment="left",
+                        horizontalalignment=(
+                            "center" if row_label_rotation else "left"
+                        ),
                         verticalalignment="center",
+                        rotation=row_label_rotation,
                         transform=trans,
                     )
-                if i == 0:
+                if i == 0 and col_title is None:
                     trans = transforms.blended_transform_factory(
                         self.axes_dict[(i, j)].transAxes, self.fig.transFigure
                     )
@@ -2737,6 +2810,18 @@ class setup_matrix:
                         horizontalalignment="center",
                         verticalalignment="top",
                         transform=trans,
+                    )
+                elif i == 0:
+                    # Bottom-anchored just above the panel, so multi-line
+                    # (wrapped) names grow upwards, away from the plots.
+                    self.axes_dict[(i, j)].text(
+                        0.5,
+                        1.12,
+                        rf"${{\to}}$ {var_names[j]}",
+                        fontsize=label_fontsize,
+                        horizontalalignment="center",
+                        verticalalignment="bottom",
+                        transform=self.axes_dict[(i, j)].transAxes,
                     )
 
                 _make_nice_axes(
@@ -2899,13 +2984,19 @@ class setup_matrix:
                         alpha=alpha,
                     )
 
-    def savefig(self, name=None):
+    def _lag_label(self):
+        units = f" [{self.lag_units}]" if self.lag_units else ""
+        return f"lag $\\tau${self.lag_label_suffix}{units}"
+
+    def savefig(self, name=None, dpi=None):
         """Save matrix figure.
 
         Parameters
         ----------
         name : str, optional
             File name. If None, figure is shown in window.
+        dpi : float, optional
+            Resolution of the saved file; ``None`` uses ``rcParams["savefig.dpi"]``.
         """
         if len(self.labels) > 0:
             axlegend = self.fig.add_subplot(111, frameon=False)
@@ -2928,28 +3019,63 @@ class setup_matrix:
                     label=label,
                     alpha=alpha_,
                 )
-            axlegend.legend(
-                loc="upper left",
-                ncol=1,
-                bbox_to_anchor=(1.05, 0.0, 0.1, 1.0),
-                borderaxespad=0,
-                fontsize=self.legend_fontsize,
-            ).draw_frame(False)
+            if self.legend_loc == "bottom":
+                fig_w, fig_h = self.fig.get_size_inches()
+                handles, texts = axlegend.get_legend_handles_labels()
+                texts = texts or [""]
+                # As many entries per row as fit the width; extra rows push
+                # the grid up.
+                char_in = 0.0075 * self.legend_fontsize
+                entry_in = max(char_in * len(s) for s in texts) + 0.45
+                ncol = max(1, min(len(texts), int(0.96 * fig_w // entry_in)))
+                extra = (-(-len(texts) // ncol) - 1) * 0.022 * self.legend_fontsize
+                self.fig.legend(
+                    handles,
+                    texts,
+                    loc="lower center",
+                    ncol=ncol,
+                    bbox_to_anchor=(0.5, 0.0),
+                    fontsize=self.legend_fontsize,
+                    frameon=False,
+                )
+                self.fig.subplots_adjust(
+                    left=self.label_space_left,
+                    right=0.98,
+                    top=1.0 - self.label_space_top,
+                    bottom=(0.95 + extra) / fig_h,
+                    hspace=0.35,
+                    wspace=0.35,
+                )
+                pyplot.figtext(
+                    0.55,
+                    (0.4 + extra) / fig_h,
+                    self._lag_label(),
+                    horizontalalignment="center",
+                    fontsize=self.label_fontsize,
+                )
+            else:
+                axlegend.legend(
+                    loc="upper left",
+                    ncol=1,
+                    bbox_to_anchor=(1.05, 0.0, 0.1, 1.0),
+                    borderaxespad=0,
+                    fontsize=self.legend_fontsize,
+                ).draw_frame(False)
 
-            self.fig.subplots_adjust(
-                left=self.label_space_left,
-                right=1.0 - self.legend_width,
-                top=1.0 - self.label_space_top,
-                hspace=0.35,
-                wspace=0.35,
-            )
-            pyplot.figtext(
-                0.5,
-                0.01,
-                f"lag $\\tau$ [{self.lag_units}]",
-                horizontalalignment="center",
-                fontsize=self.label_fontsize,
-            )
+                self.fig.subplots_adjust(
+                    left=self.label_space_left,
+                    right=1.0 - self.legend_width,
+                    top=1.0 - self.label_space_top,
+                    hspace=0.35,
+                    wspace=0.35,
+                )
+                pyplot.figtext(
+                    0.5,
+                    0.01,
+                    self._lag_label(),
+                    horizontalalignment="center",
+                    fontsize=self.label_fontsize,
+                )
         else:
             self.fig.subplots_adjust(
                 left=self.label_space_left,
@@ -2961,7 +3087,7 @@ class setup_matrix:
             pyplot.figtext(
                 0.55,
                 0.01,
-                f"lag $\\tau$ [{self.lag_units}]",
+                self._lag_label(),
                 horizontalalignment="center",
                 fontsize=self.label_fontsize,
             )
@@ -2971,16 +3097,81 @@ class setup_matrix:
             for ij in list(self.axes_dict):
                 i = ij[0]
                 j = ij[1]
-                self.axes_dict[(i, j)].set_xticklabels(self.lag_array[:: self.x_base])
+                self.axes_dict[(i, j)].set_xticklabels(
+                    self.lag_array[:: int(self.x_base)]
+                )
 
         if name is not None:
-            self.fig.savefig(name)
+            kwargs = {} if dpi is None else {"dpi": dpi}
+            self.fig.savefig(name, **kwargs)
         else:
             return self.fig, self.axes_dict
 
 
+def _wrap(name, width):
+    """Break ``name`` into lines of at most ``width`` characters, after
+    ``_``, ``-``, ``.`` or spaces where possible."""
+    tokens = re.findall(r"[^_\-. ]+[_\-. ]?|[_\-. ]", name)
+    lines, cur = [], ""
+    for tok in tokens:
+        while len(tok.rstrip("_-. ")) > width:  # one long word: hard split
+            if cur:
+                lines.append(cur)
+                cur = ""
+            lines.append(tok[:width])
+            tok = tok[width:]
+        if cur and len(cur) + len(tok.rstrip("_-. ")) > width:
+            lines.append(cur)
+            cur = ""
+        cur += tok
+    if cur:
+        lines.append(cur)
+    return "\n".join(line.rstrip() for line in lines)
+
+
+def lag_grid_layout(var_names, figsize, wrap_labels=None):
+    """``setup_matrix`` arguments for a readable lag-function grid.
+
+    Rows are labelled "causes", columns "targets at time t", the x axis
+    "lag tau of the cause", and the legend sits in one row under the grid.
+    Names are wrapped at ``wrap_labels`` characters if given; row names longer
+    than 4 characters are drawn vertically. Margins are in inches, so they do
+    not grow with the figure.
+    """
+    if wrap_labels is not None and (
+        isinstance(wrap_labels, bool)
+        or not isinstance(wrap_labels, (int, np.integer))
+        or wrap_labels < 1
+    ):
+        raise ValueError(
+            f"wrap_labels must be a positive integer, got {wrap_labels!r}."
+        )
+    if figsize is None:
+        figsize = tuple(pyplot.rcParams["figure.figsize"])
+    names = [_wrap(str(n), wrap_labels) if wrap_labels else str(n) for n in var_names]
+    longest = max(len(line) for n in names for line in n.split("\n"))
+    n_lines = max(n.count("\n") + 1 for n in names)
+    rotate = longest > 4
+    return dict(
+        var_names=names,
+        # row title + row names + y tick labels
+        label_space_left=(
+            0.33 + (0.18 * n_lines + 0.1 if rotate else 0.09 * longest + 0.05) + 0.32
+        )
+        / figsize[0],
+        label_space_top=(0.45 + 0.2 * n_lines) / figsize[1],
+        row_title="causes",
+        col_title="targets at time t",
+        legend_loc="bottom",
+        row_label_rotation=90 if rotate else 0,
+        row_label_lines=n_lines,
+        lag_label_suffix=" of the cause",
+        figsize=figsize,
+    )
+
+
 def plot_lagfuncs(
-    val_matrix, name=None, setup_args=None, add_lagfunc_args=None, dpi=300
+    val_matrix, name=None, setup_args=None, add_lagfunc_args=None, dpi=None
 ):
     """Wrapper to plot lag functions.
 
@@ -2994,6 +3185,9 @@ def plot_lagfuncs(
         Arguments for setup_matrix.
     add_lagfunc_args : dict, optional
         Arguments for add_lagfuncs.
+    dpi : float, optional
+        Resolution of the saved file when ``name`` is given; ``None`` uses
+        ``rcParams["savefig.dpi"]``.
 
     Returns
     -------
@@ -3010,9 +3204,6 @@ def plot_lagfuncs(
 
     matrix = setup_matrix(N=N, tau_max=tau_max, **setup_args)
     matrix.add_lagfuncs(val_matrix=val_matrix, **add_lagfunc_args)
-    try:
-        matrix.savefig(name=name, dpi=dpi)
-    except TypeError:
-        matrix.savefig(name=name)
+    matrix.savefig(name=name, dpi=dpi)
 
     return matrix

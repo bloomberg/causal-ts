@@ -403,11 +403,30 @@ class Cedar:
             target_col=target_col,
         )
 
+        # Under include_C, cells that are not real lag-selection hypotheses are
+        # left out of the BH-FDR family of both selections below (single-lag
+        # and multi_lag share it): every cell involving a C column, whose
+        # outcome is overridden below anyway (C rows are lag 0 by definition,
+        # C is never an effect), and -- unless the user asked for
+        # contemporaneous X-X edges -- X-X lag 0, which include_C forced in.
+        # The X-X family is then the one include_C=False uses, and a pair whose
+        # strongest lag is 0 falls back to its best significant lag >= 1
+        # instead of being blanked (a shared contemporaneous shock often makes
+        # lag 0 the strongest, and blanking dropped real lagged edges).
+        not_hypotheses = None
+        if self.include_C and c_start < d:
+            not_hypotheses = np.zeros(lag_pvalues.shape, dtype=bool)
+            not_hypotheses[c_start:, :, :] = True
+            not_hypotheses[:, c_start:, :] = True
+            if not self.include_lag0:
+                not_hypotheses[:c_start, :c_start, 0] = True
+
         selected_lags = select_lags(
             lag_importance,
             lag_pvalues,
             alpha=self.lag_alpha,
             include_lag0=_include_lag0,
+            exclude_mask=not_hypotheses,
         )
 
         # Post-selection corrections for C nodes
@@ -419,13 +438,6 @@ class Cedar:
         if self.include_C and c_start < d:
             selected_lags[c_start:, :] = 0.0
 
-        # When include_C forces _include_lag0=True but the user did NOT
-        # explicitly request contemporaneous X-X edges, undo any lag-0
-        # selection for X-X pairs so they stay lag≥1.
-        if self.include_C and not self.include_lag0 and c_start < d:
-            x_lag0 = selected_lags[:c_start, :c_start] == 0
-            selected_lags[:c_start, :c_start][x_lag0] = np.nan
-
         # Multi-lag: mask of ALL significant lags per pair
         sig_lags_mask = None
         if self.multi_lag:
@@ -434,6 +446,7 @@ class Cedar:
                 lag_pvalues,
                 alpha=self.lag_alpha,
                 include_lag0=_include_lag0,
+                exclude_mask=not_hypotheses,
             )
             if self.include_C and c_start < d:
                 # C rows: lag-0 only (multi-lag path).
@@ -457,6 +470,9 @@ class Cedar:
                 sig_lags_mask[:, :, 0] = False
             if self.include_C and c_start < d:
                 sig_lags_mask[c_start:, :, 1:] = False  # C rows: lag-0 only
+                if not self.include_lag0:
+                    # C forced lag 0 in; X-X pairs stay lag >= 1.
+                    sig_lags_mask[:c_start, :c_start, 0] = False
             # selected_lags: set valid pairs to max_lag so w_max uses full window;
             # keep NaN for pairs already excluded by lag selection (no signal at all).
             valid = ~np.isnan(selected_lags)
@@ -949,6 +965,19 @@ class Cedar:
                 continue
             cond_cols = []
             is_c_cause = cause_idx >= d_x
+            # Columns are keyed by (variable, time offset from the source row).
+            # The tested pair itself -- (cause, 0) and (target, lag) -- never
+            # enters the conditioning set: with lag 0 a source parent at tau 0
+            # can be the target column itself, which makes the test p ~ 1 and
+            # removes a true edge. Duplicates (e.g. a source parent that is the
+            # target's own past) are added once.
+            seen = {(cause_idx, 0), (target_idx, lag)}
+
+            def _add(c, offset):
+                if (c, offset) in seen:
+                    return
+                seen.add((c, offset))
+                cond_cols.append(data[st + offset : end + offset, c])
 
             # Parents of target (excluding the cause under test and target itself —
             # target's own past is added explicitly below to avoid duplication when
@@ -965,10 +994,10 @@ class Cedar:
                     ):
                         if is_c_cause and c >= d_x:
                             continue  # skip sibling C columns
-                        cond_cols.append(data[st + lag - tau : end + lag - tau, c])
+                        _add(c, lag - tau)
 
             # Target's own past
-            cond_cols.append(data[st + lag - 1 : end + lag - 1, target_idx])
+            _add(target_idx, lag - 1)
 
             # Parents of source (always empty for C nodes — C is exogenous)
             if not is_c_cause:
@@ -978,12 +1007,12 @@ class Cedar:
                         # explicitly below to avoid duplication when
                         # graph[cause_idx, cause_idx, 1] == 1 (assume_ar1=True).
                         if graph[c, cause_idx, tau] == 1 and c != cause_idx:
-                            cond_cols.append(data[st - tau : end - tau, c])
+                            _add(c, -tau)
 
                 # Source's own past (skip for C nodes: C is deterministic, so
                 # C(t-1) nearly perfectly predicts C(t) and would falsely make
                 # C(t) ⊥ Xj | C(t-1), causing every true C edge to be removed)
-                cond_cols.append(data[st - 1 : end - 1, cause_idx])
+                _add(cause_idx, -1)
 
             src = data[st:end, cause_idx]
             tgt = data[st + lag : end + lag, target_idx]

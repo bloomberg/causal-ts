@@ -11,6 +11,7 @@ from causalts.cedar import Cedar, CedarResult, run_cedar
 from causalts.cedar.lag_selection import (
     compute_lag_importance,
     compute_lag_pvalues,
+    select_all_significant_lags,
     select_lags,
 )
 from causalts.ci_tests import ParCorrGPU
@@ -243,6 +244,123 @@ def test_partial_dcor_scores_differ_from_dcor(ar_df):
     # Scores should differ because partial_dcor residualises the target first
     assert not np.allclose(imp_dcor, imp_pdcor, atol=1e-6), (
         "partial_dcor scores are identical to dcor — " "residualization is not running"
+    )
+
+
+def _shared_shock_trend(seed, T=400):
+    """X(t-1) -> Y plus a shared contemporaneous shock and a linear trend."""
+    rng = np.random.default_rng(seed)
+    shock = rng.standard_normal(T)
+    x = np.zeros(T)
+    y = np.zeros(T)
+    for t in range(1, T):
+        x[t] = 0.5 * x[t - 1] + shock[t] + rng.standard_normal()
+        y[t] = 0.8 * x[t - 1] + shock[t] + rng.standard_normal()
+    trend = np.linspace(0, 3, T)
+    return pd.DataFrame({"X": x + trend, "Y": y + trend})
+
+
+@pytest.mark.parametrize(
+    "multi_lag, sweep_all_lags", [(False, False), (True, False), (True, True)]
+)
+def test_include_c_keeps_lagged_edge_whose_strongest_lag_is_0(
+    multi_lag, sweep_all_lags
+):
+    """include_C blanked an X-X pair whose top lag was 0 instead of
+    falling back to its significant lag 1, dropping the true edge."""
+    df = _shared_shock_trend(0)
+    ci = ParCorrGPU(np.zeros((2, 2)), device=DEVICE)
+    for include_C in (False, True):
+        res = run_cedar(
+            df,
+            ci,
+            max_lag=2,
+            include_C=include_C,
+            multi_lag=multi_lag,
+            sweep_all_lags=sweep_all_lags,
+            n_permutations=50,
+        )
+        assert res.cg_tig[0, 1, 1], include_C
+        assert not res.cg_tig[:2, :2, 0].any()  # still no X-X lag-0 edge
+
+
+def test_mci_pruning_never_conditions_on_the_target_itself():
+    """Pruning X -> Y at lag 0 conditioned on Y(t) via Y -> X and
+    removed the true contemporaneous adjacency."""
+    rng = np.random.default_rng(0)
+    T = 500
+    x = rng.standard_normal(T)
+    y = 0.8 * x + rng.standard_normal(T)
+    z = rng.standard_normal(T)
+    z[1:] += 0.6 * y[:-1]
+    df = pd.DataFrame({"X": x, "Y": y, "Z": z})
+    ci = ParCorrGPU(np.zeros((2, 2)), device=DEVICE)
+    kw = dict(max_lag=1, include_lag0=True, include_C=False, n_permutations=50)
+    unpruned = run_cedar(df, ci, prune=False, **kw).cg_tig
+    assert unpruned[0, 1, 0] and unpruned[1, 0, 0]  # the setting of the issue
+    res = run_cedar(df, ci, prune=True, **kw)
+    pruned = res.cg_tig
+    assert pruned[0, 1, 0] or pruned[1, 0, 0]
+    assert pruned[1, 2, 1]
+    # Kept lag-0 pairs carry one statistic per direction; plotting needs
+    # lag-0 symmetry and must not raise.
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    res.plot()
+    plt.close("all")
+
+
+@pytest.mark.parametrize("multi_lag", [False, True])
+def test_include_c_lag_selection_uses_the_same_fdr_family(monkeypatch, multi_lag):
+    """C cells and the forced X-X lag 0 must not enlarge the BH family.
+
+    Only X0(t-1) -> X1 has a small lag p-value (0.01). Over the four lagged X-X
+    hypotheses BH accepts it (0.01 * 4 < 0.05); padding the family with the
+    C cells and X-X lag 0 at p = 1 (18 cells) rejected it, so a lag found
+    without C was lost with C.
+    """
+    import causalts.cedar.discovery as cd
+
+    def fake_pvalues(data, lag_importance, max_lag, **kw):
+        p = np.ones_like(lag_importance)
+        p[0, 1, 1] = 0.01
+        return p
+
+    monkeypatch.setattr(cd, "compute_lag_pvalues", fake_pvalues)
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame(rng.standard_normal((200, 2)), columns=["X0", "X1"])
+    ci = ParCorrGPU(np.zeros((2, 2)), device=DEVICE)
+    for include_C in (False, True):
+        res = run_cedar(
+            df,
+            ci,
+            max_lag=2,
+            include_C=include_C,
+            multi_lag=multi_lag,
+            prune=False,
+            n_permutations=50,
+        )
+        assert res.selected_lags[0, 1] == 1, include_C
+        assert np.isnan(res.selected_lags[1, 0]), include_C
+
+
+def test_select_lags_exclude_mask_leaves_cells_out_of_the_family():
+    imp = np.ones((2, 2, 3))
+    p = np.ones((2, 2, 3))
+    p[0, 1, 1] = 0.01
+    p[:, :, 0] = 0.001  # lag 0: strongest, but not a hypothesis here
+    excl = np.zeros(p.shape, dtype=bool)
+    excl[:, :, 0] = True
+    without = select_lags(imp, p, alpha=0.05, include_lag0=False)
+    with_excl = select_lags(imp, p, alpha=0.05, include_lag0=True, exclude_mask=excl)
+    np.testing.assert_array_equal(without, with_excl)
+    assert with_excl[0, 1] == 1
+    np.testing.assert_array_equal(
+        select_all_significant_lags(imp, p, include_lag0=False),
+        select_all_significant_lags(imp, p, include_lag0=True, exclude_mask=excl),
     )
 
 

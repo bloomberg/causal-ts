@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 try:
     __version__ = version("causalts")
 except PackageNotFoundError:
-    __version__ = "0.14.0-dev"
+    __version__ = "0+unknown"  # uninstalled source checkout
 
 from .algorithms import list_algorithms, register_algorithm  # noqa: F401
 from .bootstrap import temporal_bootstrap  # noqa: F401

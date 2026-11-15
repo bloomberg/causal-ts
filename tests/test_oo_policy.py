@@ -408,8 +408,11 @@ def test_cedar_and_grace_get_working_marks():
     )
     m = cres.to_marks()
     assert m.shape == cres.cg_tig.shape and m.dtype.kind == "U"
-    # CEDAR is directed by construction: no o-o should appear.
-    assert not (m == "o-o").any(), "CEDAR emitted a symmetric lag-0 pair"
+    # CEDAR tests each direction of a lag-0 pair on its own; the i.i.d. pair
+    # X5 - X6 passes both ways, so it is reported as both directions and its
+    # marks render o-o. (MCI pruning used to remove such pairs by conditioning
+    # on the target itself.)
+    assert m[5, 6, 0] == "o-o"
     assert np.array_equal(np.isin(m, ["-->", "o-o"]).astype(np.int8), cres.cg_tig)
 
 

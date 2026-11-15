@@ -16,6 +16,8 @@ from causalts.plotting import (
     compute_association_matrix,
     corr_table,
     pairs_panel,
+    plot_lag_dependence,
+    compute_lag_dependence,
     extract_subgraph,
     build_pvalue_matrix,
 )
@@ -140,6 +142,36 @@ above.
 
 ```{eval-rst}
 .. autofunction:: causalts.plotting.pairs.pairs_panel
+```
+
+## Lag Dependence
+
+### `plot_lag_dependence`
+
+Grid of lag functions from raw data: cell (i, j) shows the dependence of
+`X_i(t-k)` on `X_j(t)` at each lag `k` (dcor, partial dcor, Pearson, Lasso or a
+custom callable), with optional significance markers. Useful for choosing
+`max_lag` before discovery; the same scores Cedar uses for lag selection.
+`adjust="parents"` removes each variable's selected parents first (MCI-style),
+which removes most indirect and common-cause dependence when the parents are
+found. Its scores are an exploratory ranking: they skip the source's own lags
+among its shifted parents, which helps persistent sources but can lift a
+persistent non-cause correlated with a missed parent. Its markers test each
+source-target pair over all lags; only in a significant pair is the peak lag
+marked, plus any other lag that passes its own full-MCI test. With a known graph,
+`true_graph=` shades the true lags and flags missed lags and false markers;
+`min_score=` hides markers on negligible scores.
+
+```{eval-rst}
+.. autofunction:: causalts.plotting.lagplot.plot_lag_dependence
+```
+
+### `compute_lag_dependence`
+
+The `(d, d, max_lag+1)` score array behind `plot_lag_dependence`.
+
+```{eval-rst}
+.. autofunction:: causalts.plotting.lagplot.compute_lag_dependence
 ```
 
 ## Quick Examples

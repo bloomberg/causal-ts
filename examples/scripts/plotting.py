@@ -15,7 +15,7 @@
 # %% [markdown]
 # # Visualization Guide
 #
-# Comprehensive guide to causal-ts visualization: graph plots, time-series graphs, comparison plots, p-value diagnostics, lag metrics, custom edge colors, target node highlighting, subgraph extraction, and CEDAR-specific plots.
+# Comprehensive guide to causal-ts visualization: graph plots, time-series graphs, comparison plots, p-value diagnostics, lag metrics, lag-dependence plots, custom edge colors, target node highlighting, subgraph extraction, and CEDAR-specific plots.
 
 # %%
 import warnings
@@ -334,7 +334,7 @@ plt.show()
 # %%
 tp.compare_graphs(
     gt1, discovered, var_names=names1,
-    figsize=(5, 5), show_legend=True, legend_loc="lower right", #set to None for auto placement of legend box
+    figsize=(5, 5), show_legend=True, legend_loc="best",
     arrow_linewidth=4, link_label_fontsize=10,
 )
 plt.show()
@@ -346,7 +346,7 @@ tp.compare_graphs(
     figsize=(5, 5),
     tp_color="#1B5E20", fp_color="#E65100", fn_color="#B71C1C",
     fn_style="dotted",
-    show_legend=True, legend_loc="lower right",
+    show_legend=True, legend_loc="best",
 )
 plt.title("Custom comparison colors")
 plt.show()
@@ -441,7 +441,7 @@ axes[1].set_title(f"Discovered around {focus_var}")
 tp.compare_graphs(
     sub_gt, sub_disc, var_names=names_disc,
     fig_ax=(fig, axes[2]), show_legend=True,
-    legend_loc="lower left",
+    legend_loc="best",
     arrow_linewidth=3,
 )
 axes[2].set_title(f"Comparison around {focus_var}")
@@ -454,7 +454,7 @@ plt.show()
 #
 # `CedarResult` (returned by `run_cedar`) has built-in visualization methods:
 # - `.plot()` — causal graph (wraps `plot_graph`)
-# - `.plot_lag_importance()` — heatmap of lag-wise dcor/pearson scores per variable pair
+# - `.plot_lag_importance()` — heatmap of lag-wise dcor/pearson scores per variable pair (for raw data without running Cedar, see `plot_lag_dependence` in section 14)
 
 # %%
 from causalts.cedar import run_cedar
@@ -528,6 +528,59 @@ fig, ax = tp.plot_graph(
 # fig.savefig("my_graph.png", dpi=300, bbox_inches="tight")
 # fig.savefig("my_graph.pdf", bbox_inches="tight")
 print("Uncomment savefig lines above to export")
+plt.show()
+
+# %% [markdown]
+# ## 14. `plot_lag_dependence` — Lag Functions from Raw Data
+#
+# Cell (i, j) shows how strongly `X_i(t-k)` depends on `X_j(t)` at each lag `k`, computed straight from the data (no discovery run). It is the same Phase-0 score Cedar uses for lag selection, and a quick way to pick `max_lag`.
+#
+# - `method`: `"dcor"` (default, unbiased distance correlation), `"partial_dcor"` (removes the target's own AR(1) part first), `"dcor_biased"`, `"pearson"`, `"lasso"`, or any callable `metric(source, target) -> float`.
+# - `alpha`: highlight lags whose dependence test p-value is below `alpha`, for `"dcor"` (circular-shift permutation test, which respects autocorrelation) and `"partial_dcor"` (t-test). P-values are not corrected for multiplicity, and each variable's own lags (grey) are not tested.
+#
+# Scores are pairwise and unconditional, so indirect paths and autocorrelation also show up; treat the plot as a lag screen, not a causal graph.
+
+# %%
+fig = tp.plot_lag_dependence(
+    df1, max_lag=data1["max_lag"] + 2, method="dcor", alpha=0.01, figsize=(7, 6.5)
+)
+plt.show()
+
+# %% [markdown]
+# A linear score such as `"pearson"` can miss nonlinear links that dcor picks up (here the squared effects of X0):
+
+# %%
+tp.plot_lag_dependence(df1, max_lag=data1["max_lag"] + 2, method="pearson", figsize=(7, 6.5))
+plt.show()
+
+# %% [markdown]
+# `compute_lag_dependence` returns the underlying `(d, d, max_lag+1)` array (`[cause, effect, lag]`), e.g. to tabulate the peak lag of each pair:
+
+# %%
+import pandas as pd
+
+scores = tp.compute_lag_dependence(df1, max_lag=data1["max_lag"] + 2, method="dcor")
+peak = pd.DataFrame(
+    [
+        (names1[i], names1[j], int(np.argmax(scores[i, j, 1:])) + 1, scores[i, j, 1:].max())
+        for i in range(len(names1)) for j in range(len(names1)) if i != j
+    ],
+    columns=["cause", "effect", "peak_lag", "score"],
+).sort_values("score", ascending=False)
+peak.head(8).round(3)
+
+# %% [markdown]
+# ### Adjusting for parents: `adjust="parents"`
+#
+# Pairwise scores mix direct effects with indirect paths and common causes: X1 → X4 scores high above without a direct link, while the weak direct X4 → X3 is buried under X0.
+#
+# `adjust="parents"` first selects each variable's potential lagged parents, then scores every lag after removing them (MCI-style, with a flexible nonlinear adjustment). Markers test each source-target pair over all lags and mark its peak lag. Scores are an exploratory ranking and markers evidence, not proof; see the `compute_lag_dependence` docstring for details and known weak spots. `true_graph=` shades the true lags of this simulated system: blue found, red missed, a cross on a false marker.
+
+# %%
+fig = tp.plot_lag_dependence(
+    df1, max_lag=data1["max_lag"] + 2, adjust="parents", alpha=0.01,
+    true_graph=gt1, figsize=(7, 6.5),
+)
 plt.show()
 
 # %% [markdown]

@@ -16,6 +16,8 @@ given enough data from a linear-Gaussian model, the search must recover the true
 equivalence class exactly.
 """
 
+import signal
+
 import numpy as np
 import pytest
 
@@ -168,13 +170,15 @@ def test_forbidden_search_terminates_without_backward_edges(seed):
                 ), f"seed={seed}: directed backward-in-time edge col{i}->col{j}"
 
 
+@pytest.mark.skipif(
+    not hasattr(signal, "SIGALRM"), reason="the SIGALRM timeout guard is POSIX-only"
+)
 def test_turning_phase_terminates_on_known_cycle():
     """The specific (d, max_lag, seed) that used to hang forever must finish.
 
     No timeout plugin is installed, so without the SIGALRM guard a regression
     here hangs the whole suite instead of failing this one test.
     """
-    import signal
 
     class _Hung(Exception):
         pass

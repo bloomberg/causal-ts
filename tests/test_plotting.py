@@ -739,3 +739,11 @@ def test_pairs_panel_constant_column_shows_na_not_nan():
     upper_texts = [t.get_text() for ax in axes.flat for t in ax.texts if t.get_text()]
     assert not any("nan" in t.lower() for t in upper_texts)
     plt.close(fig)
+
+
+def test_compare_graphs_legend_best_location():
+    from causalts.plotting import compare_graphs
+
+    g = _make_graph()
+    _, ax = compare_graphs(g, g, var_names=["X", "Y", "Z"])
+    assert ax.get_legend()._loc == 0  # matplotlib code for loc="best"

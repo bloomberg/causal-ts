@@ -1,3 +1,6 @@
+# Copyright 2026 Bloomberg Finance L.P.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Corrplot: correlation/association matrix visualization.
 
 Inspired by R's corrplot package. Supports arbitrary pairwise metrics

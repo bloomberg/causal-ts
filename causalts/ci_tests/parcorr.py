@@ -150,6 +150,14 @@ class ParCorr(CondIndTest):
             Partial correlation coefficient.
         """
 
+        # A constant X or Y column is independent of everything; pearsonr would
+        # return NaN (or correlate round-off after regressing on Z), and a NaN
+        # p-value keeps the edge. Checked on the inputs, before residualising, so
+        # a small but genuine residual is still tested.
+        if np.any(np.ptp(array[xyz == 0], axis=1) == 0) or np.any(
+            np.ptp(array[xyz == 1], axis=1) == 0
+        ):
+            return 0.0
         x_vals = self._get_single_residuals(array, target_var=0)
         y_vals = self._get_single_residuals(array, target_var=1)
         val, _ = stats.pearsonr(x_vals, y_vals)

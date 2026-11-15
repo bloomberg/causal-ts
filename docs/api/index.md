@@ -11,7 +11,7 @@ Full API documentation auto-generated from source docstrings (NumPy format).
 :link-type: doc
 :shadow: md
 
-`inspect_df` · `recommend_config` · `discover_df` · `select_features` · `run_cdnots` · `run_cdnots_plus` · `run_cedar` · `Cedar` · `run_grace` · `run_reap` · `run_regime_discovery` · `run_pcmciplus` · `temporal_bootstrap` · `evaluate_graph`
+`inspect_df` · `recommend_config` · `discover_df` · `select_features` · `run_cdnots` · `run_cdnots_plus` · `run_cedar` · `Cedar` · `run_grace` · `run_reap` · `run_baseline` · `lges_discovery` · `tges_discovery` · `ges_discovery` · `lasso_var_discovery` · `varlingam_discovery` · `granger_discovery` · `run_regime_discovery` · `run_pcmciplus` · `temporal_bootstrap` · `evaluate_graph`
 :::
 
 :::{grid-item-card} {fas}`vials;1.2em;sd-text-primary` &nbsp; CI Tests

@@ -76,3 +76,32 @@ def test_trend_detected_nonstationary():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_adfuller_asks_for_plain_tuple_when_supported(monkeypatch):
+    """statsmodels >= 0.15 warns unless result_object is given; we pass False."""
+    import statsmodels.tsa.stattools as st
+
+    real = st.adfuller
+    seen = []
+
+    def fake_adfuller(x, maxlag=None, regression="c", autolag="AIC", store=False,
+                      regresults=False, result_object=None):  # fmt: skip
+        seen.append(result_object)
+        return real(x, maxlag=maxlag, regression=regression, autolag=autolag)
+
+    monkeypatch.setattr(st, "adfuller", fake_adfuller)
+    rng = np.random.default_rng(0)
+    check_stationarity_observed(pd.DataFrame(rng.standard_normal((200, 2))))
+    assert seen == [False, False]
+
+
+def test_check_stationarity_no_future_warning():
+    import warnings
+
+    rng = np.random.default_rng(0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        out = check_stationarity_observed(pd.DataFrame(rng.standard_normal((200, 3))))
+    # adfuller runs inside try/except, so an escalated warning would show up as NaN
+    assert all(np.isfinite(r["adf_pvalue"]) for r in out["results"])

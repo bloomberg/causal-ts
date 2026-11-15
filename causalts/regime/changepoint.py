@@ -239,6 +239,10 @@ class LeveneRegimeDetector:
         )
 
     def _find_breakpoints(self, signal: np.ndarray) -> list[int]:
+        # Checked here because _binary_segmentation skips any split whose test
+        # raises, which would turn a bad method into "no changepoints".
+        if self.method not in ("levene", "bartlett"):
+            raise ValueError(f"Unknown method: {self.method!r}")
         return _binary_segmentation(
             signal,
             self._test_fn,
@@ -361,8 +365,11 @@ class CusumRegimeDetector:
         What type of shift to detect: ``"mean"``, ``"variance"``, or
         ``"both"`` (union of changepoints from both).
     threshold : float or None
-        CUSUM magnitude threshold for declaring a changepoint.  If None,
-        auto-calibrated as ``3 * std(cusum)``.
+        CUSUM scale for declaring a changepoint. A candidate (a sign change in
+        the smoothed CUSUM slope) is kept when ``|cusum|`` there exceeds
+        ``0.3 * threshold``. If None, ``threshold = 3 * std(cusum)``, so the
+        cut is ``0.9 * std(cusum)``; on pure noise this can still report a few
+        changepoints, so raise ``threshold`` or ``min_segment`` to be stricter.
     min_segment : int
         Minimum spacing between changepoints.
     smooth_window : int
@@ -700,7 +707,11 @@ def _auto_switch_cost(
     log_startprob: np.ndarray,
     target_cps: int,
 ) -> float:
-    """Binary-search for the switch_cost that yields ~target_cps transitions."""
+    """Binary-search for the smallest switch_cost giving at most target_cps transitions.
+
+    Returns the upper end of the final bracket, the cost already seen to meet
+    the target; the midpoint can still fall on the too-many-switches side.
+    """
     lo, hi = 0.0, 100_000.0
     for _ in range(30):
         mid = (lo + hi) / 2
@@ -710,7 +721,7 @@ def _auto_switch_cost(
             lo = mid
         else:
             hi = mid
-    return (lo + hi) / 2
+    return hi
 
 
 class HMMRegimeDetector:

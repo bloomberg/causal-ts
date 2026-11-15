@@ -135,7 +135,7 @@ Both refinements refine **lagged** edges: REAP re-adds lag-0 edges with `contemp
 `rec["refine_params"]`); with GRACE, keep the CDNOTS graph's lag-0 edges. Discovery itself is CDNOTS at any dimension: its cost in the number of variables is set by the CI test,
 not by the algorithm. Nonstationary series get the C node with a preset matched to the detected trend
 form. See the [CI Test Selection Guide](../ci_tests.md) for every test and the
-[Algorithms](../algorithms.md) page for CDNOTS+, CEDAR, GRACE and REAP.
+[Algorithms](../algorithms.md) page for CDNOTS+, CEDAR, GRACE, REAP and the score-based methods (LGES, TGES, GES, Lasso-VAR, VARLiNGAM, Granger).
 
 ## CLI Usage
 
@@ -170,7 +170,7 @@ timestamped folder under it (default `./causal_ts_output`). See the [CLI referen
 :shadow: sm
 :text-align: center
 
-CDNOTS, CDNOTS+, CEDAR, and the GRACE / REAP refinements — how they work and when to use each.
+CDNOTS, CDNOTS+, CEDAR, the GRACE / REAP refinements and the score-based methods — how they work and when to use each.
 :::
 
 :::{grid-item-card} {fas}`vials` CI Test Guide

@@ -10,6 +10,8 @@ that produce the standard causal-ts graph format ``(d, d, max_lag+1)``.
 import numpy as np
 import pandas as pd
 
+from .result import CausalResult
+
 
 def varlingam_discovery(df, max_lag=1, threshold=0.05):
     """Run VARLiNGAM (Vector Autoregressive LiNGAM) discovery.
@@ -379,3 +381,188 @@ def ges_discovery(
 
 # Re-export LGES for convenience
 from .lges import lges_discovery, tges_discovery  # noqa: E402, F401
+
+# ---------------------------------------------------------------------------
+# Result objects and named runners (CLI ``discover --algorithm`` / discover_df)
+# ---------------------------------------------------------------------------
+
+#: Name -> (function path, whether the method can return lag-0 edges).
+_BASELINE_METHODS = {
+    "lges": ("causalts.lges.lges_discovery", True),
+    "tges": ("causalts.lges.tges_discovery", True),
+    "ges": ("causalts.baselines.ges_discovery", True),
+    "lasso-var": ("causalts.baselines.lasso_var_discovery", False),
+    "granger": ("causalts.baselines.granger_discovery", False),
+    "varlingam": ("causalts.baselines.varlingam_discovery", True),
+}
+
+#: Names of the score-based methods :func:`run_baseline` runs.
+BASELINE_ALGORITHMS = tuple(_BASELINE_METHODS)
+
+
+class BaselineResult(CausalResult):
+    """Result of a score-based method run by :func:`run_baseline`.
+
+    Inherits plotting and the DoWhy bridge from
+    :class:`~causalts.result.CausalResult`.
+
+    Attributes
+    ----------
+    cg_tig : np.ndarray, shape (d, d, max_lag+1)
+        Binary graph, ``cg_tig[cause, effect, lag] == 1`` meaning
+        ``cause(t-lag) -> effect(t)``. LGES, TGES and GES record an unoriented
+        CPDAG edge at lag 0 in both directions (:meth:`to_marks` shows it as
+        ``o-o``); LASSO-VAR and Granger never return lag-0 edges.
+    var_names : list[str]
+        Variable names.
+    method : str
+        The algorithm name (``"lges"``, ``"tges"``, ``"ges"``, ``"lasso-var"``,
+        ``"granger"`` or ``"varlingam"``).
+    coefficients : np.ndarray or None
+        Coefficients, same shape as ``cg_tig`` (LASSO-VAR, Granger, VARLiNGAM).
+    cpdag : np.ndarray or None
+        CPDAG over the lag-embedded variables (LGES, TGES, GES).
+    info : dict
+        The method's info dict (score, CV penalties, causal order, ...).
+    contemporaneous : bool
+        Whether the method can return lag-0 edges.
+    """
+
+    def __init__(self, cg_tig, df, method, coefficients=None, info=None):
+        self.cg_tig = np.asarray(cg_tig)
+        self.var_names = list(df.columns)
+        self._df = df
+        self.method = method
+        self.coefficients = coefficients
+        self.info = dict(info or {})
+        # TGES orients by tiers after the search; report the graph cg_tig uses.
+        self.cpdag = self.info.get("tiered_cpdag", self.info.get("cpdag"))
+        self.contemporaneous = _BASELINE_METHODS[method][1]
+        self._scm_cache = {}
+
+
+def run_baseline(algorithm, df, max_lag=1, **kwargs):
+    """Run a score-based method by name and wrap its output.
+
+    Parameters
+    ----------
+    algorithm : str
+        One of :data:`BASELINE_ALGORITHMS`: ``"lges"``
+        (:func:`~causalts.lges.lges_discovery`), ``"tges"``
+        (:func:`~causalts.lges.tges_discovery`), ``"ges"``
+        (:func:`ges_discovery`), ``"lasso-var"`` (:func:`lasso_var_discovery`),
+        ``"granger"`` (:func:`granger_discovery`) or ``"varlingam"``
+        (:func:`varlingam_discovery`).
+    df : pd.DataFrame
+        Time series data, shape ``(T, d)``.
+    max_lag : int
+        Maximum lag. LASSO-VAR and Granger are lagged-only, and VARLiNGAM fits
+        a VAR, so all three need ``max_lag >= 1``.
+    **kwargs
+        Passed to the method: ``mode`` and ``lambda_value`` (LGES, TGES; the
+        absolute BIC penalty per parameter), ``lambda_value`` (GES; a multiplier
+        on ``log(n)``, as in causal-learn), ``score_func`` and ``engine`` (GES), ``cv_folds``
+        (LASSO-VAR), ``threshold`` (Granger, VARLiNGAM).
+
+    Returns
+    -------
+    BaselineResult
+
+    Raises
+    ------
+    ValueError
+        If ``df`` has NaN or infinite values (impute first, e.g. with
+        :func:`~causalts.imputation.var_em_impute`), or ``max_lag < 1`` for
+        LASSO-VAR, Granger or VARLiNGAM.
+    """
+    import importlib
+
+    if algorithm not in _BASELINE_METHODS:
+        raise ValueError(
+            f"unknown algorithm {algorithm!r}; expected one of {BASELINE_ALGORITHMS}"
+        )
+    path, contemporaneous = _BASELINE_METHODS[algorithm]
+    if not contemporaneous and max_lag < 1:
+        raise ValueError(
+            f"{algorithm} finds lagged edges only and needs max_lag >= 1, "
+            f"got {max_lag}"
+        )
+    if algorithm == "varlingam" and max_lag < 1:
+        raise ValueError(
+            f"varlingam fits a VAR and needs at least one lag (max_lag >= 1), "
+            f"got {max_lag}"
+        )
+    if not isinstance(df, pd.DataFrame):
+        df = pd.DataFrame(np.asarray(df))
+    values = df.to_numpy(dtype=float)
+    if not np.isfinite(values).all():
+        raise ValueError(
+            f"{algorithm} needs complete, finite data, but df has "
+            f"{int((~np.isfinite(values)).sum())} NaN/inf values. Impute first, "
+            "e.g. causalts.imputation.var_em_impute(df) (CLI: --impute var_em)."
+        )
+    module, name = path.rsplit(".", 1)
+    fn = getattr(importlib.import_module(module), name)
+    out = fn(df, max_lag=max_lag, **kwargs)
+    if len(out) == 3:
+        graph, coefficients, info = out
+    else:
+        (graph, info), coefficients = out, None
+    return BaselineResult(graph, df, algorithm, coefficients=coefficients, info=info)
+
+
+def _check_no_ci_test(algorithm, ci_test):
+    if ci_test is not None:
+        raise ValueError(f"{algorithm} takes no CI test; got ci_test={ci_test!r}")
+
+
+# Runners under the plugin registry's ``fn(df=, ci_test=, max_lag=, **kwargs)``
+# convention (see causalts.algorithms); ``ci_test`` must be None.
+def run_lges(df, ci_test=None, max_lag=1, mode="lges", lambda_value=None):
+    """:func:`run_baseline` for ``"lges"``."""
+    _check_no_ci_test("lges", ci_test)
+    return run_baseline("lges", df, max_lag, mode=mode, lambda_value=lambda_value)
+
+
+def run_tges(df, ci_test=None, max_lag=1, mode="lges", lambda_value=None):
+    """:func:`run_baseline` for ``"tges"``."""
+    _check_no_ci_test("tges", ci_test)
+    return run_baseline("tges", df, max_lag, mode=mode, lambda_value=lambda_value)
+
+
+def run_ges(
+    df,
+    ci_test=None,
+    max_lag=1,
+    score_func="local_score_BIC",
+    lambda_value=None,
+    engine="fast",
+):
+    """:func:`run_baseline` for ``"ges"``."""
+    _check_no_ci_test("ges", ci_test)
+    return run_baseline(
+        "ges",
+        df,
+        max_lag,
+        score_func=score_func,
+        lambda_value=lambda_value,
+        engine=engine,
+    )
+
+
+def run_lasso_var(df, ci_test=None, max_lag=1, cv_folds=5):
+    """:func:`run_baseline` for ``"lasso-var"``."""
+    _check_no_ci_test("lasso-var", ci_test)
+    return run_baseline("lasso-var", df, max_lag, cv_folds=cv_folds)
+
+
+def run_granger(df, ci_test=None, max_lag=1, threshold=None):
+    """:func:`run_baseline` for ``"granger"``."""
+    _check_no_ci_test("granger", ci_test)
+    return run_baseline("granger", df, max_lag, threshold=threshold)
+
+
+def run_varlingam(df, ci_test=None, max_lag=1, threshold=0.05):
+    """:func:`run_baseline` for ``"varlingam"``."""
+    _check_no_ci_test("varlingam", ci_test)
+    return run_baseline("varlingam", df, max_lag, threshold=threshold)

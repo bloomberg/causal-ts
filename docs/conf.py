@@ -1,3 +1,6 @@
+# Copyright 2026 Bloomberg Finance L.P.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 import os
 import sys
 from importlib.metadata import PackageNotFoundError
@@ -87,7 +90,7 @@ html_theme = "pydata_sphinx_theme"
 html_title = "Causal-TS documentation"
 html_short_title = "Causal-TS"
 # Canonical <link rel="canonical">: Read the Docs supplies the default version's
-# URL; local builds fall back to stable.
+# URL; local builds fall back to latest.
 html_baseurl = os.environ.get(
     "READTHEDOCS_CANONICAL_URL", "https://causal-ts.readthedocs.io/en/latest/"
 )

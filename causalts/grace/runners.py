@@ -30,11 +30,19 @@ _REAP_NAMES = {
 
 
 def _check_candidate_graph(
-    candidate_graph, df, max_lag: int, n_extra: int = 0
+    candidate_graph, df, max_lag: int, n_extra: int = 0, c_labels=None
 ) -> Optional[np.ndarray]:
-    """Validate a supplied candidate graph under the runners' argument name."""
+    """Validate a supplied candidate graph under the runners' argument name.
+
+    A result object (anything with ``cg_tig``) is accepted too: its C-node rows
+    and columns are dropped when it recorded them (``c_node_names``) and its
+    variables match ``df``'s columns, so ``candidate_graph=res`` works for a
+    CDNOTS or CEDAR result run with ``include_C=True``.
+    """
     if candidate_graph is None:
         return None
+    if hasattr(candidate_graph, "cg_tig"):
+        candidate_graph = _result_graph(candidate_graph, df, n_extra, c_labels)
     G = np.asarray(candidate_graph)
     if G.dtype == object or not np.issubdtype(G.dtype, np.number) and G.dtype != bool:
         raise TypeError(
@@ -44,17 +52,82 @@ def _check_candidate_graph(
         )
     want = (df.shape[1] + n_extra, df.shape[1] + n_extra, max_lag + 1)
     if G.shape != want:
+        hint = ""
+        if G.ndim == 3 and G.shape[0] == G.shape[1] > want[0]:
+            d = df.shape[1]
+            hint = (
+                f". If the extra {G.shape[0] - want[0]} rows/columns are a "
+                "result's C nodes (include_C=True), pass the result itself "
+                f"(candidate_graph=res) or slice them off "
+                f"(candidate_graph=res.cg_tig[:{d}, :{d}])"
+            )
         raise ValueError(
             f"candidate_graph must have shape {want} "
             "([cause, effect, lag] over the variables"
             + (f", then the {n_extra} C columns" if n_extra else "")
             + f" and lags 0..max_lag), got {G.shape}"
+            + hint
         )
     if np.isnan(G.astype(float)).any():
         raise ValueError("candidate_graph contains NaN")
     # Any non-zero entry is a candidate edge (weights, signed coefficients and
     # numeric edge codes alike), so GRACE and REAP see the same candidate set.
     return (G != 0).astype(np.int8)
+
+
+def _result_graph(res, df, n_extra: int, c_labels=None) -> np.ndarray:
+    """A result's ``cg_tig`` over ``df``'s variables, C nodes dropped if recorded.
+
+    The result's observed variables (``var_names``, minus its last
+    ``len(c_node_names)`` entries when it has one name per row) must equal ``df``'s columns, and any rows beyond them must
+    be exactly the recorded C nodes: kept when ``n_extra`` matches their count
+    (``include_C_in_model=True``), dropped otherwise.
+    """
+    G = np.asarray(res.cg_tig)
+    d = df.shape[1]
+    names = [str(v) for v in (getattr(res, "var_names", None) or [])]
+    c_names = [str(v) for v in (getattr(res, "c_node_names", None) or [])]
+    obs = names
+    if c_names and G.ndim == 3 and G.shape[0] > d and len(names) == G.shape[0]:
+        # var_names counts every row, so it lists the C nodes too (CEDAR); CDNOTS
+        # lists observed columns only. Decided by count: an observed column may
+        # share a C node's name. A cg_tig already trimmed to the observed
+        # variables (G.shape[0] == d) keeps c_node_names but has no C rows.
+        obs = names[: -len(c_names)]
+    cols = [str(c) for c in df.columns]
+    if names and obs != cols:
+        raise ValueError(
+            f"candidate_graph is a result over variables {obs}, but df has "
+            f"columns {cols}"
+        )
+    n_c = G.shape[0] - d if G.ndim == 3 else 0
+    if n_c > 0:
+        # A custom c_array records no C names; when var_names lists exactly the
+        # observed columns (CDNOTS), every row past d is still a C node.
+        unnamed_c = not c_names and len(names) == d
+        if n_c != len(c_names) and not unnamed_c:
+            raise ValueError(
+                f"candidate_graph's cg_tig has {G.shape[0]} variables, df has {d}, "
+                f"and the result records {len(c_names)} C nodes; cannot tell which "
+                "rows/columns to drop"
+            )
+        if n_extra == 0:
+            G = G[:d, :d]
+        elif n_c != n_extra:
+            raise ValueError(
+                f"candidate_graph's result has {n_c} C nodes {c_names or ''} but "
+                f"the model's C basis has {n_extra} columns {c_labels or ''}; use "
+                "the same c_preset as the result, or include_C_in_model=False"
+            )
+        elif c_labels is not None and c_names != [str(c) for c in c_labels]:
+            # Same count is not enough: e.g. "linear" and "step" both have one
+            # column, and "step+linear" orders its columns differently.
+            raise ValueError(
+                f"candidate_graph's C nodes {c_names or '(unnamed)'} do not match "
+                f"the model's C basis {list(c_labels)} (c_preset); use the same "
+                "c_preset as the result, or include_C_in_model=False"
+            )
+    return G
 
 
 def _check_reap_options(prune_alpha, basis, interactions, effect_floor) -> None:
@@ -205,11 +278,14 @@ def run_grace(
         Input data, shape (T, d).
     max_lag : int
         Maximum lag.
-    candidate_graph : numpy.ndarray or None
+    candidate_graph : numpy.ndarray, CausalResult or None
         Directed candidate graph, shape (d, d, max_lag+1), with a non-zero
         ``candidate_graph[cause, effect, lag]`` marking ``cause(t-lag) ->
         effect(t)`` (weights are read as edges where non-zero); with ``include_C_in_model=True``, (d + n_C, d + n_C,
-        max_lag+1), the C columns last. None builds a CDNOTS graph. To keep the
+        max_lag+1), the C columns last. A result object is accepted too; its
+        recorded C-node rows and columns are dropped (kept under
+        ``include_C_in_model=True`` when their count matches). None builds a
+        CDNOTS graph. To keep the
         result inside a supplied graph, pass ``grow_rounds=0, ar_path=False``:
         otherwise the grow round can add lagged edges and the self-loop test can
         add self-loops.
@@ -295,7 +371,14 @@ def run_grace(
 
         n_c = np.asarray(make_c_array(max_lag + 2, c_preset)).reshape(max_lag + 2, -1)
         n_c = n_c.shape[1]
-    candidate_graph = _check_candidate_graph(candidate_graph, df, max_lag, n_c)
+    c_labels = None
+    if n_c:
+        from ..cdnots.phase3_utils import _C_PRESET_LABELS
+
+        c_labels = _C_PRESET_LABELS.get(c_preset)
+    candidate_graph = _check_candidate_graph(
+        candidate_graph, df, max_lag, n_c, c_labels
+    )
     _warn_unused_ci_test(ci_test, "run_grace")
     return run_cdnots_gated(
         df,
@@ -397,10 +480,12 @@ def run_reap(
         Input data, shape (T, d).
     max_lag : int
         Maximum lag.
-    candidate_graph : numpy.ndarray or None
+    candidate_graph : numpy.ndarray, CausalResult or None
         Directed candidate graph, shape (d, d, max_lag+1), with a non-zero
         ``candidate_graph[cause, effect, lag]`` marking ``cause(t-lag) ->
-        effect(t)`` (weights are read as edges where non-zero). None builds a CDNOTS graph. The grow rounds can add lagged
+        effect(t)`` (weights are read as edges where non-zero). A result object
+        is accepted too; its recorded C-node rows and columns are dropped. None
+        builds a CDNOTS graph. The grow rounds can add lagged
         edges outside it; with ``grow_rounds=0`` the lagged edges of the result
         are inside it.
     alpha : float, default 0.05
