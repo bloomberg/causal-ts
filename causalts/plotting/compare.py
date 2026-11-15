@@ -400,8 +400,9 @@ def compare_graphs(
                         covered[a, b, 0] = covered[b, a, 0] = True
                     else:
                         covered[a, b, tau] = True
-                if already_directed:
-                    # A directed claim at the same pair already draws it.
+                if already_directed or a == b:
+                    # A directed claim at the same pair already draws it, and
+                    # self-links are not drawn (as for directed edges).
                     continue
                 if is_true:
                     adj_correct.setdefault((a, b), []).append(tau)
@@ -834,8 +835,9 @@ def plot_lag_metrics(
     undirected : str, optional
         ``'drop'``, ``'bidirected'`` or ``'adjacency'`` for discovered
         ``'o-o'`` marks; see :func:`compare_graphs`. Directed metrics exclude
-        claims in the adjacency mask, and a correct adjacency covers the true
-        edge so it is not also a directed false negative. Default
+        claims in the adjacency mask, so a true edge found only as an
+        adjacency is a directed false negative and an adjacency true
+        positive. Default
         ``'bidirected'``.
     conflict : str, optional
         Same choices as *undirected*, for discovered ``'x-x'`` marks.
@@ -877,7 +879,6 @@ def plot_lag_metrics(
         mask[i, i, 0] = False
 
     upper = np.triu_indices(N, 1)
-    adjacency_truth = _adjacency_truth(gt)
     # A directed claim also asserts the adjacency; the mask keeps the two
     # scorings from double-counting the same pair.
     adjacency_claims = disc | adjacency
@@ -888,21 +889,19 @@ def plot_lag_metrics(
         if tau == 0:
             gt_tau = gt[:, :, 0][mask[:, :, 0]]
             disc_tau = disc[:, :, 0][mask[:, :, 0]]
-            covered = adjacency[:, :, 0] & adjacency_truth[:, :, 0]
-            covered = covered | covered.T
-            covered_tau = covered[mask[:, :, 0]]
             claimed = (adjacency_claims[:, :, 0] | adjacency_claims[:, :, 0].T)[upper]
             true_adj = (gt[:, :, 0] | gt[:, :, 0].T)[upper]
         else:
             gt_tau = gt[:, :, tau][mask[:, :, tau]]
             disc_tau = disc[:, :, tau][mask[:, :, tau]]
-            covered_tau = (adjacency[:, :, tau] & gt[:, :, tau])[mask[:, :, tau]]
             claimed = adjacency_claims[:, :, tau][mask[:, :, tau]]
             true_adj = gt[:, :, tau][mask[:, :, tau]]
 
         tp = int(np.sum(gt_tau & disc_tau))
         fp = int(np.sum(~gt_tau & disc_tau))
-        fn = int(np.sum(gt_tau & ~disc_tau & ~covered_tau))
+        # Directed rows stay strict: a true edge found only as an unoriented
+        # adjacency is an orientation miss; the adjacency rows credit it.
+        fn = int(np.sum(gt_tau & ~disc_tau))
         prec = tp / max(tp + fp, 1)
         rec = tp / max(tp + fn, 1)
         f1 = 2 * prec * rec / max(prec + rec, 1e-12)
@@ -1012,8 +1011,9 @@ def plot_pvalue_distribution(
         counted as an edge). When given, only edges present in this
         graph are included and the histogram splits into TP vs FP.
         Under the ``'adjacency'`` policy an ``'o-o'`` / ``'x-x'`` pair that
-        matches a true edge in either direction is counted as a TP, because
-        the orientation is unknown rather than wrong.
+        matches a true edge in either direction is counted as one TP, using
+        the p-value of the true edge's cell, because the orientation is
+        unknown rather than wrong.
     undirected : str, optional
         ``'drop'``, ``'bidirected'`` or ``'adjacency'`` for discovered
         ``'o-o'`` marks; see :func:`compare_graphs`. Default ``'bidirected'``.
@@ -1067,13 +1067,22 @@ def plot_pvalue_distribution(
     if masked:
         claims = disc.copy()
         if adjacency.any():
-            # Lag-0 adjacencies are canonical; include the mirror cell so the
-            # pair's p-value is not lost when only that cell was tested.
+            # One p-value per adjacency claim. Lag-0 claims are canonical (upper
+            # triangle); use the cell holding the true edge if there is one,
+            # else the canonical cell, or its mirror when only that was tested.
             adj_cells = adjacency.copy()
-            adj_cells[:, :, 0] |= adjacency[:, :, 0].T
+            for i, j in zip(*np.nonzero(adjacency[:, :, 0])):
+                if gt[j, i, 0] and not gt[i, j, 0]:
+                    use_mirror = True
+                elif gt[i, j, 0]:
+                    use_mirror = False
+                else:
+                    use_mirror = not valid[i, j, 0] and valid[j, i, 0]
+                if use_mirror:
+                    adj_cells[i, j, 0] = False
+                    adj_cells[j, i, 0] = True
             claims |= adj_cells
-            matched_adj = adjacency & _adjacency_truth(gt)
-            matched_adj[:, :, 0] |= matched_adj[:, :, 0].T
+            matched_adj = adj_cells & gt
         valid &= claims
 
     is_true = gt | matched_adj

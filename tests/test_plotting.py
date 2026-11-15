@@ -358,7 +358,8 @@ def test_compare_functions_reject_non_dag_ground_truth(mark):
         # Directed TP/FP/FN, then adjacency TP/FP/FN.
         ("bidirected", [1, 1, 0, 1, 0, 0]),
         ("drop", [0, 0, 1, 0, 0, 1]),
-        ("adjacency", [0, 0, 0, 1, 0, 0]),
+        # The pair is found but not oriented: directed FN, adjacency TP.
+        ("adjacency", [0, 0, 1, 1, 0, 0]),
     ],
 )
 def test_plot_lag_metrics_oo_policies(policy, expected):
@@ -443,7 +444,7 @@ def test_plot_lag_metrics_adjacency_policy_per_mark(mark, parameter):
         ],
         **{parameter: "adjacency"},
     )
-    np.testing.assert_array_equal(ax.images[0].get_array()[:, 0], [0, 0, 0, 1, 0, 0])
+    np.testing.assert_array_equal(ax.images[0].get_array()[:, 0], [0, 0, 1, 1, 0, 0])
     plt.close("all")
 
 
@@ -485,7 +486,7 @@ def test_plot_lag_metrics_lagged_oo_is_scored_at_its_own_cell(true_cell):
         metrics=["TP", "FP", "FN", "Adjacency TP", "Adjacency FP", "Adjacency FN"],
         undirected="adjacency",
     )
-    expected = [0, 0, 1, 0, 1, 1] if true_cell == (1, 0) else [0, 0, 0, 1, 0, 0]
+    expected = [0, 0, 1, 0, 1, 1] if true_cell == (1, 0) else [0, 0, 1, 1, 0, 0]
     np.testing.assert_array_equal(ax.images[0].get_array()[:, 1], expected)
     plt.close("all")
 
@@ -554,6 +555,29 @@ def test_compare_graphs_adjacency_is_drawn_without_arrowhead():
     plt.close("all")
 
 
+@pytest.mark.parametrize("truth", [True, False])
+def test_compare_graphs_adjacency_skips_lagged_self_links(truth):
+    """A lagged o-o self-link is not drawn, as directed self-links are not."""
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyArrowPatch
+
+    from causalts.plotting import compare_graphs
+
+    gt = np.zeros((2, 2, 2), dtype=np.int8)
+    if truth:
+        gt[0, 0, 1] = 1
+    disc = _mark_graph([(0, 0, 1, "o-o")], d=2, n_lags=2)
+    _, ax = compare_graphs(gt, disc, undirected="adjacency")
+    curves = [
+        a
+        for a in ax.get_children()
+        if isinstance(a, FancyArrowPatch)
+        and type(a.get_arrowstyle()).__name__ == "Curve"
+    ]
+    assert curves == []
+    plt.close("all")
+
+
 @pytest.mark.parametrize(
     "mark, parameter", [("o-o", "undirected"), ("x-x", "conflict")]
 )
@@ -590,7 +614,8 @@ def test_compare_graphs_adjacency_lines_are_visible(mark, parameter, truth):
 
 @pytest.mark.parametrize(
     "policy, true_count, false_count",
-    [("bidirected", 1, 1), ("drop", 0, 0), ("adjacency", 2, 0)],
+    # A lag-0 adjacency claim contributes one p-value, not one per cell.
+    [("bidirected", 1, 1), ("drop", 0, 0), ("adjacency", 1, 0)],
 )
 def test_plot_pvalue_distribution_oo_policies(policy, true_count, false_count):
     import matplotlib.pyplot as plt
@@ -607,6 +632,26 @@ def test_plot_pvalue_distribution_oo_policies(policy, true_count, false_count):
     labels = [t.get_text() for t in ax.get_legend().get_texts()]
     assert f"TP (n={true_count})" in labels
     assert f"FP (n={false_count})" in labels
+    plt.close("all")
+
+
+@pytest.mark.parametrize("cause, effect", [(0, 1), (1, 0)])
+def test_plot_pvalue_distribution_adjacency_uses_the_true_cell(cause, effect):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_pvalue_distribution
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[cause, effect, 0] = 1
+    pvals = np.full((2, 2, 1), 0.9)
+    pvals[cause, effect, 0] = 0.01
+
+    _, ax = plot_pvalue_distribution(
+        pvals, gt, graph_discovered=_oo_pair(), undirected="adjacency"
+    )
+    tp = [p for p in ax.patches if p.get_height() > 0 and p.get_x() < 0.5]
+    assert sum(p.get_height() for p in tp) > 0
+    assert not [p for p in ax.patches if p.get_height() > 0 and p.get_x() > 0.5]
     plt.close("all")
 
 
