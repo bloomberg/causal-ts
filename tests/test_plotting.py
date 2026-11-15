@@ -721,6 +721,20 @@ def test_compare_graphs_strokes_on_one_pair_take_distinct_arcs(curved_radius):
     plt.close("all")
 
 
+def test_plot_lag_metrics_adjacency_rows_do_not_depend_on_the_graph():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_lag_metrics
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    directed_only = _mark_graph([(0, 1, 0, "-->")])
+
+    _, ax = plot_lag_metrics(gt, directed_only, undirected="adjacency")
+    assert ax.images[0].get_array().shape[0] == 6
+    plt.close("all")
+
+
 def test_compare_functions_reject_invalid_policy():
     from causalts.plotting import (
         compare_graphs,

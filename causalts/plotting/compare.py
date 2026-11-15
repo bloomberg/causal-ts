@@ -816,7 +816,7 @@ def plot_lag_metrics(
     metrics : list of str, optional
         Metric rows to show. Default ``["Precision", "Recall", "F1"]``, plus
         the adjacency rows when *undirected* or *conflict* is ``'adjacency'``
-        and the discovered graph contains such a claim.
+        (so every graph scored with that policy gets the same rows).
         Valid names: ``"Precision"``, ``"Recall"``, ``"F1"``, ``"TP"``,
         ``"FP"``, ``"FN"``, ``"SHD"``; unknown names are shown as 0. The
         adjacency variants are ``"Adjacency Precision"``,
@@ -857,7 +857,7 @@ def plot_lag_metrics(
 
     if metrics is None:
         metrics = ["Precision", "Recall", "F1"]
-        if "adjacency" in (undirected, conflict) and adjacency.any():
+        if "adjacency" in (undirected, conflict):
             metrics = metrics + [
                 "Adjacency Precision",
                 "Adjacency Recall",
@@ -1002,9 +1002,9 @@ def plot_pvalue_distribution(
         counted as an edge). When given, only edges present in this
         graph are included and the histogram splits into TP vs FP.
         Under the ``'adjacency'`` policy an ``'o-o'`` / ``'x-x'`` pair that
-        matches a true edge in either direction is counted as one TP, using
-        the p-value of the true edge's cell, because the orientation is
-        unknown rather than wrong.
+        matches a true edge (in either direction at lag 0, at the same cell at
+        later lags) is counted as one TP, using the p-value of the true edge's
+        cell, because the orientation is unknown rather than wrong.
     undirected : str, optional
         ``'drop'``, ``'bidirected'`` or ``'adjacency'`` for discovered
         ``'o-o'`` marks; see :func:`compare_graphs`. Default ``'bidirected'``.
