@@ -260,9 +260,9 @@ def precision_recall(s1, s2):
     Parameters
     ----------
     s1 : set
-        The first set of elements.
+        The ground-truth set.
     s2 : set
-        The second set of elements.
+        The predicted set.
 
     Returns
     -------
@@ -270,9 +270,9 @@ def precision_recall(s1, s2):
         A tuple containing precision and recall values.
 
         - precision (float): The ratio of the intersection of ``s1``
-          and ``s2`` to the size of ``s1``.
+          and ``s2`` to the size of ``s2``.
         - recall (float): The ratio of the intersection of ``s1`` and
-          ``s2`` to the size of ``s2``.
+          ``s2`` to the size of ``s1``.
 
     Notes
     -----
@@ -409,9 +409,9 @@ def precision_recall_3d(g_true_3d, g_est_3d):
 
     Notes
     -----
-    The function modifies the input ``g_true_3d`` by setting the diagonal
-    of the second layer (index 1) to zero, effectively ignoring self-links
-    for time t-1 to t. Precision is calculated as ``nTP / nDisc``, where
+    The function works on a copy of ``g_true_3d`` with the diagonal of the
+    second layer (index 1) set to zero, so self-links from t-1 to t are
+    ignored; the input is not modified. Precision is calculated as ``nTP / nDisc``, where
     ``nTP`` is the number of true positives (correct links) and ``nDisc``
     is the total number of links in the estimated graph. Recall is
     calculated as ``nTP / L``, where ``L`` is the total number of links
@@ -523,6 +523,7 @@ def set_up_logging(
         logfile_handler = logging.FileHandler(logfile_file, mode=mode)
     except Exception as exception:
         print(f"Failed to set up log file: {exception}")
+        logger.removeHandler(console_handler)
         return False
 
     # Set log file log level
@@ -532,6 +533,8 @@ def set_up_logging(
         )  # only accepts uppercase level names
     except ValueError:
         print(f"Failed to set log file log level: invalid level: '{logfile_log_level}'")
+        logfile_handler.close()
+        logger.removeHandler(console_handler)
         return False
 
     # Create and set formatter, add log file handler to logger

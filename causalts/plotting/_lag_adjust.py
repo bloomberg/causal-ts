@@ -39,10 +39,29 @@ changes both variables' noise variance leaves dependent residuals even with
 the true conditional means removed.
 """
 
-import dcor
 import numpy as np
 
 from ..ci_tests._residual_score import _loo_ridge, blocked_folds
+
+
+class _LazyDcor:
+    """Import ``dcor`` on first use.
+
+    ``import dcor`` compiles or loads numba functions, so importing it with
+    ``causalts.plotting`` slowed the import and crashed parallel Sphinx builds,
+    whose workers raced on numba's cache.
+    """
+
+    def __getattr__(self, name):
+        if name.startswith("__"):
+            # Introspection (inspect.unwrap, doctest, autodoc) must not load numba.
+            raise AttributeError(name)
+        import dcor as _dcor
+
+        return getattr(_dcor, name)
+
+
+dcor = _LazyDcor()
 
 #: Significance level of the parent-selection test.
 PARENT_ALPHA = 0.01
