@@ -525,7 +525,7 @@ def var_process(
     elif use == "no_noise":
         add_noise = False
         if verbosity > 0:
-            print("\nInverse Innovation Cov =\n%s" % str(innos))
+            print("\nNo noise added; Innovation Cov (unused) =\n%s" % str(innos))
     # Use decorrelated noise
     else:
         innos = None

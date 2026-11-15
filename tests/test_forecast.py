@@ -303,6 +303,18 @@ def test_forecast_horizon_iterates_fitted_equations():
         x_prev, y_prev = x_new, y_new
 
 
+def test_forecast_horizon_subset_of_targets_matches_full_forecast():
+    # y depends on x, so forecasting only y must still roll x forward.
+    graph, df = _var_data(T=300, seed=6)
+    fc = CausalForecaster(graph, var_names=df.columns, include_contemp=False)
+    fc.fit(df)
+    full = fc.forecast_horizon(df, horizon=4)
+    only_y = fc.forecast_horizon(df, horizon=4, targets=["y"])
+    assert list(only_y.columns) == ["y"]
+    assert np.isfinite(only_y["y"]).all()
+    np.testing.assert_allclose(only_y["y"], full["y"])
+
+
 def test_forecast_horizon_uses_univariate_fallback_for_roots():
     rng = np.random.default_rng(7)
     T = 300

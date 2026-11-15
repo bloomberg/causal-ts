@@ -18,6 +18,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   adjacency with unknown orientation. `plot_lag_metrics` reports separate
   adjacency precision / recall / F1, TP / FP / FN and SHD rows.
 
+### Changed
+
+* More tests: forecasting, plotting, the DoWhy bridge, GRACE, the CLI, the Tigramite
+  wrappers and the data generators.
+
+### Fixed
+
+* `CausalForecaster.forecast_horizon(targets=...)` with a subset of variables no longer
+  returns NaN from the second step on.
+* `plot_time_series_graph(order=...)` lists variables top to bottom, as documented (also
+  `order="auto"`); single-variable graphs plot; `plot_lagfuncs(dpi=...)` is honoured.
+* The deprecated `causalts.ci_tests.cit_base` import gives the unified `CIT_Base`; pass its
+  arguments by keyword.
+* `WrappedGraph.summary()` and `run_cdnots_gated(verbose=True)` print correctly;
+  `set_up_logging` cleans up after a failed setup.
+* `import causalts.plotting` no longer loads `dcor` and numba; parallel docs builds crashed
+  on numba's cache.
+
 ## [0.28.1]
 
 ### Added
