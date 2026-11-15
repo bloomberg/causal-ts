@@ -695,6 +695,32 @@ def test_compare_graphs_adjacency_with_zero_curvature_terminates():
     plt.close("all")
 
 
+@pytest.mark.parametrize("curved_radius", [0.2, 0.0])
+def test_compare_graphs_strokes_on_one_pair_take_distinct_arcs(curved_radius):
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyArrowPatch
+
+    from causalts.plotting import compare_graphs
+
+    gt = np.zeros((2, 2, 2), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    disc = _mark_graph([(0, 1, 0, "o-o"), (0, 1, 1, "-->"), (1, 0, 1, "-->")], n_lags=2)
+
+    _, ax = compare_graphs(
+        gt, disc, undirected="adjacency", curved_radius=curved_radius
+    )
+    arcs = []
+    for a in ax.get_children():
+        if isinstance(a, FancyArrowPatch):
+            (xa, ya), (xb, yb) = a._posA_posB
+            rad = a.get_connectionstyle().rad
+            # arc3 radius is relative to travel direction; normalise it.
+            arcs.append(round(rad if (xa, ya) < (xb, yb) else -rad, 6))
+    # Two directed arrows and one adjacency line: three physical arcs.
+    assert len(set(arcs)) == 3
+    plt.close("all")
+
+
 def test_compare_functions_reject_invalid_policy():
     from causalts.plotting import (
         compare_graphs,

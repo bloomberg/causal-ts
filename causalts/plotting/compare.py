@@ -448,24 +448,15 @@ def compare_graphs(
         key = (i, j)
         rev_key = (j, i)
 
-        # Collect all radii already used for this pair (both directions)
-        used_same = seen.get(key, [])
-        used_rev = seen.get(rev_key, [])
-
-        if not used_same and not used_rev:
-            rad = curved_radius
-        elif used_rev and not used_same:
-            # Reverse edge exists — use same sign so arcs curve on opposite
-            # physical sides (arc3 rad is relative to the direction of travel)
-            rad = used_rev[-1]
-            while any(abs(rad - u) < 0.05 for u in used_same):
-                rad = rad + np.sign(rad) * 0.15 if rad != 0 else (curved_radius or 0.15)
-        else:
-            last = (used_same + used_rev)[-1]
-            rad = -last
-            all_used = used_same + used_rev
-            while any(abs(rad - u) < 0.05 for u in all_used):
-                rad = rad + np.sign(rad) * 0.15 if rad != 0 else (curved_radius or 0.15)
+        # arc3 radii are relative to the direction of travel, so a reverse
+        # arc with radius r occupies the same physical path as -r here.
+        occupied = list(seen.get(key, [])) + [-u for u in seen.get(rev_key, [])]
+        step = np.sign(curved_radius) or 1.0
+        candidates = [curved_radius, -curved_radius]
+        for k in range(1, len(occupied) + 2):
+            r = curved_radius + step * 0.15 * k
+            candidates += [r, -r]
+        rad = next(r for r in candidates if all(abs(r - u) >= 0.05 for u in occupied))
 
         seen.setdefault(key, []).append(rad)
 
