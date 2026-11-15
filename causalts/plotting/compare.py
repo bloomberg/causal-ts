@@ -459,13 +459,13 @@ def compare_graphs(
             # physical sides (arc3 rad is relative to the direction of travel)
             rad = used_rev[-1]
             while any(abs(rad - u) < 0.05 for u in used_same):
-                rad = rad + np.sign(rad) * 0.15 if rad != 0 else curved_radius
+                rad = rad + np.sign(rad) * 0.15 if rad != 0 else (curved_radius or 0.15)
         else:
             last = (used_same + used_rev)[-1]
             rad = -last
             all_used = used_same + used_rev
             while any(abs(rad - u) < 0.05 for u in all_used):
-                rad = rad + np.sign(rad) * 0.15 if rad != 0 else curved_radius
+                rad = rad + np.sign(rad) * 0.15 if rad != 0 else (curved_radius or 0.15)
 
         seen.setdefault(key, []).append(rad)
 

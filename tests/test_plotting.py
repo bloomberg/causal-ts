@@ -673,6 +673,28 @@ def test_plot_pvalue_distribution_adjacency_falls_back_to_tested_mirror():
     plt.close("all")
 
 
+def test_compare_graphs_adjacency_with_zero_curvature_terminates():
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyArrowPatch
+
+    from causalts.plotting import compare_graphs
+
+    # A lagged directed edge and a lag-0 adjacency on the same pair need two
+    # strokes; with curved_radius=0 the second must still get its own radius.
+    gt = np.zeros((2, 2, 2), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    disc = _mark_graph([(0, 1, 0, "o-o"), (0, 1, 1, "-->")], n_lags=2)
+
+    _, ax = compare_graphs(gt, disc, undirected="adjacency", curved_radius=0)
+    rads = {
+        a.get_connectionstyle().rad
+        for a in ax.get_children()
+        if isinstance(a, FancyArrowPatch)
+    }
+    assert len(rads) >= 2
+    plt.close("all")
+
+
 def test_compare_functions_reject_invalid_policy():
     from causalts.plotting import (
         compare_graphs,
