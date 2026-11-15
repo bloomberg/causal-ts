@@ -8,11 +8,10 @@ Note that by _not_ including a description, you are asking reviewers to do extra
 work to understand the context of this change, which may lead to your PR taking
 much longer to review, or result in it not being reviewed at all.
 
-## Examples
+## Examples (optional)
 
 Show how the change is used or what it changes, for example a code snippet,
-command output, or before and after numbers. Write "N/A" if there is nothing
-to show.
+command output, or before and after numbers.
 
 ## Type of Change
 
@@ -23,11 +22,6 @@ to show.
 - [ ] Documentation
 - [ ] Other (please describe)
 
-## Tool Disclosure
-
-If generative tools produced a significant part of this change, say which parts
-they wrote and how you checked the output.
-
 ## Checklist
 
 - [ ] I have read the [contributing guidelines](/bloomberg/causal-ts/blob/main/CONTRIBUTING.md)
@@ -37,3 +31,4 @@ they wrote and how you checked the output.
 - [ ] All code style checks pass
 - [ ] New code contribution is covered by automated tests
 - [ ] All new and existing tests pass
+- [ ] If AI tools generated a significant part of this change, I have said so in the description
