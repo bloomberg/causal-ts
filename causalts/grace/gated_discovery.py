@@ -85,7 +85,7 @@ def _silence_lightning():
 
 
 def _detect_accelerator() -> str:
-    """Detect best available accelerator: mps > gpu > cpu."""
+    """Detect best available accelerator: gpu (CUDA) > mps > cpu."""
     if torch.cuda.is_available():
         return "gpu"
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -2606,11 +2606,10 @@ def run_cdnots_gated(
                 )
             from ..imputation import var_em_impute
 
+            n_missing = int(df.isna().sum().sum())
             df = var_em_impute(df, **(impute_kwargs or {}))
             if verbose:
-                print(
-                    f"  Imputed {df.isna().sum().sum()} remaining NaN values via VAR-EM"
-                )
+                print(f"  Imputed {n_missing} NaN values via VAR-EM")
 
     df_input = df  # the result keeps the caller's data, not the transformed copy
     # "xcorr" lambda rule: background dependence of the caller's (imputed) data,
