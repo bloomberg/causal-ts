@@ -655,6 +655,24 @@ def test_plot_pvalue_distribution_adjacency_uses_the_true_cell(cause, effect):
     plt.close("all")
 
 
+def test_plot_pvalue_distribution_adjacency_falls_back_to_tested_mirror():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_pvalue_distribution
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    pvals = np.full((2, 2, 1), np.nan)
+    pvals[1, 0, 0] = 0.01
+
+    _, ax = plot_pvalue_distribution(
+        pvals, gt, graph_discovered=_oo_pair(), undirected="adjacency"
+    )
+    labels = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert "TP (n=1)" in labels
+    plt.close("all")
+
+
 def test_compare_functions_reject_invalid_policy():
     from causalts.plotting import (
         compare_graphs,

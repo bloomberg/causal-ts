@@ -1068,21 +1068,20 @@ def plot_pvalue_distribution(
         claims = disc.copy()
         if adjacency.any():
             # One p-value per adjacency claim. Lag-0 claims are canonical (upper
-            # triangle); use the cell holding the true edge if there is one,
-            # else the canonical cell, or its mirror when only that was tested.
+            # triangle); prefer the tested cell holding the true edge, else the
+            # canonical cell, else its mirror when only that was tested. The
+            # pair is scored against the adjacency truth either way.
             adj_cells = adjacency.copy()
             for i, j in zip(*np.nonzero(adjacency[:, :, 0])):
+                order = [(i, j), (j, i)]
                 if gt[j, i, 0] and not gt[i, j, 0]:
-                    use_mirror = True
-                elif gt[i, j, 0]:
-                    use_mirror = False
-                else:
-                    use_mirror = not valid[i, j, 0] and valid[j, i, 0]
-                if use_mirror:
-                    adj_cells[i, j, 0] = False
-                    adj_cells[j, i, 0] = True
+                    order.reverse()
+                tested = [c for c in order if valid[c[0], c[1], 0]]
+                a, b = tested[0] if tested else (i, j)
+                adj_cells[i, j, 0] = False
+                adj_cells[a, b, 0] = True
             claims |= adj_cells
-            matched_adj = adj_cells & gt
+            matched_adj = adj_cells & _adjacency_truth(gt)
         valid &= claims
 
     is_true = gt | matched_adj
