@@ -365,8 +365,11 @@ class CusumRegimeDetector:
         What type of shift to detect: ``"mean"``, ``"variance"``, or
         ``"both"`` (union of changepoints from both).
     threshold : float or None
-        CUSUM magnitude threshold for declaring a changepoint.  If None,
-        auto-calibrated as ``3 * std(cusum)``.
+        CUSUM scale for declaring a changepoint. A candidate (a sign change in
+        the smoothed CUSUM slope) is kept when ``|cusum|`` there exceeds
+        ``0.3 * threshold``. If None, ``threshold = 3 * std(cusum)``, so the
+        cut is ``0.9 * std(cusum)``; on pure noise this can still report a few
+        changepoints, so raise ``threshold`` or ``min_segment`` to be stricter.
     min_segment : int
         Minimum spacing between changepoints.
     smooth_window : int

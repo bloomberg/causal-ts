@@ -586,22 +586,24 @@ class CausalForecaster:
                 f"got {len(exog_future)}."
             )
 
+        fitted = sorted(set(self.models_) | set(self.exog_models_))
         if targets is None:
-            targets = sorted(set(self.models_) | set(self.exog_models_))
+            targets = fitted
+        # Every fitted variable is forecast so later steps can read the
+        # predicted parents; only ``targets`` are returned.
+        step_vars = fitted + [t for t in targets if t not in fitted]
 
-        exog_forecasts = {}
-        for var in self.exog_models_:
-            if var in targets:
-                exog_forecasts[var] = np.asarray(
-                    self.exog_models_[var].forecast(horizon)
-                )
+        exog_forecasts = {
+            var: np.asarray(model.forecast(horizon))
+            for var, model in self.exog_models_.items()
+        }
 
         extended = data.copy()
         forecasts = []
 
         for step in range(horizon):
             row = {}
-            for target in targets:
+            for target in step_vars:
                 if target in exog_forecasts:
                     row[target] = exog_forecasts[target][step]
                 elif target in self.models_:
@@ -634,7 +636,7 @@ class CausalForecaster:
                 new_row[col] = row.get(col, np.nan)
             extended = pd.concat([extended, pd.DataFrame([new_row])], ignore_index=True)
 
-        return pd.DataFrame(forecasts)
+        return pd.DataFrame(forecasts, columns=step_vars)[list(targets)]
 
     def __repr__(self):
         n_causal = len(self.models_)

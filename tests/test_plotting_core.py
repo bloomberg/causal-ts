@@ -23,6 +23,7 @@ from causalts.plotting import (
 )
 from causalts.plotting._core import (
     _auto_shells,
+    _barycenter_order,
     _check_matrices,
     _default_kwargs_for_layout,
     _make_nice_axes,
@@ -607,8 +608,6 @@ def test_time_series_graph_lag_array_title_and_save(tmp_path):
 def test_time_series_graph_order_controls_rows():
     g = np.zeros((3, 3, 2), dtype=int)
     g[0, 1, 1] = 1
-    # A swap reads the same whether `order` lists rows or maps variables to
-    # rows (see the 3-cycle note in the report).
     _, ax = plot_time_series_graph(g, var_names=NAMES, order=[1, 0, 2])
     y = {t.get_text(): t.get_position()[1] for t in ax.texts if t.get_text() in NAMES}
     assert y["Y"] > y["X"] > y["Z"]
@@ -620,6 +619,47 @@ def test_time_series_graph_order_controls_rows():
         plot_time_series_graph(g, order=[0, 0, 1])
     with pytest.raises(ValueError, match="link_matrix is deprecated"):
         plot_time_series_graph(g, link_matrix=g)
+
+
+def _label_rows(ax):
+    """Variable labels from top to bottom."""
+    labels = [t for t in ax.texts if t.get_text() in NAMES]
+    return [t.get_text() for t in sorted(labels, key=lambda t: -t.get_position()[1])]
+
+
+def test_time_series_graph_order_lists_variables_top_to_bottom():
+    # A 3-cycle tells "top-to-bottom list" apart from "row of each variable".
+    g = np.zeros((3, 3, 2), dtype=int)
+    g[0, 1, 1] = 1
+    _, ax = plot_time_series_graph(g, var_names=NAMES, order=[2, 0, 1])
+    assert _label_rows(ax) == [NAMES[2], NAMES[0], NAMES[1]]
+
+
+def test_time_series_graph_auto_order_follows_barycenter_list():
+    # This graph's barycenter order is [0, 2, 3, 1], not its own inverse, so
+    # reading it as a row map would put the rows in a different order.
+    names = ["A", "B", "C", "D"]
+    g = np.zeros((4, 4, 2), dtype=int)
+    for i, j in [(0, 1), (0, 3), (2, 0), (3, 2)]:
+        g[i, j, 1] = 1
+    order = _barycenter_order(g)
+    assert order != [order.index(v) for v in range(4)]
+    _, ax = plot_time_series_graph(g, var_names=names, order="auto")
+    labels = [t for t in ax.texts if t.get_text() in names]
+    rows = [t.get_text() for t in sorted(labels, key=lambda t: -t.get_position()[1])]
+    assert rows == [names[v] for v in order]
+
+
+@pytest.mark.parametrize("n_lags", [1, 3])
+def test_single_variable_graphs_plot(n_lags):
+    g = np.zeros((1, 1, n_lags), dtype=int)
+    if n_lags > 1:
+        g[0, 0, 1] = 1
+    _, ax = plot_graph(g, var_names=["A"])
+    assert [t.get_text() for t in ax.texts if t.get_text() == "A"] == ["A"]
+    _, ax = plot_time_series_graph(g, var_names=["A"])
+    assert len(_nodes(ax)) == n_lags
+    assert len(_arrows(ax)) == (n_lags - 1 if n_lags > 1 else 0)
 
 
 def test_time_series_graph_val_matrix_width_attribute_special_nodes():
@@ -763,6 +803,28 @@ def test_plot_lagfuncs_wrapper(tmp_path):
     path = tmp_path / "lagfuncs.png"
     plot_lagfuncs(val, name=path)
     assert path.stat().st_size > 0
+
+
+def test_plot_lagfuncs_honours_dpi(tmp_path):
+    from PIL import Image
+
+    val = np.zeros((2, 2, 3))
+    sizes = {}
+    for dpi in (None, 50, 150):
+        path = tmp_path / f"lagfuncs_{dpi}.png"
+        plot_lagfuncs(val, name=path, dpi=dpi)
+        sizes[dpi] = Image.open(path).size
+    width, height = plt.rcParams["figure.figsize"]
+    assert sizes[50] == (round(width * 50), round(height * 50))
+    assert sizes[150] == (round(width * 150), round(height * 150))
+    # No dpi keeps matplotlib's default output.
+    dpi0 = plt.rcParams["figure.dpi"]
+    assert sizes[None] == (round(width * dpi0), round(height * dpi0))
+    # ...including a configured savefig.dpi.
+    with plt.rc_context({"savefig.dpi": 80}):
+        path = tmp_path / "lagfuncs_rc.png"
+        plot_lagfuncs(val, name=path)
+        assert Image.open(path).size == (round(width * 80), round(height * 80))
 
 
 @pytest.mark.parametrize(

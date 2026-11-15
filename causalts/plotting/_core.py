@@ -1570,7 +1570,7 @@ def plot_graph(
     else:
         fig, ax = fig_ax
 
-    graph = np.copy(graph.squeeze())
+    graph = np.copy(_squeeze_lags(graph))
 
     if graph.ndim == 4:
         raise ValueError(
@@ -1659,7 +1659,8 @@ def plot_graph(
         diagonal = False
 
     if np.count_nonzero(graph == "") == graph.size or diagonal:
-        graph[0, 1, 0] = "xxx"  # Workaround, will not be plotted...
+        if N > 1:
+            graph[0, 1, 0] = "xxx"  # Workaround, will not be plotted...
         no_links = True
     else:
         no_links = False
@@ -2106,6 +2107,13 @@ def _check_matrices(graph, val_matrix, link_width, link_attribute):
     return graph, val_matrix, link_width, link_attribute
 
 
+def _squeeze_lags(graph):
+    """Drop singleton lag axes, keeping the two variable axes even when N = 1."""
+    graph = np.asarray(graph)
+    extra = tuple(ax for ax in range(2, graph.ndim) if graph.shape[ax] == 1)
+    return graph.squeeze(axis=extra) if extra else graph
+
+
 def _barycenter_order(graph, max_iter=10):
     """Compute variable ordering that minimizes edge crossings (barycenter heuristic)."""
     graph_bool = graph.astype(bool) if graph.dtype != bool else graph
@@ -2294,7 +2302,7 @@ def plot_time_series_graph(
         no_coloring = False
 
     # Save original graph before string conversion for barycenter ordering
-    graph_orig = np.copy(np.asarray(graph).squeeze())
+    graph_orig = np.copy(_squeeze_lags(graph))
 
     graph, val_matrix, link_width, link_attribute = _check_matrices(
         graph, val_matrix, link_width, link_attribute
@@ -2310,9 +2318,9 @@ def plot_time_series_graph(
         max_lag = tau_max + 1
 
     if np.count_nonzero(graph == "") == graph.size:
-        if graph.ndim == 4:
+        if N > 1 and graph.ndim == 4:
             graph[0, 1, 0, 0] = "---"
-        else:
+        elif N > 1:
             graph[0, 1, 0] = "---"
         no_links = True
     else:
@@ -2495,10 +2503,12 @@ def plot_time_series_graph(
         )
         pos_tmp[i][np.isnan(pos_tmp[i])] = 0.0
 
+    # ``order`` lists variables top to bottom; ``row_of[v]`` is the row of v.
+    row_of = {v: r for r, v in enumerate(order)}
     pos = {}
     for n in range(N):
         for tau in range(max_lag):
-            pos[n * max_lag + tau] = pos_tmp[order[n] * max_lag + tau]
+            pos[n * max_lag + tau] = pos_tmp[row_of[n] * max_lag + tau]
 
     node_rings = {
         0: {
@@ -2978,13 +2988,15 @@ class setup_matrix:
         units = f" [{self.lag_units}]" if self.lag_units else ""
         return f"lag $\\tau${self.lag_label_suffix}{units}"
 
-    def savefig(self, name=None):
+    def savefig(self, name=None, dpi=None):
         """Save matrix figure.
 
         Parameters
         ----------
         name : str, optional
             File name. If None, figure is shown in window.
+        dpi : float, optional
+            Resolution of the saved file; ``None`` uses ``rcParams["savefig.dpi"]``.
         """
         if len(self.labels) > 0:
             axlegend = self.fig.add_subplot(111, frameon=False)
@@ -3090,7 +3102,8 @@ class setup_matrix:
                 )
 
         if name is not None:
-            self.fig.savefig(name)
+            kwargs = {} if dpi is None else {"dpi": dpi}
+            self.fig.savefig(name, **kwargs)
         else:
             return self.fig, self.axes_dict
 
@@ -3158,7 +3171,7 @@ def lag_grid_layout(var_names, figsize, wrap_labels=None):
 
 
 def plot_lagfuncs(
-    val_matrix, name=None, setup_args=None, add_lagfunc_args=None, dpi=300
+    val_matrix, name=None, setup_args=None, add_lagfunc_args=None, dpi=None
 ):
     """Wrapper to plot lag functions.
 
@@ -3172,6 +3185,9 @@ def plot_lagfuncs(
         Arguments for setup_matrix.
     add_lagfunc_args : dict, optional
         Arguments for add_lagfuncs.
+    dpi : float, optional
+        Resolution of the saved file when ``name`` is given; ``None`` uses
+        ``rcParams["savefig.dpi"]``.
 
     Returns
     -------
@@ -3188,9 +3204,6 @@ def plot_lagfuncs(
 
     matrix = setup_matrix(N=N, tau_max=tau_max, **setup_args)
     matrix.add_lagfuncs(val_matrix=val_matrix, **add_lagfunc_args)
-    try:
-        matrix.savefig(name=name, dpi=dpi)
-    except TypeError:
-        matrix.savefig(name=name)
+    matrix.savefig(name=name, dpi=dpi)
 
     return matrix
