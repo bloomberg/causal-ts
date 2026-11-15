@@ -477,7 +477,9 @@ def compare_graphs(
             arrowstyle=arrowstyle,
             connectionstyle=f"arc3,rad={rad}",
             mutation_scale=1 * lw,
-            lw=0.0 if linestyle == "solid" else lw * 0.3,
+            # "Simple" arrows are filled (width from mutation_scale); a "-"
+            # line has no fill and is drawn only by its stroke.
+            lw=lw if not arrow else (0.0 if linestyle == "solid" else lw * 0.3),
             aa=True,
             alpha=1.0,
             linestyle=linestyle,

@@ -555,6 +555,40 @@ def test_compare_graphs_adjacency_is_drawn_without_arrowhead():
 
 
 @pytest.mark.parametrize(
+    "mark, parameter", [("o-o", "undirected"), ("x-x", "conflict")]
+)
+@pytest.mark.parametrize("truth", [True, False])
+def test_compare_graphs_adjacency_lines_are_visible(mark, parameter, truth):
+    """Hiding the adjacency line must change the rendered image."""
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyArrowPatch
+
+    from causalts.plotting import compare_graphs
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    if truth:
+        gt[0, 1, 0] = 1  # correct adjacency, else spurious
+    fig, ax = compare_graphs(gt, _oo_pair(mark), **{parameter: "adjacency"})
+    lines = [
+        a
+        for a in ax.get_children()
+        if isinstance(a, FancyArrowPatch)
+        and type(a.get_arrowstyle()).__name__ == "Curve"
+    ]
+    assert lines
+
+    def pixels():
+        fig.canvas.draw()
+        return np.asarray(fig.canvas.buffer_rgba()).copy()
+
+    shown = pixels()
+    for a in lines:
+        a.set_visible(False)
+    assert (shown != pixels()).any()
+    plt.close("all")
+
+
+@pytest.mark.parametrize(
     "policy, true_count, false_count",
     [("bidirected", 1, 1), ("drop", 0, 0), ("adjacency", 2, 0)],
 )
