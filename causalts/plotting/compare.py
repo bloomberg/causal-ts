@@ -19,6 +19,7 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Ellipse, FancyArrowPatch
 
 from ._core import compute_node_positions
+from ._self_loops import _self_loop_angle, draw_loops
 
 _LATENT_MARK = "<->"
 _DAG_MARKS = ("", "-->", "<--")
@@ -149,6 +150,123 @@ def _as_3d(graph, dtype=None):
     return squeezed
 
 
+def _draw_self_loops(
+    ax,
+    gt,
+    disc,
+    adj_correct,
+    adj_spurious,
+    pos,
+    node_size,
+    edges,
+    styles,
+    draw_label,
+):
+    """Draw lagged self-links of each node as loops fanned out in its free gap."""
+    n_nodes, _, n_lags = gt.shape
+    for i in range(n_nodes):
+        lags = range(1, n_lags)
+        tp = [t for t in lags if gt[i, i, t] and disc[i, i, t]]
+        fp = [t for t in lags if disc[i, i, t] and not gt[i, i, t]]
+        fn = [
+            t
+            for t in lags
+            if gt[i, i, t] and not disc[i, i, t] and t not in adj_correct.get(i, [])
+        ]
+        loops = []  # (style key, label, arrow)
+        if tp and fp:
+            marks = [f"{t}\u2713" if t in tp else f"{t}\u2717" for t in sorted(tp + fp)]
+            loops.append(("fp" if len(fp) > len(tp) else "tp", ",".join(marks), True))
+        elif tp or fp:
+            loops.append(("tp" if tp else "fp", ",".join(map(str, tp or fp)), True))
+        if fn:
+            loops.append(("fn", ",".join(map(str, fn)), True))
+        if adj_correct.get(i):
+            loops.append(("adj", ",".join(map(str, sorted(adj_correct[i]))), False))
+        if adj_spurious.get(i):
+            loops.append(("fp", ",".join(map(str, sorted(adj_spurious[i]))), False))
+        if not loops:
+            continue
+
+        draw_loops(
+            ax,
+            pos[i],
+            node_size,
+            _self_loop_angle(i, pos, edges),
+            [
+                (*styles[key], label, arrow, -1 if key == "fn" else 0)
+                for key, label, arrow in loops
+            ],
+            draw_label,
+        )
+
+
+def _next_radius(seen, i, j, curved_radius):
+    """Pick and record the arc3 radius of the next stroke from i to j.
+
+    arc3 radii are relative to the direction of travel, so a reverse arc
+    with radius r occupies the same physical path as -r here.
+    """
+    occupied = list(seen.get((i, j), [])) + [-u for u in seen.get((j, i), [])]
+    step = np.sign(curved_radius) or 1.0
+    candidates = [curved_radius, -curved_radius]
+    for k in range(1, len(occupied) + 2):
+        r = curved_radius + step * 0.15 * k
+        candidates += [r, -r]
+    rad = next(r for r in candidates if all(abs(r - u) >= 0.05 for u in occupied))
+    seen.setdefault((i, j), []).append(rad)
+    return rad
+
+
+def _stroke_plan(edge_info, adj_correct, adj_spurious):
+    """Node pairs of the strokes compare_graphs draws, in drawing order."""
+    plan = []
+    for (i, j), (lags_tp, lags_fp, lags_fn) in edge_info.items():
+        statuses = [bool(lags_tp), bool(lags_fp), bool(lags_fn)]
+        if sum(statuses) == 1:
+            plan.append((i, j))
+        else:  # mixed: one stroke for discovered lags, one for missed lags
+            if lags_tp or lags_fp:
+                plan.append((i, j))
+            if lags_fn:
+                plan.append((i, j))
+    plan += list(adj_correct) + list(adj_spurious)
+    return plan
+
+
+def _next_radius(seen, i, j, curved_radius):
+    """Pick and record the arc3 radius of the next stroke from i to j.
+
+    arc3 radii are relative to the direction of travel, so a reverse arc
+    with radius r occupies the same physical path as -r here.
+    """
+    occupied = list(seen.get((i, j), [])) + [-u for u in seen.get((j, i), [])]
+    step = np.sign(curved_radius) or 1.0
+    candidates = [curved_radius, -curved_radius]
+    for k in range(1, len(occupied) + 2):
+        r = curved_radius + step * 0.15 * k
+        candidates += [r, -r]
+    rad = next(r for r in candidates if all(abs(r - u) >= 0.05 for u in occupied))
+    seen.setdefault((i, j), []).append(rad)
+    return rad
+
+
+def _stroke_plan(edge_info, adj_correct, adj_spurious):
+    """Node pairs of the strokes compare_graphs draws, in drawing order."""
+    plan = []
+    for (i, j), (lags_tp, lags_fp, lags_fn) in edge_info.items():
+        statuses = [bool(lags_tp), bool(lags_fp), bool(lags_fn)]
+        if sum(statuses) == 1:
+            plan.append((i, j))
+        else:  # mixed: one stroke for discovered lags, one for missed lags
+            if lags_tp or lags_fp:
+                plan.append((i, j))
+            if lags_fn:
+                plan.append((i, j))
+    plan += list(adj_correct) + list(adj_spurious)
+    return plan
+
+
 def compare_graphs(
     graph_true,
     graph_discovered,
@@ -181,6 +299,8 @@ def compare_graphs(
     undirected="bidirected",
     conflict="bidirected",
     adjacency_color="tab:blue",
+    show_self_loops=False,
+    self_loop_linewidth=None,
 ):
     """Compare a discovered causal graph against ground truth.
 
@@ -212,6 +332,16 @@ def compare_graphs(
         Color for correct adjacency claims when *undirected* or *conflict* is
         ``'adjacency'``. Spurious adjacency claims use *fp_color*. Default
         ``'tab:blue'``.
+    show_self_loops : bool, optional
+        Draw lagged self-links (``X(t-tau) -> X(t)``) as loops on the nodes,
+        coloured TP / FP / FN like the other edges, with their lags as the
+        label. Each loop points into the widest gap between the node's other
+        edges, so it does not cross them. Default *False*.
+    self_loop_linewidth : float, optional
+        Line width of TP / adjacency self-loops; FP loops scale with
+        *fp_linewidth* the same way, and FN loops use the thinner of this and
+        *fn_linewidth*. Default *fn_linewidth* (the missed-edge width), since
+        a loop reads much heavier than a straight edge of the same width.
     var_names : list of str, optional
         Variable names. Defaults to ``['0', '1', ...]``.
     fig_ax : tuple (fig, ax), optional
@@ -225,7 +355,9 @@ def compare_graphs(
         Layout algorithm passed to ``compute_node_positions`` (``'neato'``,
         ``'circular'``, ``'spring'``, etc.). Default ``'neato'``; Graphviz
         layouts fall back to ``'circular'`` with a warning when Graphviz is
-        unavailable.
+        unavailable. ``'auto'`` places nodes so the drawn edges cross less and
+        keep clear of other nodes (well under a second for small graphs,
+        about a second at 40 variables); it works without Graphviz.
     node_size : float, optional
         Node diameter. Default 0.2.
     node_color : str, optional
@@ -263,8 +395,14 @@ def compare_graphs(
     show_legend : bool, optional
         Whether to show the TP / FP / FN legend. Default *True*.
     legend_loc : str, optional
-        Legend location (any valid matplotlib ``loc``). Default ``'best'``: matplotlib
-        places it where it overlaps the drawn graph least.
+        Legend location (any valid matplotlib ``loc``), or ``'below'`` (alias
+        ``'bottom'``) to put
+        it under the graph, outside the axes, so it never covers an edge (the
+        bottom margin is raised to fit it; with *fig_ax*, save with
+        ``bbox_inches="tight"``). With ``'below'`` the axis limits also cover
+        curved edges, so panels sharing *node_pos* may differ slightly in
+        scale. Default ``'best'``: matplotlib places it where it overlaps the drawn
+        graph least.
     legend_fontsize : float, optional
         Font size for legend text. Defaults to ``label_fontsize - 1``.
     legend_framealpha : float, optional
@@ -291,6 +429,8 @@ def compare_graphs(
         fp_linewidth = arrow_linewidth
     if legend_fontsize is None:
         legend_fontsize = label_fontsize - 1
+    # "bottom" is accepted too, as in the lag-function plots.
+    legend_below = legend_loc in ("below", "bottom")
 
     N = gt.shape[0]
     tau_max = gt.shape[2] - 1
@@ -315,16 +455,96 @@ def compare_graphs(
                 G.add_edge(i, j)
 
     # ------------------------------------------------------------------
+    # Classify adjacency claims and the true edges they cover
+    # ------------------------------------------------------------------
+    # Lag-0 adjacencies are canonical (upper triangle, counted once). A
+    # correct adjacency covers the true directed edge, so it is not also
+    # reported as missed.
+    adj_correct = {}  # (i, j) -> lags
+    adj_spurious = {}
+    self_adj_correct = {}  # i -> lags of lagged o-o / x-x self-links
+    self_adj_spurious = {}
+    covered = np.zeros(gt.shape, dtype=bool)
+    for i in range(N):
+        for j in range(N):
+            for tau in range(tau_max + 1):
+                if not adjacency[i, j, tau]:
+                    continue
+                if tau == 0:
+                    a, b = (i, j) if i < j else (j, i)
+                    already_directed = disc[a, b, 0] or disc[b, a, 0]
+                    is_true = gt[a, b, 0] or gt[b, a, 0]
+                else:
+                    a, b = i, j
+                    already_directed = disc[a, b, tau]
+                    is_true = gt[a, b, tau]
+                if is_true:
+                    # A correct adjacency covers the true directed edge even
+                    # when a directed claim is also present, so it is not
+                    # reported as missed.
+                    if tau == 0:
+                        covered[a, b, 0] = covered[b, a, 0] = True
+                    else:
+                        covered[a, b, tau] = True
+                if already_directed:
+                    # A directed claim at the same cell already draws it.
+                    continue
+                if a == b:
+                    # Self-links are drawn only as loops (show_self_loops).
+                    target = self_adj_correct if is_true else self_adj_spurious
+                    target.setdefault(a, []).append(tau)
+                    continue
+                if is_true:
+                    adj_correct.setdefault((a, b), []).append(tau)
+                else:
+                    adj_spurious.setdefault((a, b), []).append(tau)
+
+    # ------------------------------------------------------------------
+    # Classify edges per (i, j) pair
+    # ------------------------------------------------------------------
+    # For each directed pair (i→j), collect per-lag status
+    edge_info = {}  # (i,j) -> list of (lag, status)
+    for i in range(N):
+        for j in range(N):
+            if i == j:
+                continue
+            lags_tp, lags_fp, lags_fn = [], [], []
+            for tau in range(0 if i != j else 1, tau_max + 1):
+                if tau == 0 and i == j:
+                    continue
+                in_gt = gt[i, j, tau]
+                in_disc = disc[i, j, tau]
+                if in_gt and in_disc:
+                    lags_tp.append(tau)
+                elif in_disc and not in_gt:
+                    lags_fp.append(tau)
+                elif in_gt and not in_disc and not covered[i, j, tau]:
+                    lags_fn.append(tau)
+            if lags_tp or lags_fp or lags_fn:
+                edge_info[(i, j)] = (lags_tp, lags_fp, lags_fn)
+
+    # ------------------------------------------------------------------
     # Compute positions
     # ------------------------------------------------------------------
     if node_pos is not None:
         pos = {i: (node_pos["x"][i], node_pos["y"][i]) for i in range(N)}
+    elif isinstance(node_layout, str) and node_layout.lower().strip() == "auto":
+        from ._layout_search import auto_layout
+
+        # Score exactly the strokes drawn below, with the radii they get.
+        planned = {}
+        arcs = [
+            (i, j, _next_radius(planned, i, j, curved_radius))
+            for i, j in _stroke_plan(edge_info, adj_correct, adj_spurious)
+        ]
+        pos = auto_layout(G, seed=42, node_size=node_size, arcs=arcs)
     else:
         pos = compute_node_positions(G, layout=node_layout, seed=42)
 
     # ------------------------------------------------------------------
     # Set up figure
     # ------------------------------------------------------------------
+    own_figure = fig_ax is None
     if fig_ax is None:
         fig = plt.figure(figsize=figsize)
         ax = fig.add_subplot(111, frame_on=False)
@@ -371,69 +591,6 @@ def compare_graphs(
         )
 
     # ------------------------------------------------------------------
-    # Classify adjacency claims and the true edges they cover
-    # ------------------------------------------------------------------
-    # Lag-0 adjacencies are canonical (upper triangle, counted once). A
-    # correct adjacency covers the true directed edge, so it is not also
-    # reported as missed.
-    adj_correct = {}  # (i, j) -> lags
-    adj_spurious = {}
-    covered = np.zeros(gt.shape, dtype=bool)
-    for i in range(N):
-        for j in range(N):
-            for tau in range(tau_max + 1):
-                if not adjacency[i, j, tau]:
-                    continue
-                if tau == 0:
-                    a, b = (i, j) if i < j else (j, i)
-                    already_directed = disc[a, b, 0] or disc[b, a, 0]
-                    is_true = gt[a, b, 0] or gt[b, a, 0]
-                else:
-                    a, b = i, j
-                    already_directed = disc[a, b, tau]
-                    is_true = gt[a, b, tau]
-                if is_true:
-                    # A correct adjacency covers the true directed edge even
-                    # when a directed claim is also present, so it is not
-                    # reported as missed.
-                    if tau == 0:
-                        covered[a, b, 0] = covered[b, a, 0] = True
-                    else:
-                        covered[a, b, tau] = True
-                if already_directed or a == b:
-                    # A directed claim at the same pair already draws it, and
-                    # self-links are not drawn (as for directed edges).
-                    continue
-                if is_true:
-                    adj_correct.setdefault((a, b), []).append(tau)
-                else:
-                    adj_spurious.setdefault((a, b), []).append(tau)
-
-    # ------------------------------------------------------------------
-    # Classify edges per (i, j) pair
-    # ------------------------------------------------------------------
-    # For each directed pair (i→j), collect per-lag status
-    edge_info = {}  # (i,j) -> list of (lag, status)
-    for i in range(N):
-        for j in range(N):
-            if i == j:
-                continue
-            lags_tp, lags_fp, lags_fn = [], [], []
-            for tau in range(0 if i != j else 1, tau_max + 1):
-                if tau == 0 and i == j:
-                    continue
-                in_gt = gt[i, j, tau]
-                in_disc = disc[i, j, tau]
-                if in_gt and in_disc:
-                    lags_tp.append(tau)
-                elif in_disc and not in_gt:
-                    lags_fp.append(tau)
-                elif in_gt and not in_disc and not covered[i, j, tau]:
-                    lags_fn.append(tau)
-            if lags_tp or lags_fp or lags_fn:
-                edge_info[(i, j)] = (lags_tp, lags_fp, lags_fn)
-
-    # ------------------------------------------------------------------
     # Draw edges
     # ------------------------------------------------------------------
     seen = {}  # (i,j) -> list of rad values already used
@@ -445,20 +602,7 @@ def compare_graphs(
         coor1 = n1.center
         coor2 = n2.center
 
-        key = (i, j)
-        rev_key = (j, i)
-
-        # arc3 radii are relative to the direction of travel, so a reverse
-        # arc with radius r occupies the same physical path as -r here.
-        occupied = list(seen.get(key, [])) + [-u for u in seen.get(rev_key, [])]
-        step = np.sign(curved_radius) or 1.0
-        candidates = [curved_radius, -curved_radius]
-        for k in range(1, len(occupied) + 2):
-            r = curved_radius + step * 0.15 * k
-            candidates += [r, -r]
-        rad = next(r for r in candidates if all(abs(r - u) >= 0.05 for u in occupied))
-
-        seen.setdefault(key, []).append(rad)
+        rad = _next_radius(seen, i, j, curved_radius)
 
         arrowstyle = (
             "Simple, head_width=2, head_length=2, tail_width=1" if arrow else "-"
@@ -485,14 +629,27 @@ def compare_graphs(
             capstyle="butt",
         )
         ax.add_artist(e_p)
+        if legend_below:
+            # Edges are added with add_artist, so autoscaling ignores them. Add
+            # the arc's extreme points so a curve bulging past the nodes stays
+            # clear of the legend under the axes. Only here: other plots keep
+            # node-only limits, so panels sharing node_pos share their scale.
+            p0, p2 = np.asarray(coor1, float), np.asarray(coor2, float)
+            d = p2 - p0
+            p1 = (p0 + p2) / 2 + rad * np.array([d[1], -d[0]])
+            denom = p0 - 2 * p1 + p2
+            with np.errstate(divide="ignore", invalid="ignore"):
+                t_ext = np.where(denom != 0, (p0 - p1) / denom, -1.0)
+            extremes = [
+                (1 - t) ** 2 * p0 + 2 * (1 - t) * t * p1 + t**2 * p2
+                for t in t_ext
+                if 0 < t < 1
+            ]
+            if extremes:
+                ax.update_datalim(extremes)
 
         # Draw label at midpoint of the edge
         if label_text and link_label_fontsize > 0:
-            # Pick label color to contrast with the axes background
-            bg = ax.get_facecolor()  # RGBA tuple
-            luminance = 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]
-            text_color = "black" if luminance > 0.5 else "white"
-
             # Use an invisible marker arrow to find the midpoint
             e_marker = FancyArrowPatch(
                 coor1,
@@ -525,21 +682,27 @@ def compare_graphs(
             else:
                 mid = ctrl_mid
 
-            stroke_color = "white" if text_color == "black" else "black"
-            txt = ax.text(
-                mid[0],
-                mid[1],
-                label_text,
-                fontsize=link_label_fontsize,
-                verticalalignment="center",
-                horizontalalignment="center",
-                color=text_color,
-                fontweight="bold",
-                zorder=3,
-            )
-            txt.set_path_effects(
-                [PathEffects.withStroke(linewidth=3, foreground=stroke_color)]
-            )
+            _draw_label(ax, mid, label_text)
+
+    def _draw_label(ax, xy, label_text):
+        bg = ax.get_facecolor()  # RGBA tuple
+        luminance = 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]
+        text_color = "black" if luminance > 0.5 else "white"
+        stroke_color = "white" if text_color == "black" else "black"
+        txt = ax.text(
+            xy[0],
+            xy[1],
+            label_text,
+            fontsize=link_label_fontsize,
+            verticalalignment="center",
+            horizontalalignment="center",
+            color=text_color,
+            fontweight="bold",
+            zorder=3,
+        )
+        txt.set_path_effects(
+            [PathEffects.withStroke(linewidth=3, foreground=stroke_color)]
+        )
 
     for (i, j), (lags_tp, lags_fp, lags_fn) in edge_info.items():
         # Build label and decide color
@@ -617,6 +780,47 @@ def compare_graphs(
             arrow=False,
         )
 
+    if show_self_loops:
+        # Reserve the loop envelope around every node, drawn or not, so the
+        # limits depend only on the layout and panels sharing node_pos keep
+        # one scale. A loop's control points reach r + 1.3 * node_size, and
+        # its label sits a little past the apex.
+        pad = node_size * (0.5 + 1.3 + 0.35)
+        ax.update_datalim(
+            [
+                (x + dx, y + dy)
+                for x, y in pos.values()
+                for dx, dy in ((pad, 0), (-pad, 0), (0, pad), (0, -pad))
+            ]
+        )
+        loop_lw = self_loop_linewidth
+        if loop_lw is None:
+            loop_lw = fn_linewidth
+        _draw_self_loops(
+            ax,
+            gt,
+            disc,
+            self_adj_correct,
+            self_adj_spurious,
+            pos,
+            node_size,
+            edges=[(a, b, r) for (a, b), rads in seen.items() for r in rads],
+            styles={
+                "tp": (tp_color, "solid", loop_lw),
+                "fp": (
+                    fp_color,
+                    fp_style,
+                    loop_lw
+                    * (fp_linewidth / arrow_linewidth if arrow_linewidth else 1.0),
+                ),
+                "fn": (fn_color, fn_style, min(fn_linewidth, loop_lw)),
+                "adj": (adjacency_color, "solid", loop_lw),
+            },
+            draw_label=_draw_label if link_label_fontsize > 0 else None,
+        )
+
+    if show_self_loops or legend_below:
+        ax.autoscale_view()
     ax.set_aspect("equal")
 
     # ------------------------------------------------------------------
@@ -638,7 +842,7 @@ def compare_graphs(
                 label="FN (missed)",
             ),
         ]
-        if adj_correct:
+        if adj_correct or (show_self_loops and self_adj_correct):
             legend_handles.append(
                 mpatches.Patch(
                     facecolor=adjacency_color,
@@ -646,13 +850,46 @@ def compare_graphs(
                     label="Adjacency (correct, unoriented)",
                 )
             )
-        ax.legend(
+        placement = {"loc": legend_loc}
+        if legend_below:
+            placement = {
+                "loc": "upper center",
+                "bbox_to_anchor": (0.5, 0.0),
+                "ncol": 2,
+            }
+        legend = ax.legend(
             handles=legend_handles,
-            loc=legend_loc,
+            **placement,
             fontsize=legend_fontsize,
             framealpha=legend_framealpha,
             markerscale=legend_markerscale,
         )
+        if legend_below:
+            # Two columns only if they fit this panel's width; else stack them.
+            # get_window_extent() without a renderer works on every backend;
+            # apply_aspect() first so the width is the box actually drawn.
+            ax.apply_aspect()
+            if legend.get_window_extent().width > ax.get_window_extent().width:
+                placement["ncol"] = 1
+                ax.legend(
+                    handles=legend_handles,
+                    **placement,
+                    fontsize=legend_fontsize,
+                    framealpha=legend_framealpha,
+                    markerscale=legend_markerscale,
+                )
+        if legend_below and own_figure:
+            # The legend sits outside the axes; raise the bottom margin until
+            # it fits. Measure after apply_aspect(): the equal-aspect box, not
+            # the subplot slot, is what the legend hangs from.
+            pad = 4  # pixels
+            for _ in range(4):
+                ax.apply_aspect()
+                short = (pad - ax.get_legend().get_window_extent().y0) / fig.bbox.height
+                if short <= 0:
+                    break
+                sp = fig.subplotpars
+                fig.subplots_adjust(bottom=min(sp.bottom + short, sp.top - 0.05))
 
     # ------------------------------------------------------------------
     # Return

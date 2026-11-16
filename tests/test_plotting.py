@@ -735,6 +735,703 @@ def test_plot_lag_metrics_adjacency_rows_do_not_depend_on_the_graph():
     plt.close("all")
 
 
+def _self_loop_graphs():
+    gt = np.zeros((2, 2, 3), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    gt[0, 0, 1] = 1  # missed
+    gt[1, 1, 1] = 1  # found
+    disc = _mark_graph([(0, 1, 0, "-->"), (1, 1, 1, "-->"), (1, 1, 2, "-->")], n_lags=3)
+    return gt, disc
+
+
+def test_compare_graphs_self_loops_off_by_default():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import compare_graphs
+
+    gt, disc = _self_loop_graphs()
+    _, ax = compare_graphs(gt, disc)
+    assert not _loop_patches(ax)
+    plt.close("all")
+
+
+def _loop_patches(ax):
+    return [a for a in ax.get_children() if a.get_gid() == "self-loop"]
+
+
+def test_compare_graphs_self_loops_colour_and_label_by_status():
+    import matplotlib.colors as mcolors
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import compare_graphs
+
+    gt, disc = _self_loop_graphs()
+    _, ax = compare_graphs(gt, disc, show_self_loops=True, node_layout="circular")
+    colours = sorted(mcolors.to_hex(a.get_edgecolor()) for a in _loop_patches(ax))
+    # Missed X(t-1) -> X(t) and the found / spurious Y self-links.
+    assert colours == sorted([mcolors.to_hex("red"), mcolors.to_hex("green")])
+    texts = {t.get_text() for t in ax.texts}
+    assert {"1", "1\u2713,2\u2717"} <= texts
+    plt.close("all")
+
+
+def test_compare_graphs_self_loop_points_away_from_the_edges():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import compare_graphs
+
+    gt = np.zeros((2, 2, 2), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    gt[0, 0, 1] = 1
+    node_pos = {"x": np.array([0.0, 1.0]), "y": np.array([0.0, 0.0])}
+    _, ax = compare_graphs(
+        gt, gt, show_self_loops=True, node_pos=node_pos, show_legend=False
+    )
+    labels = [t for t in ax.texts if t.get_text() == "1"]
+    # The 0 -> 1 edge goes right, so node 0's loop label sits to its left.
+    assert any(t.get_position()[0] < 0 for t in labels)
+    plt.close("all")
+
+
+def test_compare_graphs_adjacency_self_loop_has_no_arrowhead():
+    import matplotlib.colors as mcolors
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import compare_graphs
+
+    gt = np.zeros((2, 2, 2), dtype=np.int8)
+    gt[0, 0, 1] = 1
+    disc = _mark_graph([(0, 0, 1, "o-o")], n_lags=2)
+    _, ax = compare_graphs(gt, disc, undirected="adjacency", show_self_loops=True)
+    loops = _loop_patches(ax)
+    assert len(loops) == 1
+    assert type(loops[0].get_arrowstyle()).__name__ == "Curve"
+    assert mcolors.to_hex(loops[0].get_edgecolor()) == mcolors.to_hex("tab:blue")
+    labels = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert "Adjacency (correct, unoriented)" in labels
+    plt.close("all")
+
+
+def test_compare_graphs_self_loop_avoids_curved_edges():
+    from causalts.plotting.compare import _self_loop_angle
+
+    # Six edges from node 0, evenly spaced: every chord gap is 60 degrees,
+    # but the arcs leave rotated by the curvature, so the free gap moves.
+    angles = np.deg2rad(np.arange(6) * 60)
+    pos = {
+        0: (0.0, 0.0),
+        **{k + 1: (np.cos(a), np.sin(a)) for k, a in enumerate(angles)},
+    }
+    edges = [(0, k, 0.2) for k in range(1, 7)]
+    centre, _ = _self_loop_angle(0, pos, edges)
+    tangents = []
+    for _, k, rad in edges:
+        xb, yb = pos[k]
+        tangents.append(np.arctan2(-rad * xb + yb / 2, xb / 2 + rad * yb))
+    gap = min(abs(np.angle(np.exp(1j * (centre - t)))) for t in tangents)
+    assert np.isclose(gap, np.deg2rad(30))
+
+
+def test_compare_graphs_legend_below_fits_in_the_figure():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import compare_graphs
+
+    gt = np.zeros((3, 3, 1), dtype=np.int8)
+    gt[0, 1, 0] = gt[1, 2, 0] = 1
+    fig, ax = compare_graphs(
+        gt, gt, legend_loc="below", node_layout="circular", figsize=(4, 3)
+    )
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    legend_box = ax.get_legend().get_window_extent(renderer)
+    assert legend_box.y1 <= ax.get_window_extent(renderer).y0 + 1
+    assert legend_box.y0 >= 0
+    plt.close("all")
+
+
+def test_compare_graphs_legend_below_clears_a_bulging_edge():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import compare_graphs
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[1, 0, 0] = 1
+    fig, ax = compare_graphs(gt, gt, node_layout="circular", legend_loc="below")
+    _assert_edges_clear_legend(fig, ax)
+    plt.close("all")
+
+    # A sloped, strongly curved edge whose lowest point is off its midpoint.
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    node_pos = {"x": np.array([0.0, 2.0]), "y": np.array([0.0, 1.7])}
+    fig, ax = compare_graphs(
+        gt, gt, node_pos=node_pos, curved_radius=1, figsize=(6, 6), legend_loc="below"
+    )
+    _assert_edges_clear_legend(fig, ax)
+    plt.close("all")
+
+
+def _assert_edges_clear_legend(fig, ax):
+    from matplotlib.patches import FancyArrowPatch
+
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    legend_top = ax.get_legend().get_window_extent(renderer).y1
+    for a in ax.get_children():
+        if isinstance(a, FancyArrowPatch) and a.get_alpha() != 0:
+            assert a.get_window_extent(renderer).y0 >= legend_top - 1
+
+
+@pytest.mark.parametrize(
+    "kwargs, expected", [({}, 1.2), ({"self_loop_linewidth": 1.5}, 1.5)]
+)
+def test_compare_graphs_self_loop_linewidth(kwargs, expected):
+    import matplotlib.colors as mcolors
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import compare_graphs
+
+    gt, disc = _self_loop_graphs()
+    _, ax = compare_graphs(gt, disc, show_self_loops=True, **kwargs)
+    widths = {
+        mcolors.to_hex(a.get_edgecolor()): a.get_linewidth() for a in _loop_patches(ax)
+    }
+    # Default arrow_linewidth=3: loops use the FN width, 0.4 * 3 = 1.2.
+    assert widths[mcolors.to_hex("green")] == pytest.approx(expected)
+    assert widths[mcolors.to_hex("red")] == pytest.approx(min(1.2, expected))
+    plt.close("all")
+
+
+def test_compare_graphs_self_loops_with_zero_edge_width():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import compare_graphs
+
+    gt, disc = _self_loop_graphs()
+    _, ax = compare_graphs(
+        gt, disc, show_self_loops=True, arrow_linewidth=0, self_loop_linewidth=2
+    )
+    assert _loop_patches(ax)
+    plt.close("all")
+
+
+@pytest.mark.parametrize("show_self_loops", [False, True])
+def test_compare_graphs_default_limits_depend_on_nodes_only(show_self_loops):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import compare_graphs
+
+    # Panels sharing node_pos must share their framing, whatever edges they draw.
+    node_pos = {"x": np.array([0.0, 1.0, 0.5]), "y": np.array([0.0, 0.0, 0.8])}
+    sparse = np.zeros((3, 3, 1), dtype=np.int8)
+    sparse[0, 2, 0] = 1
+    dense = sparse.copy()
+    dense[0, 1, 0] = dense[1, 0, 0] = 1
+    dense = np.concatenate([dense, np.zeros_like(dense)], axis=2)
+    dense[0, 0, 1] = dense[2, 2, 1] = 1  # self-loops only in this panel
+    sparse = np.concatenate([sparse, np.zeros_like(sparse)], axis=2)
+    limits = []
+    for graph in (sparse, dense):
+        fig, ax = compare_graphs(
+            sparse,
+            graph,
+            node_pos=node_pos,
+            curved_radius=0.5,
+            show_self_loops=show_self_loops,
+        )
+        fig.canvas.draw()
+        limits.append((ax.get_xlim(), ax.get_ylim()))
+        plt.close("all")
+    np.testing.assert_allclose(limits[0], limits[1])
+
+
+def test_compare_graphs_legend_below_fits_a_narrow_figure():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import compare_graphs
+
+    # An adjacency entry makes the legend wide; a 4-inch figure cannot hold
+    # two columns, so it must stack them rather than clip.
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    fig, ax = compare_graphs(
+        gt,
+        _oo_pair(),
+        undirected="adjacency",
+        legend_loc="below",
+        figsize=(4, 3),
+        legend_fontsize=10,
+    )
+    fig.canvas.draw()
+    box = ax.get_legend().get_window_extent(fig.canvas.get_renderer())
+    assert box.x0 >= 0 and box.x1 <= fig.bbox.width
+    assert box.y0 >= 0
+    plt.close("all")
+
+
+@pytest.mark.parametrize("backend", ["pdf", "svg"])
+def test_compare_graphs_legend_below_on_vector_backends(backend, tmp_path):
+    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
+
+    from causalts.plotting import compare_graphs
+
+    gt, disc = _self_loop_graphs()
+    fig = Figure()
+    if backend == "pdf":
+        from matplotlib.backends.backend_pdf import FigureCanvasPdf as Canvas
+    else:
+        from matplotlib.backends.backend_svg import FigureCanvasSVG as Canvas
+    Canvas(fig)
+    ax = fig.add_subplot(111)
+    compare_graphs(gt, disc, legend_loc="below", fig_ax=(fig, ax))
+    fig.savefig(tmp_path / f"out.{backend}")
+    plt.close("all")
+
+
+def test_compare_graphs_legend_below_fits_each_panel():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import compare_graphs
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    fig, axes = plt.subplots(1, 2, figsize=(8, 3))
+    for ax in axes:
+        compare_graphs(
+            gt,
+            _oo_pair(),
+            undirected="adjacency",
+            legend_loc="below",
+            legend_fontsize=10,
+            fig_ax=(fig, ax),
+        )
+    fig.canvas.draw()
+    left, right = (ax.get_legend().get_window_extent() for ax in axes)
+    assert left.x1 <= right.x0
+    plt.close("all")
+
+
+@pytest.mark.parametrize("legend_loc", ["below", "bottom"])
+@pytest.mark.parametrize("figsize", [(12, 3), (10, 2), (4, 3), (3, 6)])
+def test_compare_graphs_legend_below_stays_on_the_canvas(figsize, legend_loc):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import compare_graphs
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    fig, ax = compare_graphs(
+        gt, gt, node_layout="circular", figsize=figsize, legend_loc=legend_loc
+    )
+    fig.canvas.draw()
+    box = ax.get_legend().get_window_extent()
+    assert box.y0 >= 0 and box.x0 >= 0 and box.x1 <= fig.bbox.width
+    plt.close("all")
+
+
+def _plot_graph_with_self_links():
+    graph = np.full((3, 3, 3), "", dtype="<U3")
+    graph[0, 1, 1] = "-->"
+    graph[1, 2, 0], graph[2, 1, 0] = "-->", "<--"
+    graph[0, 0, 1] = graph[0, 0, 2] = "-->"  # node 0: lags 1 and 2
+    graph[2, 2, 1] = "-->"
+    val = np.zeros(graph.shape)
+    val[graph != ""] = 0.5
+    val[0, 0, 2] = 0.9
+    return graph, val
+
+
+def test_plot_graph_self_loops_off_by_default():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph
+
+    graph, val = _plot_graph_with_self_links()
+    fig, ax = plot_graph(graph=graph, val_matrix=val)
+    assert not _loop_patches(ax)
+    plt.close("all")
+
+
+def test_plot_graph_self_loops():
+    import matplotlib.colors as mcolors
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph
+
+    graph, val = _plot_graph_with_self_links()
+    fig, ax = plot_graph(
+        graph=graph, val_matrix=val, show_self_loops=True, arrow_linewidth=3
+    )
+    loops = _loop_patches(ax)
+    assert len(loops) == 2  # nodes 0 and 2
+    assert all(a.get_linewidth() == pytest.approx(1.2) for a in loops)
+    texts = {t.get_text() for t in ax.texts}
+    assert {"2,1", "1"} <= texts  # strongest lag first, as link labels
+    # coloured with the link colour map at the strongest lag (0.9 vs 0.5)
+    colours = {mcolors.to_hex(a.get_edgecolor()) for a in loops}
+    assert len(colours) == 2
+    plt.close("all")
+
+
+def test_plot_graph_self_loop_linewidth():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph
+
+    graph, val = _plot_graph_with_self_links()
+    fig, ax = plot_graph(
+        graph=graph, val_matrix=val, show_self_loops=True, self_loop_linewidth=2.5
+    )
+    assert all(a.get_linewidth() == 2.5 for a in _loop_patches(ax))
+    plt.close("all")
+
+
+def test_plot_graph_self_loop_on_a_single_node():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph
+
+    graph = np.full((1, 1, 3), "", dtype="<U3")
+    graph[0, 0, 1] = "-->"
+    val = np.zeros(graph.shape)
+    val[0, 0, 1] = 0.7
+    fig, ax = plot_graph(graph=graph, val_matrix=val, show_self_loops=True)
+    assert len(_loop_patches(ax)) == 1
+    plt.close("all")
+
+
+def test_plot_graph_self_loops_join_the_link_colour_scale():
+    import matplotlib.colors as mcolors
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph
+
+    # cross-links 0.1-0.2, loops 0.8 and 0.9: loops must not share a colour
+    graph = np.full((3, 3, 2), "", dtype="<U3")
+    graph[0, 1, 1], graph[1, 2, 1] = "-->", "-->"
+    graph[0, 0, 1] = graph[2, 2, 1] = "-->"
+    val = np.zeros(graph.shape)
+    val[0, 1, 1], val[1, 2, 1], val[0, 0, 1], val[2, 2, 1] = 0.1, 0.2, 0.8, 0.9
+    fig, ax = plot_graph(
+        graph=graph,
+        val_matrix=val,
+        show_self_loops=True,
+        vmin_edges=None,
+        vmax_edges=None,
+    )
+    assert len({mcolors.to_hex(a.get_edgecolor()) for a in _loop_patches(ax)}) == 2
+    plt.close("all")
+
+
+def test_plot_graph_self_loop_labels_use_lag_array():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph
+
+    graph, val = _plot_graph_with_self_links()
+    fig, ax = plot_graph(
+        graph=graph, val_matrix=val, show_self_loops=True, lag_array=[0, 10, 20]
+    )
+    texts = {t.get_text() for t in ax.texts}
+    assert "20,10" in texts
+    plt.close("all")
+
+
+def test_plot_graph_self_loops_follow_the_node_transform():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph
+
+    graph, val = _plot_graph_with_self_links()
+    fig, ax = plt.subplots()
+    node_pos = {
+        "x": np.array([0.2, 0.5, 0.8]),
+        "y": np.array([0.5, 0.8, 0.5]),
+        "transform": ax.transAxes,
+    }
+    plot_graph(
+        graph=graph,
+        val_matrix=val,
+        show_self_loops=True,
+        node_pos=node_pos,
+        fig_ax=(fig, ax),
+    )
+    assert all(a.get_transform() == ax.transAxes for a in _loop_patches(ax))
+    plt.close("all")
+
+
+def test_plot_graph_self_loop_ties_list_the_higher_lag_first():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph
+
+    graph = np.full((2, 2, 3), "", dtype="<U3")
+    graph[0, 1, 1] = graph[0, 0, 1] = graph[0, 0, 2] = "-->"
+    _, ax = plot_graph(graph=graph, show_self_loops=True)  # all values tie
+    assert "2,1" in {t.get_text() for t in ax.texts}
+    plt.close("all")
+
+
+def test_plot_graph_spurious_self_loop_is_grey():
+    import matplotlib.colors as mcolors
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph
+
+    graph, val = _plot_graph_with_self_links()
+    attribute = np.full(graph.shape, "", dtype=object)
+    attribute[0, 0, 2] = "spurious"  # the strongest lag of node 0
+    _, ax = plot_graph(
+        graph=graph, val_matrix=val, show_self_loops=True, link_attribute=attribute
+    )
+    colours = {mcolors.to_hex(a.get_edgecolor()) for a in _loop_patches(ax)}
+    assert mcolors.to_hex("grey") in colours
+    plt.close("all")
+
+
+@pytest.mark.parametrize("self_links", [False, True])
+def test_plot_graph_without_cross_links_and_a_val_matrix(self_links):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph, plot_time_series_graph
+
+    graph = np.full((3, 3, 2), "", dtype="<U3")
+    if self_links:
+        graph[0, 0, 1] = "-->"
+    val = np.where(graph != "", 0.5, 0.0)
+    plot_graph(graph=graph, val_matrix=val)
+    plot_time_series_graph(graph=graph, val_matrix=val)
+    plt.close("all")
+
+
+def test_plot_graph_spurious_target_self_loop_stays_grey():
+    import matplotlib.colors as mcolors
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph
+
+    graph, val = _plot_graph_with_self_links()
+    attribute = np.full(graph.shape, "", dtype=object)
+    attribute[0, 0, 2] = "spurious"
+    _, ax = plot_graph(
+        graph=graph,
+        val_matrix=val,
+        show_self_loops=True,
+        link_attribute=attribute,
+        target_node=0,
+    )
+    colours = {mcolors.to_hex(a.get_edgecolor()) for a in _loop_patches(ax)}
+    assert mcolors.to_hex("grey") in colours
+    plt.close("all")
+
+
+def test_plot_graph_new_options_come_after_return_pos():
+    import inspect
+
+    from causalts.plotting import plot_graph
+
+    names = list(inspect.signature(plot_graph).parameters)
+    assert names.index("return_pos") < names.index("show_self_loops")
+    assert names.index("title") < names.index("show_self_loops")
+
+
+def test_plot_graph_loop_only_colour_scale_ignores_the_placeholder():
+    import matplotlib.colors as mcolors
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph
+
+    graph = np.full((2, 2, 2), "", dtype="<U3")
+    graph[0, 0, 1] = graph[1, 1, 1] = "-->"
+    val = np.zeros(graph.shape)
+    val[0, 0, 1], val[1, 1, 1] = 0.8, 0.9
+    _, ax = plot_graph(
+        graph=graph,
+        val_matrix=val,
+        show_self_loops=True,
+        vmin_edges=None,
+        vmax_edges=None,
+        cmap_edges="viridis",
+    )
+    colours = {mcolors.to_hex(a.get_edgecolor()) for a in _loop_patches(ax)}
+    ends = {mcolors.to_hex(plt.get_cmap("viridis")(x)) for x in (0.0, 1.0)}
+    assert colours == ends  # 0.8 and 0.9 span the whole scale
+    plt.close("all")
+
+
+def test_elliptical_loop_endpoints_keep_their_angles():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting._self_loops import draw_loops
+
+    fig, ax = plt.subplots()
+    centre, width = np.deg2rad(60), np.deg2rad(80)  # gap 20-100 degrees
+    draw_loops(
+        ax,
+        (0, 0),
+        0.2,
+        (centre, width),
+        [("k", "solid", 1, "", True, 0)],
+        node_width=0.8,
+    )
+    (loop,) = [a for a in ax.get_children() if a.get_gid() == "self-loop"]
+    v = loop._path_original.vertices  # the loop as given, not the arrow outline
+    for x, y in (v[0], v[-1]):
+        angle = np.degrees(np.arctan2(y, x))
+        assert 20 < angle < 100
+    plt.close("all")
+
+
+def test_loop_on_a_wide_node_clears_the_node():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting._self_loops import draw_loops
+
+    fig, ax = plt.subplots()
+    # pointing right out of a node 0.8 wide: the loop must reach past x=0.4
+    draw_loops(
+        ax,
+        (0, 0),
+        0.2,
+        (0.0, 2 * np.pi),
+        [("k", "solid", 1, "", True, 0)],
+        node_width=0.8,
+    )
+    (loop,) = [a for a in ax.get_children() if a.get_gid() == "self-loop"]
+    p0, c1, c2, p3 = loop._path_original.vertices
+    apex = (p0 + 3 * c1 + 3 * c2 + p3) / 8
+    assert apex[0] > 0.4
+    plt.close("all")
+
+
+def test_self_loops_start_on_an_elliptical_node():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting._self_loops import draw_loops
+
+    fig, ax = plt.subplots()
+    # loop pointing right, out of a node 0.8 wide and 0.2 tall at the origin
+    draw_loops(
+        ax,
+        (0, 0),
+        0.2,
+        (0.0, 2 * np.pi),
+        [("k", "solid", 1, "", True, 0)],
+        node_width=0.8,
+    )
+    (loop,) = [a for a in ax.get_children() if a.get_gid() == "self-loop"]
+    x, y = loop.get_path().vertices[0]
+    assert (x / 0.4) ** 2 + (y / 0.1) ** 2 == pytest.approx(1.0)
+    plt.close("all")
+
+
+@pytest.mark.parametrize(
+    "mark, head", [("o-o", "Curve"), ("<->", "CurveFilledAB"), ("-->", "CurveFilledB")]
+)
+def test_plot_graph_self_loops_keep_the_mark(mark, head):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph
+
+    graph = np.full((2, 2, 2), "", dtype="<U3")
+    graph[0, 1, 1] = "-->"
+    graph[0, 0, 1] = mark
+    (loop,) = _loop_patches(plot_graph(graph=graph, show_self_loops=True)[1])
+    assert type(loop.get_arrowstyle()).__name__ == head
+    plt.close("all")
+
+
+def test_plot_graph_self_loop_on_a_target_uses_the_target_colour():
+    import matplotlib.colors as mcolors
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph
+
+    graph, val = _plot_graph_with_self_links()
+    _, ax = plot_graph(
+        graph=graph,
+        val_matrix=val,
+        show_self_loops=True,
+        target_node=0,
+        target_between_color="#9C27B0",
+    )
+    colours = {mcolors.to_hex(a.get_edgecolor()) for a in _loop_patches(ax)}
+    assert "#9c27b0" in colours
+    plt.close("all")
+
+
+def test_plot_graph_self_loops_follow_alpha():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph
+
+    graph, val = _plot_graph_with_self_links()
+    _, ax = plot_graph(graph=graph, val_matrix=val, show_self_loops=True, alpha=0.15)
+    assert all(a.get_alpha() == 0.15 for a in _loop_patches(ax))
+    plt.close("all")
+
+
+@pytest.mark.parametrize(
+    "mark, ends",
+    [("o->", ["o"]), ("x-x", ["x", "x"]), ("o-o", ["o", "o"]), ("-->", [])],
+)
+def test_plot_graph_self_loops_draw_endpoint_symbols(mark, ends):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph
+
+    graph = np.full((2, 2, 2), "", dtype="<U3")
+    graph[0, 1, 1] = "-->"
+    graph[0, 0, 1] = mark
+    _, ax = plot_graph(graph=graph, show_self_loops=True)
+    symbols = sorted(
+        line.get_marker()
+        for line in ax.get_lines()
+        if line.get_gid() == "self-loop-end"
+    )
+    assert symbols == sorted(ends)
+    plt.close("all")
+
+
+def test_plot_graph_loop_space_reserved_without_loops():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_graph
+
+    with_loop, val = _plot_graph_with_self_links()
+    without = with_loop.copy()
+    for i in range(3):
+        without[i, i, :] = ""
+    node_pos = {"x": np.array([0.0, 1.0, 0.5]), "y": np.array([0.0, 0.0, 0.8])}
+    limits = []
+    for graph in (with_loop, without):
+        fig, ax = plot_graph(graph=graph, node_pos=node_pos, show_self_loops=True)
+        fig.canvas.draw()
+        limits.append((ax.get_xlim(), ax.get_ylim()))
+        plt.close("all")
+    np.testing.assert_allclose(limits[0], limits[1])
+
+
+def test_compare_graphs_loops_keep_colour_transparency():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import compare_graphs
+
+    gt, disc = _self_loop_graphs()
+    _, ax = compare_graphs(gt, disc, show_self_loops=True, tp_color="#00800040")
+    greens = [
+        a
+        for a in _loop_patches(ax)
+        if a.get_edgecolor()[:3] == pytest.approx((0, 0.502, 0), abs=0.01)
+    ]
+    assert greens and all(
+        a.get_edgecolor()[3] == pytest.approx(0.25, abs=0.01) for a in greens
+    )
+    plt.close("all")
+
+
 def test_compare_functions_reject_invalid_policy():
     from causalts.plotting import (
         compare_graphs,

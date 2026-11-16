@@ -67,9 +67,10 @@ print(f"P-value matrix shape: {result.pvalue_matrix.shape}")
 tp.plot_graph(gt1, var_names=names1, figsize=(4, 4), title="Ground Truth");
 
 # %%
-# Built-in Networkx layout algorithms
-layouts = ["circular", "spring", "kamada_kawai", "shell", "spectral"]
-fig, axes = plt.subplots(1, 5, figsize=(12, 4))
+# Built-in layout algorithms (no Graphviz needed). 'auto' is edge-aware:
+# it moves nodes to cut edge crossings and keep edges clear of other nodes.
+layouts = ["circular", "spring", "kamada_kawai", "shell", "spectral", "auto"]
+fig, axes = plt.subplots(2, 3, figsize=(10, 7))
 for ax, layout in zip(axes.flat, layouts):
     tp.plot_graph(
         gt1, var_names=names1, fig_ax=(fig, ax),
@@ -102,6 +103,32 @@ if shutil.which("neato"):
 else:
     print("Graphviz not found — skipping neato/fdp/sfdp layouts.")
     print("Install with: brew install graphviz && pip install pygraphviz")
+
+# %% [markdown]
+# ### Edge-aware layout: `node_layout="auto"`
+#
+# Stress layouts such as `neato` place nodes by graph distance and never look at the edges as drawn, so an edge can run through a node it does not touch. `"auto"` starts from neato (when Graphviz is installed), Kamada-Kawai and a few spring layouts, then moves nodes to cut crossings and keep every curved edge clear of other nodes. It works without Graphviz, and `compare_graphs` accepts it too. It is slower than a single layout: well under a second for small graphs, about a second at 40 variables.
+
+# %%
+from causalts.synthetic_data.synthetic_datasets import SCPGraphGenerator
+
+# A denser 10-variable graph, where neato draws edges through other nodes
+gt_dense = SCPGraphGenerator(n_vars=10, max_lag=2, density="dense").sample(
+    seed=7, T=200
+)["ground_truth"]
+
+# Compare against neato when Graphviz is installed, else Kamada-Kawai
+baseline = "neato" if shutil.which("neato") else "kamada_kawai"
+
+fig, axes = plt.subplots(1, 2, figsize=(11, 5.5))
+for ax, layout in zip(axes, [baseline, "auto"]):
+    tp.plot_graph(
+        gt_dense, fig_ax=(fig, ax), node_layout=layout,
+        node_size=0.13, arrow_linewidth=2.5, show_colorbar=False,
+    )
+    ax.set_title(f'node_layout="{layout}"')
+plt.tight_layout()
+plt.show()
 
 # %% [markdown]
 # ### Position reuse with `return_pos`
@@ -275,7 +302,7 @@ plt.show()
 
 # %%
 # Full 11-variable cascade network
-tp.plot_graph(gt3, var_names=names3, figsize=(6, 6), show_colorbar=False)
+tp.plot_graph(gt3, var_names=names3, figsize=(6, 6), node_layout="auto", show_colorbar=False)
 plt.title(f"ex3: Full {len(names3)}-variable graph")
 plt.show()
 
@@ -349,6 +376,25 @@ tp.compare_graphs(
     show_legend=True, legend_loc="best",
 )
 plt.title("Custom comparison colors")
+plt.show()
+
+# %% [markdown]
+# ### Self-links: `show_self_loops=True`
+#
+# Lagged self-links (`X(t-tau) -> X(t)`, autoregressive terms) are hidden by default. `show_self_loops=True` draws them as loops in the free side of each node, coloured TP / FP / FN like the other edges, so a missed autoregressive lag shows up as a dashed red loop. `plot_graph` accepts the same flag. `legend_loc="below"` puts the legend under the graph so it never covers an edge.
+
+# %%
+fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+tp.compare_graphs(
+    gt1, discovered, var_names=names1, fig_ax=(fig, axes[0]),
+    show_self_loops=True, legend_loc="below", title="compare_graphs",
+)
+tp.plot_graph(
+    gt1, var_names=names1, fig_ax=(fig, axes[1]), show_colorbar=False,
+    show_self_loops=True,
+)
+axes[1].set_title("plot_graph")
+plt.tight_layout()
 plt.show()
 
 # %% [markdown]
