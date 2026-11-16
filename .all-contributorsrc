@@ -54,6 +54,28 @@
       ]
     },
     {
+      "login": "hemv-857",
+      "name": "Hemang Varshney",
+      "avatar_url": "https://avatars.githubusercontent.com/u/218273197",
+      "profile": "https://github.com/hemv-857",
+      "contributions": [
+        "code",
+        "test",
+        "infra"
+      ]
+    },
+    {
+      "login": "lbarrosby",
+      "name": "Lucas Barros",
+      "avatar_url": "https://avatars.githubusercontent.com/u/70347936",
+      "profile": "https://github.com/lbarrosby",
+      "contributions": [
+        "code",
+        "test",
+        "bug"
+      ]
+    },
+    {
       "login": "mittal-aakriti",
       "name": "Aakriti Mittal",
       "avatar_url": "https://avatars.githubusercontent.com/u/31776192",
@@ -78,17 +100,6 @@
       "profile": "https://github.com/ChakriCherukuri",
       "contributions": [
         "example"
-      ]
-    },
-    {
-      "login": "hemv-857",
-      "name": "Hemang Varshney",
-      "avatar_url": "https://avatars.githubusercontent.com/u/218273197",
-      "profile": "https://github.com/hemv-857",
-      "contributions": [
-        "code",
-        "test",
-        "infra"
       ]
     },
     {
@@ -131,14 +142,12 @@
       ]
     },
     {
-      "login": "lbarrosby",
-      "name": "Lucas Barros",
-      "avatar_url": "https://avatars.githubusercontent.com/u/70347936",
-      "profile": "https://github.com/lbarrosby",
+      "login": "alibb007",
+      "name": "Ali B.B",
+      "avatar_url": "https://avatars.githubusercontent.com/u/45832367",
+      "profile": "https://github.com/alibb007",
       "contributions": [
-        "code",
-        "test",
-        "bug"
+        "maintenance"
       ]
     }
   ]

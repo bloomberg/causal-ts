@@ -8,6 +8,11 @@ Note that by _not_ including a description, you are asking reviewers to do extra
 work to understand the context of this change, which may lead to your PR taking
 much longer to review, or result in it not being reviewed at all.
 
+## Examples (optional)
+
+Show how the change is used or what it changes, for example a code snippet,
+command output, or before and after numbers.
+
 ## Type of Change
 
 - [ ] Bugfix
