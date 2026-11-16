@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `set_up_logging` cleans up after a failed setup.
 * `import causalts.plotting` no longer loads `dcor` and numba; parallel docs builds crashed
   on numba's cache.
+* `CondIndTest.run_test_raw(x, y)` with the default `z=None` runs the unconditional test
+  instead of raising `TypeError` in the cache-key helper.
 
 ### Changed
 

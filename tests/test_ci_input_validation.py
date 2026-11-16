@@ -227,3 +227,15 @@ def test_numpy_unsigned_indices_still_work(name):
     assert 0 <= p <= 1
     p, _ = ci(0, 1, np.array([2], dtype=np.uint64))
     assert 0 <= p <= 1
+
+
+@pytest.mark.parametrize("name", ["parcorr", "cmiknn"])
+def test_run_test_raw_without_z_matches_an_empty_conditioning_set(name):
+    data = _dependent()
+    x, y = data[:, :1], data[:, 1:2]
+    ci = create_ci_test(name, data)
+    empty = ci.run_test_raw(x, y, np.empty((len(x), 0)))
+    assert create_ci_test(name, data).run_test_raw(x, y) == empty
+    # z=None and an empty z are the same test, so they share one cache entry
+    assert ci.run_test_raw(x, y) == empty
+    assert len(ci.pvalue_cache) == 1
