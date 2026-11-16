@@ -1,3 +1,6 @@
+# Copyright 2025 Bloomberg Finance L.P.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Tests for the edge-aware ``auto`` node layout."""
 
 import matplotlib

@@ -1,3 +1,6 @@
+# Copyright 2025 Bloomberg Finance L.P.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Self-loop glyphs shared by ``compare_graphs`` and ``plot_graph``.
 
 A lagged self-link ``X(t-tau) -> X(t)`` is drawn as a small loop on the

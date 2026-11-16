@@ -1,3 +1,6 @@
+# Copyright 2025 Bloomberg Finance L.P.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Edge-aware node layout: start from a stress layout, then search locally.
 
 Stress layouts (neato, Kamada-Kawai) place nodes by graph distance and never
