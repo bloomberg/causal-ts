@@ -1511,10 +1511,15 @@ def _glyph_path_count(ax):
     )
 
 
-def test_corrplot_smoke():
+def test_corrplot_smoke_from_raw_data():
+    import matplotlib.pyplot as plt
+
     from causalts.plotting import corrplot
 
-    corrplot(_make_frame())
+    fig, ax, matrix = corrplot(_make_frame(), method="circle")
+    assert matrix.shape[0] == matrix.shape[1]
+    assert ax is not None
+    plt.close(fig)
 
 
 def test_corrplot_colorbar_false_suppresses_for_every_method():
@@ -1527,6 +1532,89 @@ def test_corrplot_colorbar_false_suppresses_for_every_method():
 def test_corrplot_colorbar_default_still_draws():
     for method in ("circle", "color", "shade"):
         assert _extra_axes(method=method) == 1, method
+
+
+def test_corrplot_colorbar_false_with_color_only_half():
+    assert _extra_axes(upper="color", lower="number", colorbar=False) == 0
+
+
+def test_corrplot_invalid_method_raises():
+    from causalts.plotting import corrplot
+
+    with pytest.raises(ValueError):
+        corrplot(_make_frame(), method="typo")
+
+
+def test_corrplot_invalid_diag_raises():
+    from causalts.plotting import corrplot
+
+    with pytest.raises(ValueError):
+        corrplot(_make_frame(), diag="nonsense")
+
+
+def test_corrplot_precomputed_with_pvalues_and_coefs():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import compute_association_matrix, corrplot
+
+    df = _make_frame()
+    m = compute_association_matrix(df, metric="pearson")
+    pvals = np.full(m.shape, 0.01)
+    np.fill_diagonal(pvals, 0.0)
+    fig, ax, _ = corrplot(
+        m, is_corr=True, method="color", pvalues=pvals, add_coef=True, order="hclust"
+    )
+    plt.close(fig)
+
+
+def test_corrplot_square_raw_ndarray_not_treated_as_precomputed():
+    # a non-symmetric square raw matrix (n_samples == n_features) must be
+    # correlation-computed, not misread as a precomputed association matrix
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import corrplot
+
+    rng = np.random.default_rng(0)
+    raw = rng.standard_normal((5, 5))  # square but not symmetric
+    fig, ax, matrix = corrplot(raw)
+    # association matrix has unit diagonal; the raw matrix does not
+    assert np.allclose(np.diag(matrix.values), 1.0)
+    plt.close(fig)
+
+
+def test_compute_association_matrix_pearson():
+    from causalts.plotting import compute_association_matrix
+
+    df = _make_frame()
+    m = compute_association_matrix(df, metric="pearson")
+    assert m.shape == (df.shape[1], df.shape[1])
+    # symmetric with unit diagonal
+    assert np.allclose(m.values, m.values.T)
+    assert np.allclose(np.diag(m.values), 1.0)
+
+
+def test_compute_association_matrix_bad_metric_raises():
+    from causalts.plotting import compute_association_matrix
+
+    with pytest.raises(ValueError):
+        compute_association_matrix(_make_frame(), metric="not_a_metric")
+
+
+def test_corr_table_ci_uses_metric_appropriate_se():
+    from causalts.plotting.corrplot import _fisher_ci
+
+    r, n = 0.5, 30
+    pearson_ci = _fisher_ci(r, n, metric="pearson")
+    spearman_ci = _fisher_ci(r, n, metric="spearman")
+    kendall_ci = _fisher_ci(r, n, metric="kendall")
+
+    # Spearman/Kendall have a larger variance than Pearson at the same r, n,
+    # so their CIs must be wider, not identical to the Pearson interval.
+    assert spearman_ci != pearson_ci
+    assert kendall_ci != pearson_ci
+    pearson_width = pearson_ci[1] - pearson_ci[0]
+    spearman_width = spearman_ci[1] - spearman_ci[0]
+    assert spearman_width > pearson_width
 
 
 def test_corrplot_diag_glyph_renders_the_diagonal():
