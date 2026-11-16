@@ -17,6 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `"adjacency"`, which draws the edge undirected and scores it as a correct
   adjacency with unknown orientation. `plot_lag_metrics` reports separate
   adjacency precision / recall / F1, TP / FP / FN and SHD rows.
+* `node_layout="auto"` in `compare_graphs`, `plot_graph` and `compute_node_positions`:
+  starts from neato (if Graphviz is installed) and Kamada-Kawai, then moves nodes to cut
+  edge crossings and edges passing close to other nodes; works without Graphviz.
+* `compare_graphs(show_self_loops=True)` and `plot_graph(show_self_loops=True)` draw
+  lagged self-links as loops in the widest gap between each node's edges, as thin as
+  missed edges (`self_loop_linewidth`); off by default. `compare_graphs(legend_loc="below")`
+  puts the legend under the graph so it never covers an edge.
 
 ### Changed
 

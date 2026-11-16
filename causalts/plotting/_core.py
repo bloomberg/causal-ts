@@ -52,6 +52,82 @@ def _myround(x, base=5, round_mode="updown"):
     return base * round(float(x) / base)
 
 
+def _draw_plot_graph_loops(
+    ax,
+    G,
+    pos,
+    self_loops,
+    curved_radius,
+    lw,
+    fontsize,
+    mappable,
+    default_color,
+    transform=None,
+    alpha=1.0,
+):
+    """Lagged self-links as loops, in the widest gap between each node's edges.
+
+    *self_loops* maps a node to ``(value, label, mark)``; *value* is a number
+    coloured with the link colour map (*mappable*), an explicit colour, or
+    None for *default_color*; *mark* is the link mark at the shown lag.
+    """
+    from ._self_loops import _self_loop_angle, draw_loops
+
+    transform = ax.transData if transform is None else transform
+    edges = _drawn_arcs(G, curved_radius)
+    sizes = {n: (G.nodes[n]["patch"].width, G.nodes[n]["patch"].height) for n in G}
+    if transform == ax.transData:
+        # Reserve the loop envelope around every node so the framing depends
+        # only on the layout, as for the edges.
+        pad = max(max(wh) for wh in sizes.values()) * (0.5 + 1.3 + 0.35)
+        ax.update_datalim(
+            [
+                (x + dx, y + dy)
+                for x, y in (pos[n] for n in G)
+                for dx, dy in ((pad, 0), (-pad, 0), (0, pad), (0, -pad))
+            ]
+        )
+
+    def draw_label(ax, xy, text):
+        if fontsize <= 0:
+            return
+        txt = ax.text(
+            xy[0],
+            xy[1],
+            text,
+            fontsize=fontsize,
+            ha="center",
+            va="center",
+            fontweight="bold",
+            zorder=3,
+            transform=transform,
+            alpha=alpha,
+        )
+        txt.set_path_effects([PathEffects.withStroke(linewidth=3, foreground="white")])
+
+    for n, (value, label, mark) in self_loops.items():
+        if isinstance(value, str) or (value is not None and not np.isscalar(value)):
+            color = value  # an explicit colour (target highlighting), str or RGB(A)
+        elif mappable is not None and value is not None:
+            color = mappable.to_rgba(value)
+        else:
+            color = default_color
+        arrow, ends = _loop_ends(str(mark))
+        width, height = sizes[n]
+        draw_loops(
+            ax,
+            pos[n],
+            height,
+            _self_loop_angle(n, pos, edges),
+            [(color, "solid", lw, label, arrow, 0, ends)],
+            draw_label,
+            node_width=width,
+            transform=transform,
+            alpha=alpha,
+        )
+    ax.autoscale_view()
+
+
 def _draw_network_with_curved_edges(
     fig,
     ax,
@@ -79,6 +155,9 @@ def _draw_network_with_curved_edges(
     special_nodes=None,
     autodep_sig_lags=None,
     show_autodependency_lags=False,
+    self_loops=None,
+    self_loop_linewidth=1.2,
+    self_loop_alpha=1.0,
     transform="data",
     node_classification=None,
     max_lag=0,
@@ -762,14 +841,26 @@ def _draw_network_with_curved_edges(
 
     # Collect all edge weights to get color scale
     all_links_weights = []
-    # all_links_edge_weights = []
+    placeholder_weights = []  # the invisible no-links stroke
     for u, v, d in G.edges(data=True):
         if u != v:
+            target = placeholder_weights if d.get("no_links") else all_links_weights
             if d["outer_edge"] and d["outer_edge_color"] is not None:
-                all_links_weights.append(d["outer_edge_color"])
+                target.append(d["outer_edge_color"])
             if d["inner_edge"] and d["inner_edge_color"] is not None:
-                all_links_weights.append(d["inner_edge_color"])
+                target.append(d["inner_edge_color"])
+    # self-loops share the link colour scale
+    all_links_weights += [
+        value
+        for value, *_ in (self_loops or {}).values()
+        if value is not None and not isinstance(value, str)
+    ]
+    # The placeholder only sets the scale when nothing visible has a value, so
+    # draw_edge still has a mappable for it.
+    if not all_links_weights:
+        all_links_weights = placeholder_weights
 
+    data_to_rgb_links = None
     if cmap_links is not None and len(all_links_weights) > 0:
         if links_vmin is None:
             links_vmin = np.array(all_links_weights).min()
@@ -1041,6 +1132,21 @@ def _draw_network_with_curved_edges(
             if d["inner_edge"]:
                 seen[(u, v)] = draw_edge(ax, u, v, d, seen, outer_edge=False)
 
+    if self_loops is not None:
+        _draw_plot_graph_loops(
+            ax,
+            G,
+            pos,
+            self_loops,
+            curved_radius,
+            self_loop_linewidth,
+            link_label_fontsize,
+            data_to_rgb_links,
+            standard_color_links,
+            transform,
+            self_loop_alpha,
+        )
+
     ax.set_aspect("equal")
 
 
@@ -1254,6 +1360,10 @@ def compute_node_positions(
     New layout:
       - 'kk_enhanced' → KK per component + packing + duplicate spread (+ optional spring relax)
                         kw: weight, scale, pad, min_sep, spring_iterations, spring_k, seed
+      - 'auto' → edge-aware: neato (if Graphviz is installed) and Kamada-Kawai
+                 starts, then a local search that cuts edge crossings and edges
+                 passing close to other nodes. kw: curved_radius, node_size,
+                 iterations
     """
     if node_pos is not None:
         pos = node_pos
@@ -1268,7 +1378,13 @@ def compute_node_positions(
             per_layout = _merge_layout_kwargs(base, layout_kwargs, name)
             per_layout.update(kwargs or {})
 
-            if name in ("circular", "circle"):
+            if name == "auto":
+                from ._layout_search import auto_layout
+
+                # A seed in layout_kwargs wins over the caller's default.
+                per_layout.setdefault("seed", 0 if seed is None else seed)
+                pos = auto_layout(H, **per_layout)
+            elif name in ("circular", "circle"):
                 pos = nx.circular_layout(H, **per_layout)
             elif name in ("spring", "fr", "fruchterman_reingold"):
                 pos = nx.spring_layout(H, **per_layout)
@@ -1377,6 +1493,55 @@ def compute_node_positions(
     return pos
 
 
+_REVERSED_MARKS = ("<-o", "<--", "<-x", "<-+")
+
+
+def _loop_ends(mark):
+    """Arrowheads and endpoint symbols for a self-loop with link *mark*.
+
+    A loop starts and ends on the same node, so a reversed mark (``<-o``) is
+    read as its mirror (``o->``). Returns ``(arrow, (tail, head))`` for
+    ``draw_loops``: *arrow* True / False / ``"both"``; symbols ``"o"``, ``"x"``,
+    ``"+"`` or None.
+    """
+    if len(mark) != 3:
+        return True, (None, None)
+    if mark[0] == "<" and mark[2] != ">":
+        mark = mark[2] + mark[1] + ">"
+    tail_head, head_head = mark[0] == "<", mark[2] == ">"
+    arrow = "both" if tail_head and head_head else head_head
+    symbol = {"o": "o", "x": "x", "+": "+"}
+    return arrow, (symbol.get(mark[0]), symbol.get(mark[2]))
+
+
+def _drawn_arcs(G, curved_radius):
+    """``(u, v, rad)`` strokes as _draw_network_with_curved_edges draws them.
+
+    Lagged (outer) links bend with ``-curved_radius``; contemporaneous
+    (inner) links are straight. Only the marks the renderer reverses
+    (``<-o``, ``<--``, ``<-x``, ``<-+``) are drawn from v to u.
+    """
+    arcs = []
+    for u, v, d in G.edges(data=True):
+        if u == v or d.get("no_links"):  # placeholder strokes are invisible
+            continue
+        for kind, rad in (("outer", -curved_radius), ("inner", 0.0)):
+            if d.get(f"{kind}_edge"):
+                mark = str(d.get(f"{kind}_edge_type", ""))
+                reverse = mark in _REVERSED_MARKS
+                arcs.append((v, u, rad) if reverse else (u, v, rad))
+    return arcs
+
+
+def _with_auto_geometry(user_kwargs, geometry):
+    """Put *geometry* under the user's ``auto`` layout kwargs (theirs win)."""
+    if not user_kwargs:
+        return dict(geometry)
+    if isinstance(user_kwargs.get("auto"), dict):
+        return {**user_kwargs, "auto": {**geometry, **user_kwargs["auto"]}}
+    return {**geometry, **user_kwargs}
+
+
 def plot_graph(
     graph,
     val_matrix=None,
@@ -1426,6 +1591,8 @@ def plot_graph(
     show_autodependency_lags=False,
     title=None,
     return_pos=False,
+    show_self_loops=False,
+    self_loop_linewidth=None,
 ):
     """Creates a network plot.
 
@@ -1475,7 +1642,8 @@ def plot_graph(
         Layout passed to ``compute_node_positions`` when node_pos is None
         (e.g. ``'neato'``, ``'circular'``, ``'spring'``, ``'kamada_kawai'``).
         Graphviz layouts fall back to ``'circular'`` with a warning when
-        Graphviz is unavailable.
+        Graphviz is unavailable. ``'auto'`` places nodes so the drawn edges
+        cross less and keep clear of other nodes; it works without Graphviz.
     node_layout_kwargs : dict, optional (default: None)
         Extra keyword arguments for the layout function, either flat or keyed
         by layout name.
@@ -1548,6 +1716,14 @@ def plot_graph(
     return_pos : bool, optional (default: False)
         If True, return ``(fig, ax, node_pos)`` where node_pos has the same
         ``{'x': ..., 'y': ...}`` form accepted by the node_pos parameter.
+    show_self_loops : bool, optional (default: False)
+        Draw each node's lagged self-links (``X(t-tau) -> X(t)``) as a loop,
+        coloured like the links (value at the strongest lag) and labelled
+        with the lags. The loop points into the widest gap between the
+        node's other edges, so it does not cross them.
+    self_loop_linewidth : float, optional (default: None)
+        Loop line width; defaults to ``0.4 * arrow_linewidth``, since a loop
+        reads heavier than a straight link of the same width.
 
     Returns
     -------
@@ -1690,6 +1866,9 @@ def plot_graph(
         autodep_sig_lags = np.full(N, None, dtype="object")
     else:
         autodep_sig_lags = None
+    # node -> (colour value, lag label, mark); None unless show_self_loops, so
+    # loop space is reserved whenever loops are on, even with none to draw.
+    self_loops = {} if show_self_loops else None
 
     # list of all strengths for color map
     all_strengths = []
@@ -1811,6 +1990,29 @@ def plot_graph(
             else:
                 node_color[u] = val_matrix[u, v][argmax]
 
+            self_lags = np.where(link_matrix_upper[u, v, 1:] != "")[0] + 1
+            if show_self_loops and self_lags.size:
+                # strongest lag first, as in the link labels
+                # (ties: higher lag first, as the reversed argsort there gives)
+                self_lags = self_lags[
+                    np.argsort(np.abs(val_matrix[u, v][self_lags]), kind="stable")[::-1]
+                ]
+                if lag_array is not None:  # label with displayed lag values
+                    self_lags = [int(lag_array[la]) for la in self_lags]
+                spurious = (
+                    link_attribute is not None
+                    and link_attribute[u, v, argmax] == "spurious"
+                )
+                self_loops[u] = (
+                    (
+                        "grey"
+                        if spurious
+                        else None if no_coloring else val_matrix[u, v][argmax]
+                    ),
+                    ",".join(map(str, list(self_lags))),
+                    link_matrix_upper[u, v, argmax],
+                )
+
             if show_autodependency_lags:
                 autodep_sig_lags[u] = "\n\n\n" + ",".join(
                     str(i)
@@ -1832,6 +2034,10 @@ def plot_graph(
         # dic['inner_edge_edgecolor'] = None
 
     if target_indices is not None:
+        # a target's self-link is a link between targets
+        for u in set(self_loops or {}) & set(target_indices):
+            if self_loops[u][0] != "grey":  # spurious stays grey, as for links
+                self_loops[u] = (target_between_color, *self_loops[u][1:])
         for u, v, dic in G.edges(data=True):
             if u == v:
                 continue
@@ -1865,9 +2071,20 @@ def plot_graph(
         all_strengths = [0.0]
 
     if node_pos is None:
-        # pos = nx.circular_layout(deepcopy(G))
+        layout_kwargs = node_layout_kwargs
+        if isinstance(node_layout, str) and node_layout.lower().strip() == "auto":
+            # Score the strokes and nodes as _draw_network_with_curved_edges
+            # draws them.
+            layout_kwargs = _with_auto_geometry(
+                node_layout_kwargs,
+                {
+                    "arcs": _drawn_arcs(G, curved_radius),
+                    "node_size": node_size,
+                    "node_aspect": 1.0 if node_aspect is None else node_aspect,
+                },
+            )
         pos = compute_node_positions(
-            G, layout=node_layout, layout_kwargs=node_layout_kwargs, seed=42
+            G, layout=node_layout, layout_kwargs=layout_kwargs, seed=42
         )
     else:
         pos = {}
@@ -1928,6 +2145,13 @@ def plot_graph(
         special_nodes=special_nodes,
         autodep_sig_lags=autodep_sig_lags,
         show_autodependency_lags=show_autodependency_lags,
+        self_loops=self_loops,
+        self_loop_alpha=alpha,
+        self_loop_linewidth=(
+            0.4 * arrow_linewidth
+            if self_loop_linewidth is None
+            else self_loop_linewidth
+        ),
         transform=transform,
     )
 

@@ -595,10 +595,14 @@ _, _, pos = compare_graphs(
     first_run["CDNOTS + LUCID"],
     var_names=names,
     fig_ax=(fig, axes[0]),
+    show_self_loops=True,
     show_legend=True,
     return_pos=True,
     legend_loc="upper left",
-    title=f"LUCID on CDNOTS: F1 {s_cl['F1']:.2f}, SHD {s_cl['SHD']}",
+    title=(
+        f"LUCID on CDNOTS: F1 {s_cl['F1']:.2f}, SHD {s_cl['SHD']}, "
+        f"missed AR {s_cl['self_loops_missed']}"
+    ),
 )
 compare_graphs(
     gt_d,
@@ -606,15 +610,19 @@ compare_graphs(
     var_names=names,
     fig_ax=(fig, axes[1]),
     node_pos=pos,
+    show_self_loops=True,
     show_legend=False,
-    title=f"LUCID on PCMCI+: F1 {s_pl['F1']:.2f}, SHD {s_pl['SHD']}",
+    title=(
+        f"LUCID on PCMCI+: F1 {s_pl['F1']:.2f}, SHD {s_pl['SHD']}, "
+        f"missed AR {s_pl['self_loops_missed']}"
+    ),
 )
 plt.tight_layout()
 plt.show()
 
 
 # %% [markdown]
-# In the figure above, green edges are recovered and orange edges are false positives. Self-loops are not drawn, and they account for most of the missed edges and the lower recall. `X8 -> X9` carries two labels: the lag-0 edge is correct (✓) and an extra lag-1 relation is a false positive (✗).
+# In the figure above, green edges are recovered and orange edges are false positives. Self-loops (autoregressive lags) are drawn as loops on the nodes, and the dashed red ones are missed (counted as `missed AR` in each panel title). They account for most of the missed edges and the lower recall, and they are the main difference between the two corrected graphs. `X8 -> X9` carries two labels: the lag-0 edge is correct (✓) and an extra lag-1 relation is a false positive (✗).
 #
 # Across these five draws LUCID removes every false contemporaneous relation from both input graphs (`FP lag0` goes to `0.0`, precision rises to `0.96`) **while keeping both genuine contemporaneous edges**. Deleting all lag-0 edges — the obvious first thing to try, and enough on its own to make the graph acyclic — reaches almost the same precision but destroys both real edges, costing `0.09` of recall and `0.06` of F1. LUCID decides which contemporaneous edges are artifacts; deleting all lag-0 edges assumes they all are. This is a result for this controlled system and configuration, not a general recovery guarantee.
 #
