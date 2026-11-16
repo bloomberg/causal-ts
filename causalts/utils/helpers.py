@@ -409,9 +409,11 @@ def precision_recall_3d(g_true_3d, g_est_3d):
 
     Notes
     -----
-    The function works on a copy of ``g_true_3d`` with the diagonal of the
-    second layer (index 1) set to zero, so self-links from t-1 to t are
-    ignored; the input is not modified. Precision is calculated as ``nTP / nDisc``, where
+    Nonzero entries count as links, so bool and integer graphs give the same
+    result. The function works on a copy of ``g_true_3d`` with the diagonal
+    of the second layer (index 1) set to zero, so self-links from t-1 to t
+    are ignored; the input is not modified. A graph with only lag 0 has no
+    such layer and is used as is. Precision is calculated as ``nTP / nDisc``, where
     ``nTP`` is the number of true positives (correct links) and ``nDisc``
     is the total number of links in the estimated graph. Recall is
     calculated as ``nTP / L``, where ``L`` is the total number of links
@@ -420,9 +422,13 @@ def precision_recall_3d(g_true_3d, g_est_3d):
     """
     # Exclude lag-1 self-loops (autoregression) from ground truth so CEDAR,
     # which never discovers Xi(t-1)→Xi(t) by design, is not penalised for them.
-    g_true_3d = g_true_3d.copy()
-    np.fill_diagonal(g_true_3d[:, :, 1], 0)
-    nTP = np.sum((g_est_3d + g_true_3d) == 2)  # correct link
+    # Compare as booleans: with bool input ``g_est_3d + g_true_3d`` is a
+    # logical OR and never equals 2, so every link was missed.
+    g_true_3d = np.asarray(g_true_3d) != 0
+    g_est_3d = np.asarray(g_est_3d) != 0
+    if g_true_3d.shape[2] > 1:
+        np.fill_diagonal(g_true_3d[:, :, 1], False)
+    nTP = np.sum(g_est_3d & g_true_3d)  # correct link
     L = g_true_3d.sum()  # number of links
     nDisc = g_est_3d.sum()
     nDisc = nDisc + 1e-12 if nDisc == 0 else nDisc

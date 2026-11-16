@@ -85,6 +85,28 @@ def test_precision_recall_3d_perfect():
     assert (p, r) == (1.0, 1.0)
 
 
+def test_precision_recall_3d_bool_graphs_match_int_graphs():
+    gt = np.zeros((3, 3, 2), dtype=bool)
+    gt[0, 1, 1] = gt[1, 2, 0] = True
+    est = np.zeros_like(gt)
+    est[0, 1, 1] = True  # TP
+    est[2, 0, 1] = True  # FP
+    expected = precision_recall_3d(gt.astype(int), est.astype(int))
+    assert expected == (pytest.approx(1 / 2), pytest.approx(1 / 2))
+    assert precision_recall_3d(gt, est) == expected
+    assert precision_recall_3d(gt, gt.copy()) == (1.0, 1.0)
+
+
+def test_precision_recall_3d_lag0_only_graph():
+    gt = np.zeros((3, 3, 1), dtype=int)
+    gt[0, 1, 0] = gt[1, 2, 0] = 1
+    est = np.zeros_like(gt)
+    est[0, 1, 0] = 1
+    p, r = precision_recall_3d(gt, est)
+    assert p == 1.0
+    assert r == pytest.approx(1 / 2)
+
+
 # --------------------------------------------------------------------------
 # LogFormatter / set_up_logging
 # --------------------------------------------------------------------------
