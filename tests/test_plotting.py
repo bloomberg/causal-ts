@@ -199,6 +199,30 @@ def _marks(edges, d=3, n_lags=2):
     return marks
 
 
+def _mark_graph(marks, d=2, n_lags=1):
+    """Tigramite edge-mark graph from explicit ``(i, j, tau, mark)`` entries."""
+    graph = np.full((d, d, n_lags), "", dtype="<U3")
+    for i, j, tau, mark in marks:
+        graph[i, j, tau] = mark
+    return graph
+
+
+def _oo_pair(mark="o-o", d=2, n_lags=1):
+    """A lag-0 symmetric pair, as PCMCI+ stores an unoriented adjacency."""
+    return _mark_graph([(0, 1, 0, mark), (1, 0, 0, mark)], d=d, n_lags=n_lags)
+
+
+def _visible_arrow_colors(ax):
+    """Edge colours of visible arrows/lines, ignoring label midpoint markers."""
+    from matplotlib.patches import FancyArrowPatch
+
+    return [
+        a.get_edgecolor()
+        for a in ax.get_children()
+        if isinstance(a, FancyArrowPatch) and a.get_edgecolor()[3] > 0
+    ]
+
+
 def test_plot_lag_metrics_string_graph_mirror_is_not_an_edge():
     from causalts.plotting import plot_lag_metrics
 
@@ -326,6 +350,411 @@ def test_compare_functions_reject_non_dag_ground_truth(mark):
         plot_lag_metrics(gt, disc)
     with pytest.raises(ValueError, match="must be a DAG"):
         plot_pvalue_distribution(pvals, gt)
+
+
+@pytest.mark.parametrize(
+    "policy, expected",
+    [
+        # Directed TP/FP/FN, then adjacency TP/FP/FN.
+        ("bidirected", [1, 1, 0, 1, 0, 0]),
+        ("drop", [0, 0, 1, 0, 0, 1]),
+        # The pair is found but not oriented: directed FN, adjacency TP.
+        ("adjacency", [0, 0, 1, 1, 0, 0]),
+    ],
+)
+def test_plot_lag_metrics_oo_policies(policy, expected):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_lag_metrics
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[0, 1, 0] = 1
+
+    _, ax = plot_lag_metrics(
+        gt,
+        _oo_pair(),
+        metrics=[
+            "TP",
+            "FP",
+            "FN",
+            "Adjacency TP",
+            "Adjacency FP",
+            "Adjacency FN",
+        ],
+        undirected=policy,
+    )
+    np.testing.assert_array_equal(ax.images[0].get_array()[:, 0], expected)
+    plt.close("all")
+
+
+def test_plot_lag_metrics_adjacency_rows_are_added_by_default():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_lag_metrics
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[0, 1, 0] = 1
+
+    _, ax = plot_lag_metrics(gt, _oo_pair(), undirected="adjacency")
+    data = ax.images[0].get_array()
+    # Precision, Recall, F1, Adjacency Precision, Adjacency Recall, Adjacency F1.
+    assert data.shape == (6, 1)
+    np.testing.assert_allclose(data[:3, 0], np.zeros(3))
+    np.testing.assert_allclose(data[3:, 0], np.ones(3))
+    plt.close("all")
+
+
+def test_plot_lag_metrics_spurious_adjacency_is_fp():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_lag_metrics
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    _, ax = plot_lag_metrics(
+        gt,
+        _oo_pair(),
+        metrics=["Adjacency TP", "Adjacency FP", "Adjacency FN"],
+        undirected="adjacency",
+    )
+    np.testing.assert_array_equal(ax.images[0].get_array()[:, 0], [0, 1, 0])
+    plt.close("all")
+
+
+@pytest.mark.parametrize(
+    "mark, parameter", [("o-o", "undirected"), ("x-x", "conflict")]
+)
+def test_plot_lag_metrics_adjacency_policy_per_mark(mark, parameter):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_lag_metrics
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[0, 1, 0] = 1
+
+    _, ax = plot_lag_metrics(
+        gt,
+        _oo_pair(mark),
+        metrics=[
+            "TP",
+            "FP",
+            "FN",
+            "Adjacency TP",
+            "Adjacency FP",
+            "Adjacency FN",
+        ],
+        **{parameter: "adjacency"},
+    )
+    np.testing.assert_array_equal(ax.images[0].get_array()[:, 0], [0, 0, 1, 1, 0, 0])
+    plt.close("all")
+
+
+@pytest.mark.parametrize("policy", ["drop", "bidirected", "adjacency"])
+def test_plot_lag_metrics_latent_mark_dropped_under_all_policies(policy):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_lag_metrics
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[0, 1, 0] = 1
+
+    _, ax = plot_lag_metrics(
+        gt,
+        _oo_pair("<->"),
+        metrics=["TP", "FP", "FN"],
+        undirected=policy,
+        conflict=policy,
+    )
+    np.testing.assert_array_equal(ax.images[0].get_array()[:, 0], [0, 0, 1])
+    plt.close("all")
+
+
+@pytest.mark.parametrize("true_cell", [(0, 1), (1, 0)])
+def test_plot_lag_metrics_lagged_oo_is_scored_at_its_own_cell(true_cell):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_lag_metrics
+
+    # At lag >= 1 the reverse cell is a different temporal link, so an
+    # unoriented o-o at [0, 1, 1] only matches a true edge at that same cell.
+    gt = np.zeros((2, 2, 2), dtype=np.int8)
+    gt[true_cell[0], true_cell[1], 1] = 1
+    disc = _mark_graph([(0, 1, 1, "o-o")], n_lags=2)
+
+    _, ax = plot_lag_metrics(
+        gt,
+        disc,
+        metrics=["TP", "FP", "FN", "Adjacency TP", "Adjacency FP", "Adjacency FN"],
+        undirected="adjacency",
+    )
+    expected = [0, 0, 1, 0, 1, 1] if true_cell == (1, 0) else [0, 0, 1, 1, 0, 0]
+    np.testing.assert_array_equal(ax.images[0].get_array()[:, 1], expected)
+    plt.close("all")
+
+
+@pytest.mark.parametrize(
+    "policy, expected",
+    [
+        # TP, FP, FN, adjacency line.
+        ("bidirected", {"TP": 1, "FP": 1, "FN": 0, "adjacency": 0}),
+        ("drop", {"TP": 0, "FP": 0, "FN": 1, "adjacency": 0}),
+        ("adjacency", {"TP": 0, "FP": 0, "FN": 0, "adjacency": 1}),
+    ],
+)
+def test_compare_graphs_oo_policies(policy, expected):
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import to_rgba
+
+    from causalts.plotting import compare_graphs
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    colors = {
+        "TP": to_rgba("#00ff00"),
+        "FP": to_rgba("#ff8800"),
+        "FN": to_rgba("#ff0000"),
+        "adjacency": to_rgba("#123456"),
+    }
+
+    _, ax = compare_graphs(
+        gt,
+        _oo_pair(),
+        undirected=policy,
+        tp_color="#00ff00",
+        fp_color="#ff8800",
+        fn_color="#ff0000",
+        adjacency_color="#123456",
+    )
+    visible = _visible_arrow_colors(ax)
+    for name, color in colors.items():
+        assert visible.count(color) == expected[name], name
+    plt.close("all")
+
+
+def test_compare_graphs_adjacency_is_drawn_without_arrowhead():
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import to_rgba
+    from matplotlib.patches import FancyArrowPatch
+
+    from causalts.plotting import compare_graphs
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[0, 1, 0] = 1
+
+    _, ax = compare_graphs(
+        gt, _oo_pair(), undirected="adjacency", adjacency_color="#123456"
+    )
+    adjacency = [
+        a
+        for a in ax.get_children()
+        if isinstance(a, FancyArrowPatch)
+        and a.get_edgecolor() == to_rgba("#123456")
+        and a.get_edgecolor()[3] > 0
+    ]
+    assert adjacency
+    assert all(type(a.get_arrowstyle()).__name__ == "Curve" for a in adjacency)
+    plt.close("all")
+
+
+@pytest.mark.parametrize("truth", [True, False])
+def test_compare_graphs_adjacency_skips_lagged_self_links(truth):
+    """A lagged o-o self-link is not drawn, as directed self-links are not."""
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyArrowPatch
+
+    from causalts.plotting import compare_graphs
+
+    gt = np.zeros((2, 2, 2), dtype=np.int8)
+    if truth:
+        gt[0, 0, 1] = 1
+    disc = _mark_graph([(0, 0, 1, "o-o")], d=2, n_lags=2)
+    _, ax = compare_graphs(gt, disc, undirected="adjacency")
+    curves = [
+        a
+        for a in ax.get_children()
+        if isinstance(a, FancyArrowPatch)
+        and type(a.get_arrowstyle()).__name__ == "Curve"
+    ]
+    assert curves == []
+    plt.close("all")
+
+
+@pytest.mark.parametrize(
+    "mark, parameter", [("o-o", "undirected"), ("x-x", "conflict")]
+)
+@pytest.mark.parametrize("truth", [True, False])
+def test_compare_graphs_adjacency_lines_are_visible(mark, parameter, truth):
+    """Hiding the adjacency line must change the rendered image."""
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyArrowPatch
+
+    from causalts.plotting import compare_graphs
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    if truth:
+        gt[0, 1, 0] = 1  # correct adjacency, else spurious
+    fig, ax = compare_graphs(gt, _oo_pair(mark), **{parameter: "adjacency"})
+    lines = [
+        a
+        for a in ax.get_children()
+        if isinstance(a, FancyArrowPatch)
+        and type(a.get_arrowstyle()).__name__ == "Curve"
+    ]
+    assert lines
+
+    def pixels():
+        fig.canvas.draw()
+        return np.asarray(fig.canvas.buffer_rgba()).copy()
+
+    shown = pixels()
+    for a in lines:
+        a.set_visible(False)
+    assert (shown != pixels()).any()
+    plt.close("all")
+
+
+@pytest.mark.parametrize(
+    "policy, true_count, false_count",
+    # A lag-0 adjacency claim contributes one p-value, not one per cell.
+    [("bidirected", 1, 1), ("drop", 0, 0), ("adjacency", 1, 0)],
+)
+def test_plot_pvalue_distribution_oo_policies(policy, true_count, false_count):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_pvalue_distribution
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    pvals = np.full((2, 2, 1), 0.5)
+
+    _, ax = plot_pvalue_distribution(
+        pvals, gt, graph_discovered=_oo_pair(), undirected=policy
+    )
+    labels = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert f"TP (n={true_count})" in labels
+    assert f"FP (n={false_count})" in labels
+    plt.close("all")
+
+
+@pytest.mark.parametrize("cause, effect", [(0, 1), (1, 0)])
+def test_plot_pvalue_distribution_adjacency_uses_the_true_cell(cause, effect):
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_pvalue_distribution
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[cause, effect, 0] = 1
+    pvals = np.full((2, 2, 1), 0.9)
+    pvals[cause, effect, 0] = 0.01
+
+    _, ax = plot_pvalue_distribution(
+        pvals, gt, graph_discovered=_oo_pair(), undirected="adjacency"
+    )
+    tp = [p for p in ax.patches if p.get_height() > 0 and p.get_x() < 0.5]
+    assert sum(p.get_height() for p in tp) > 0
+    assert not [p for p in ax.patches if p.get_height() > 0 and p.get_x() > 0.5]
+    plt.close("all")
+
+
+def test_plot_pvalue_distribution_adjacency_falls_back_to_tested_mirror():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_pvalue_distribution
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    pvals = np.full((2, 2, 1), np.nan)
+    pvals[1, 0, 0] = 0.01
+
+    _, ax = plot_pvalue_distribution(
+        pvals, gt, graph_discovered=_oo_pair(), undirected="adjacency"
+    )
+    labels = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert "TP (n=1)" in labels
+    plt.close("all")
+
+
+def test_compare_graphs_adjacency_with_zero_curvature_terminates():
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyArrowPatch
+
+    from causalts.plotting import compare_graphs
+
+    # A lagged directed edge and a lag-0 adjacency on the same pair need two
+    # strokes; with curved_radius=0 the second must still get its own radius.
+    gt = np.zeros((2, 2, 2), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    disc = _mark_graph([(0, 1, 0, "o-o"), (0, 1, 1, "-->")], n_lags=2)
+
+    _, ax = compare_graphs(gt, disc, undirected="adjacency", curved_radius=0)
+    rads = {
+        a.get_connectionstyle().rad
+        for a in ax.get_children()
+        if isinstance(a, FancyArrowPatch)
+    }
+    assert len(rads) >= 2
+    plt.close("all")
+
+
+@pytest.mark.parametrize("curved_radius", [0.2, 0.0])
+def test_compare_graphs_strokes_on_one_pair_take_distinct_arcs(curved_radius):
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyArrowPatch
+
+    from causalts.plotting import compare_graphs
+
+    gt = np.zeros((2, 2, 2), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    disc = _mark_graph([(0, 1, 0, "o-o"), (0, 1, 1, "-->"), (1, 0, 1, "-->")], n_lags=2)
+
+    _, ax = compare_graphs(
+        gt, disc, undirected="adjacency", curved_radius=curved_radius
+    )
+    arcs = []
+    for a in ax.get_children():
+        if isinstance(a, FancyArrowPatch):
+            (xa, ya), (xb, yb) = a._posA_posB
+            rad = a.get_connectionstyle().rad
+            # arc3 radius is relative to travel direction; normalise it.
+            arcs.append(round(rad if (xa, ya) < (xb, yb) else -rad, 6))
+    # Two directed arrows and one adjacency line: three physical arcs.
+    assert len(set(arcs)) == 3
+    plt.close("all")
+
+
+def test_plot_lag_metrics_adjacency_rows_do_not_depend_on_the_graph():
+    import matplotlib.pyplot as plt
+
+    from causalts.plotting import plot_lag_metrics
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    directed_only = _mark_graph([(0, 1, 0, "-->")])
+
+    _, ax = plot_lag_metrics(gt, directed_only, undirected="adjacency")
+    assert ax.images[0].get_array().shape[0] == 6
+    plt.close("all")
+
+
+def test_compare_functions_reject_invalid_policy():
+    from causalts.plotting import (
+        compare_graphs,
+        plot_lag_metrics,
+        plot_pvalue_distribution,
+    )
+
+    gt = np.zeros((2, 2, 1), dtype=np.int8)
+    gt[0, 1, 0] = 1
+    disc = _oo_pair()
+    pvals = np.full((2, 2, 1), 0.5)
+
+    with pytest.raises(ValueError, match="undirected must be one of"):
+        compare_graphs(gt, disc, undirected="bogus")
+    with pytest.raises(ValueError, match="conflict must be one of"):
+        plot_lag_metrics(gt, disc, conflict="bogus")
+    with pytest.raises(ValueError, match="undirected must be one of"):
+        plot_pvalue_distribution(pvals, gt, graph_discovered=disc, undirected="bogus")
+    with pytest.raises(ValueError, match="undirected must be one of"):
+        plot_pvalue_distribution(pvals, gt, undirected="bogus")
 
 
 @pytest.mark.parametrize(

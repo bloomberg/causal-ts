@@ -9,8 +9,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+* `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` accept
+  `undirected=` and `conflict=` for discovered `o-o` and `x-x` marks:
+  `"drop"`, `"bidirected"` (the default, so existing results are unchanged) or
+  `"adjacency"`, which draws the edge undirected and scores it as a correct
+  adjacency with unknown orientation. `plot_lag_metrics` reports separate
+  adjacency precision / recall / F1, TP / FP / FN and SHD rows.
+
+### Changed
+
+* More tests: forecasting, plotting, the DoWhy bridge, GRACE, the CLI, the Tigramite
+  wrappers and the data generators.
+
 ### Fixed
 
+* `compare_graphs`: `curved_radius=0` no longer hangs when a node pair has two
+  strokes, and a pair with three or more strokes no longer draws two on the same arc.
 * `CausalForecaster.forecast_horizon(targets=...)` with a subset of variables no longer
   returns NaN from the second step on.
 * `plot_time_series_graph(order=...)` lists variables top to bottom, as documented (also
@@ -23,11 +39,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   on numba's cache.
 * `CondIndTest.run_test_raw(x, y)` with the default `z=None` runs the unconditional test
   instead of raising `TypeError` in the cache-key helper.
-
-### Changed
-
-* More tests: forecasting, plotting, the DoWhy bridge, GRACE, the CLI, the Tigramite
-  wrappers and the data generators.
 
 ## [0.28.1]
 
