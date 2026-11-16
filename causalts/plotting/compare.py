@@ -234,39 +234,6 @@ def _stroke_plan(edge_info, adj_correct, adj_spurious):
     return plan
 
 
-def _next_radius(seen, i, j, curved_radius):
-    """Pick and record the arc3 radius of the next stroke from i to j.
-
-    arc3 radii are relative to the direction of travel, so a reverse arc
-    with radius r occupies the same physical path as -r here.
-    """
-    occupied = list(seen.get((i, j), [])) + [-u for u in seen.get((j, i), [])]
-    step = np.sign(curved_radius) or 1.0
-    candidates = [curved_radius, -curved_radius]
-    for k in range(1, len(occupied) + 2):
-        r = curved_radius + step * 0.15 * k
-        candidates += [r, -r]
-    rad = next(r for r in candidates if all(abs(r - u) >= 0.05 for u in occupied))
-    seen.setdefault((i, j), []).append(rad)
-    return rad
-
-
-def _stroke_plan(edge_info, adj_correct, adj_spurious):
-    """Node pairs of the strokes compare_graphs draws, in drawing order."""
-    plan = []
-    for (i, j), (lags_tp, lags_fp, lags_fn) in edge_info.items():
-        statuses = [bool(lags_tp), bool(lags_fp), bool(lags_fn)]
-        if sum(statuses) == 1:
-            plan.append((i, j))
-        else:  # mixed: one stroke for discovered lags, one for missed lags
-            if lags_tp or lags_fp:
-                plan.append((i, j))
-            if lags_fn:
-                plan.append((i, j))
-    plan += list(adj_correct) + list(adj_spurious)
-    return plan
-
-
 def compare_graphs(
     graph_true,
     graph_discovered,
