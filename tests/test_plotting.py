@@ -1343,7 +1343,8 @@ def test_plot_graph_self_loops_keep_the_mark(mark, head):
     plt.close("all")
 
 
-def test_plot_graph_self_loop_on_a_target_uses_the_target_colour():
+@pytest.mark.parametrize("colour", ["#9C27B0", (0.612, 0.153, 0.690)])
+def test_plot_graph_self_loop_on_a_target_uses_the_target_colour(colour):
     import matplotlib.colors as mcolors
     import matplotlib.pyplot as plt
 
@@ -1355,10 +1356,10 @@ def test_plot_graph_self_loop_on_a_target_uses_the_target_colour():
         val_matrix=val,
         show_self_loops=True,
         target_node=0,
-        target_between_color="#9C27B0",
+        target_between_color=colour,
     )
     colours = {mcolors.to_hex(a.get_edgecolor()) for a in _loop_patches(ax)}
-    assert "#9c27b0" in colours
+    assert mcolors.to_hex(colour) in colours
     plt.close("all")
 
 

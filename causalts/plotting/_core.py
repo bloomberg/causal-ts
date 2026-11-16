@@ -106,8 +106,8 @@ def _draw_plot_graph_loops(
         txt.set_path_effects([PathEffects.withStroke(linewidth=3, foreground="white")])
 
     for n, (value, label, mark) in self_loops.items():
-        if isinstance(value, str):  # an explicit colour (target highlighting)
-            color = value
+        if isinstance(value, str) or (value is not None and not np.isscalar(value)):
+            color = value  # an explicit colour (target highlighting), str or RGB(A)
         elif mappable is not None and value is not None:
             color = mappable.to_rgba(value)
         else:
