@@ -46,6 +46,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   on numba's cache.
 * `CondIndTest.run_test_raw(x, y)` with the default `z=None` runs the unconditional test
   instead of raising `TypeError` in the cache-key helper.
+* `precision_recall_3d` counts the true positives of bool graphs (it returned 0 for
+  both) and accepts a graph with only lag 0 instead of raising `IndexError`.
 
 ## [0.28.1]
 
