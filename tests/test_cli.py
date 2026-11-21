@@ -419,3 +419,38 @@ def test_discover_alpha_defaults_per_algorithm(tmp_path):
         assert result.exit_code == 0, result.output
         summary = json.loads(result.output[result.output.index("{") :])
         assert summary["alpha"] == expected, (algorithm, extra)
+
+
+def _write_four_column_csv(tmp_path):
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame(
+        rng.normal(size=(200, 4)), columns=list("abcd")
+    )
+    path = tmp_path / "d.csv"
+    df.to_csv(path, index=False)
+    return str(path)
+
+
+@pytest.mark.parametrize("names", ["a,b", "a,a,b,c"])
+def test_inspect_var_names_wrong_count_or_duplicate(tmp_path, names):
+    # A wrong count or a duplicate name is a CLI usage error (#133),
+    # not a raw pandas traceback.
+    path = _write_four_column_csv(tmp_path)
+    result = CliRunner().invoke(main, ["inspect", path, "--var-names", names])
+    assert result.exit_code == 2
+    assert "--var-names" in result.output
+
+
+def test_evaluate_var_names_wrong_count(tmp_path):
+    # evaluate/plot check --var-names against the graph size (#133).
+    gt = np.zeros((2, 2, 2), dtype=np.int8)
+    pred = np.zeros((2, 2, 2), dtype=np.int8)
+    gt_path = tmp_path / "gt.npy"
+    pred_path = tmp_path / "pred.npy"
+    np.save(gt_path, gt)
+    np.save(pred_path, pred)
+    result = CliRunner().invoke(
+        main, ["evaluate", str(gt_path), str(pred_path), "--var-names", "a,b,c"]
+    )
+    assert result.exit_code == 2
+    assert "--var-names" in result.output
