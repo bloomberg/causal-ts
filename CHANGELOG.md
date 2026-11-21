@@ -24,6 +24,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   lagged self-links as loops in the widest gap between each node's edges, as thin as
   missed edges (`self_loop_linewidth`); off by default. `compare_graphs(legend_loc="below")`
   puts the legend under the graph so it never covers an edge.
+* `--index-col NAME_OR_POSITION` on `causal-ts inspect`, `discover` and `deconfound`
+  reads a column (e.g. a date) as the index instead of as a variable;
+  `read_dataframe(path, index_col=...)` does the same in Python (#130).
 
 ### Changed
 
@@ -32,6 +35,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `causal-ts discover` and `deconfound` given a non-numeric column (e.g. a date) exit
+  with a usage error that names it, before any engine runs, instead of a `TypeError`
+  from deep inside the engine; `deconfound` reads Booleans as 0/1, as `discover` does
+  (#130).
 * `compare_graphs`: `curved_radius=0` no longer hangs when a node pair has two
   strokes, and a pair with three or more strokes no longer draws two on the same arc.
 * `CausalForecaster.forecast_horizon(targets=...)` with a subset of variables no longer

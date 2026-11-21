@@ -206,6 +206,16 @@ def numeric_frame(df):
     return df
 
 
+def non_numeric_columns(df):
+    """Labels of the columns in ``df`` that discovery cannot read.
+
+    That is every column that is not a number: dates, labels, timedeltas. Run
+    :func:`numeric_frame` first so that Boolean columns count as numeric.
+    """
+    keep = df.select_dtypes(include=[np.number], exclude=["timedelta"]).columns
+    return [c for c in df.columns if c not in keep]
+
+
 def _data_block(df):
     T, d = df.shape
     var_names = [str(c) for c in df.columns]
@@ -562,10 +572,10 @@ def inspect_df(df, max_lag=None):
     # date, a label) is left out of everything, since discrete detection fails
     # on strings and discovery cannot read it either, and named in a warning.
     df = numeric_frame(df)
-    keep = df.select_dtypes(include=[np.number], exclude=["timedelta"]).columns
-    non_numeric = [str(c) for c in df.columns if c not in keep]
-    if non_numeric:
-        df = df[keep]
+    left_out = non_numeric_columns(df)
+    non_numeric = [str(c) for c in left_out]
+    if left_out:
+        df = df.drop(columns=left_out)
     if df.shape[1] == 0:
         raise NoNumericColumnsError(
             f"inspect found no numeric columns (non-numeric, left out: "

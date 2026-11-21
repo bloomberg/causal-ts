@@ -256,6 +256,45 @@ def _parse_gate_threshold(ctx, param, value):
         raise click.BadParameter("must be a number, 'auto' or 'li'")
 
 
+# Shared by the commands that read a data file (inspect, discover, deconfound).
+_index_col_option = click.option(
+    "--index-col",
+    metavar="NAME_OR_POSITION",
+    default=None,
+    help=(
+        "Column to read as the index (e.g. a date column) instead of a variable: "
+        "a column name or a 0-based position."
+    ),
+)
+
+
+def _read_data(path, index_col):
+    """Read a data file; an ``--index-col`` the file lacks is a usage error."""
+    from .utils.io import IndexColumnError, read_dataframe
+
+    try:
+        return read_dataframe(path, index_col=index_col)
+    except IndexColumnError as e:
+        raise click.BadParameter(str(e), param_hint="--index-col")
+
+
+def _read_numeric_data(path, index_col):
+    """Read a data file for the engines, which need every column numeric.
+
+    Booleans become 0/1 (``numeric_frame``); any other non-numeric column, such
+    as a date, is a usage error naming it, raised before any engine runs.
+    """
+    from .inspection import non_numeric_columns, numeric_frame
+
+    df = numeric_frame(_read_data(path, index_col))
+    bad = [str(c) for c in non_numeric_columns(df)]
+    if bad:
+        raise click.UsageError(
+            f"column(s) {bad} are not numeric; drop them or pass --index-col {bad[0]}"
+        )
+    return df
+
+
 def _log(ctx, msg):
     if not ctx.obj.get("quiet"):
         # With --json, stdout carries only the JSON document; progress goes to stderr.
@@ -356,10 +395,11 @@ def ci_test_info(test):
 @click.option(
     "--var-names", type=str, default=None, help="Comma-separated variable names."
 )
+@_index_col_option
 @click.option(
     "--max-lag", type=int, default=None, help="Override the suggested max lag."
 )
-def inspect(data, var_names, max_lag):
+def inspect(data, var_names, index_col, max_lag):
     """Inspect a time series (CSV/parquet/feather): data health + recommended config.
 
     Emits a JSON report {schema_version, data, facts, recommendation, cost_class,
@@ -368,9 +408,8 @@ def inspect(data, var_names, max_lag):
     import json as _json
 
     from .inspection import NoNumericColumnsError, inspect_df
-    from .utils.io import read_dataframe
 
-    df = read_dataframe(data)
+    df = _read_data(data, index_col)
     var_name_list = _parse_comma_list(var_names)
     if var_name_list:
         df.columns = var_name_list
@@ -628,6 +667,7 @@ def inspect(data, var_names, max_lag):
 @click.option(
     "--var-names", type=str, default=None, help="Comma-separated variable names."
 )
+@_index_col_option
 @click.option(
     "--impute",
     type=click.Choice(["pairwise_complete", "var_em", "causal_iterative"]),
@@ -736,6 +776,7 @@ def discover(
     save_plot,
     plot_format,
     var_names,
+    index_col,
     impute,
     impute_kwargs,
     output_json,
@@ -943,16 +984,14 @@ def discover(
     from matplotlib import pyplot as plt
 
     t0 = _time.time()
-    outdir = _make_output_dir(ctx.obj["output_dir"], f"discover_{algorithm}")
     device = ctx.obj["device"]
     var_name_list = _parse_comma_list(var_names)
     lag_list_parsed = _parse_comma_list(lag_list, int)
 
     _log(ctx, f"Reading data from {data}")
-    from .inspection import numeric_frame
-    from .utils.io import read_dataframe
-
-    df = numeric_frame(read_dataframe(data))
+    # Checked before the output directory exists, so a bad file leaves nothing.
+    df = _read_numeric_data(data, index_col)
+    outdir = _make_output_dir(ctx.obj["output_dir"], f"discover_{algorithm}")
     if var_name_list:
         df.columns = var_name_list
     var_name_list = list(df.columns)
@@ -1898,6 +1937,7 @@ def plot(ctx, graph, plot_type, val_matrix, var_names, figsize, plot_format, sav
 @click.option(
     "--var-names", type=str, default=None, help="Comma-separated variable names."
 )
+@_index_col_option
 @click.option(
     "--json",
     "output_json",
@@ -1907,7 +1947,15 @@ def plot(ctx, graph, plot_type, val_matrix, var_names, figsize, plot_format, sav
 )
 @click.pass_context
 def deconfound(
-    ctx, graph_path, data_path, strategy, threshold, alpha, var_names, output_json
+    ctx,
+    graph_path,
+    data_path,
+    strategy,
+    threshold,
+    alpha,
+    var_names,
+    index_col,
+    output_json,
 ):
     """Correct a discovered graph for latent confounders.
 
@@ -1923,12 +1971,10 @@ def deconfound(
     import json as _json
 
     from .inspection import edges_from_graph
-    from .utils.io import read_dataframe
-
-    outdir = _make_output_dir(ctx.obj["output_dir"], f"deconfound_{strategy}")
 
     graph = np.load(graph_path, allow_pickle=True)
-    df = read_dataframe(data_path)
+    df = _read_numeric_data(data_path, index_col)
+    outdir = _make_output_dir(ctx.obj["output_dir"], f"deconfound_{strategy}")
     var_name_list = _parse_comma_list(var_names)
     if var_name_list:
         df.columns = var_name_list
