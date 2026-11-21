@@ -43,7 +43,8 @@ class CausalLearnFisherZ(CIT_Base):
         self._reject_inf(X, Y, condition_set)
 
         cache_key = self._get_array_hash(X, Y, condition_set)
-        param_hash = "fisherz"
+        # Versioned: rows cached before the intercept fix carry the old statistic.
+        param_hash = "fisherz-intercept"
         cached = self.pvalue_cache.get((cache_key, param_hash))
         if cached is not None:
             return cached[0], cached[1]
@@ -51,12 +52,23 @@ class CausalLearnFisherZ(CIT_Base):
         self._ensure_test()
         pval = float(self._cl_test(X, Y, condition_set))
 
-        x = self.data[:, X]
-        y = self.data[:, Y]
+        # float64: centring and scaling float32 data can overflow.
+        x = self.data[:, X].astype(np.float64)
+        y = self.data[:, Y].astype(np.float64)
         if len(condition_set) > 0:
             from numpy.linalg import lstsq
 
-            Z = self.data[:, condition_set]
+            # Centre (the same fit as an intercept): otherwise the residuals
+            # still depend on Z whenever Z has a nonzero mean, and the statistic
+            # no longer matches the partial correlation behind causal-learn's
+            # p-value. Scaling to unit variance keeps lstsq's rank cutoff from
+            # dropping a column only because of its units.
+            Z = self.data[:, condition_set].astype(np.float64)
+            Z = Z - Z.mean(axis=0)
+            sd = Z.std(axis=0)
+            Z = Z / np.where(sd > 0, sd, 1.0)
+            x = x - x.mean()
+            y = y - y.mean()
             x = x - Z @ lstsq(Z, x, rcond=None)[0]
             y = y - Z @ lstsq(Z, y, rcond=None)[0]
         stat = float(np.corrcoef(x, y)[0, 1])
