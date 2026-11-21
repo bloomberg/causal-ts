@@ -278,9 +278,59 @@ def test_feature_importance_tree_and_unsupported_models():
 
 def test_forecast_horizon_requires_lagged_only_models():
     graph, df = _var_data(T=100)
+    graph[0, 1, 0] = 1  # x(t) -> y(t)
     fc = CausalForecaster(graph, var_names=df.columns).fit(df)
-    with pytest.raises(ValueError, match="include_contemp=False"):
+    with pytest.raises(ValueError, match=r"x -> y.*include_contemp=False"):
         fc.forecast_horizon(df, horizon=3)
+
+
+def test_forecast_horizon_default_include_contemp_with_lagged_graph():
+    # include_contemp=True is the default; a graph without lag-0 edges has
+    # nothing contemporaneous, so the class docstring example must run.
+    graph, df = _var_data(T=300, seed=6)
+    default = CausalForecaster(graph, var_names=df.columns).fit(df)
+    lagged = CausalForecaster(graph, var_names=df.columns, include_contemp=False)
+    lagged.fit(df)
+    pd.testing.assert_frame_equal(
+        default.forecast_horizon(df, horizon=4), lagged.forecast_horizon(df, horizon=4)
+    )
+
+
+def test_forecast_horizon_ignores_lag0_edges_into_unfitted_targets():
+    graph, df = _var_data(T=200, seed=3)
+    graph[0, 1, 0] = 1  # x(t) -> y(t), but only x is fitted
+    fc = CausalForecaster(graph, var_names=df.columns, exog_fallback=False)
+    fc.fit(df, targets=["x"])
+    assert fc.forecast_horizon(df, horizon=2).shape == (2, 1)
+
+
+def test_forecast_horizon_continues_datetime_index():
+    graph, df = _var_data(T=300)
+    df.index = pd.date_range("2024-01-01", periods=len(df), freq="D", name="date")
+    fc = CausalForecaster(graph, var_names=df.columns).fit(df)
+    out = fc.forecast_horizon(df, horizon=3)
+    expected = pd.date_range("2024-10-27", periods=3, freq="D", name="date")
+    pd.testing.assert_index_equal(out.index, expected)
+
+
+def test_forecast_horizon_continues_range_index_step():
+    graph, df = _var_data(T=300)
+    df.index = pd.RangeIndex(10, 10 + 5 * len(df), 5, name="t")
+    fc = CausalForecaster(graph, var_names=df.columns).fit(df)
+    out = fc.forecast_horizon(df, horizon=3)
+    pd.testing.assert_index_equal(out.index, pd.RangeIndex(1510, 1525, 5, name="t"))
+
+    df.index = pd.RangeIndex(len(df))
+    out = fc.forecast_horizon(df, horizon=3)
+    assert list(out.index) == [300, 301, 302]
+
+
+def test_forecast_horizon_positions_for_other_indexes():
+    graph, df = _var_data(T=300)
+    df.index = pd.Index([f"r{i}" for i in range(len(df))], name="row")
+    fc = CausalForecaster(graph, var_names=df.columns).fit(df)
+    out = fc.forecast_horizon(df, horizon=3)
+    pd.testing.assert_index_equal(out.index, pd.RangeIndex(3, name="row"))
 
 
 def test_forecast_horizon_iterates_fitted_equations():
@@ -401,6 +451,12 @@ def test_exog_forecast_horizon_uses_future_values():
     assert out["y"].iloc[0] == pytest.approx(df["x"].iloc[-1] + 2.0, abs=0.15)
     assert out["y"].iloc[1] == pytest.approx(-2.0, abs=0.3)
     assert out["y"].iloc[2] == pytest.approx(0.0, abs=0.3)
+
+    # exog enters at lag 0 by design; it must not trip the lag-0 guard.
+    fc_default = CausalForecaster(g, var_names=["x", "y"]).fit(df, exog=exog)
+    pd.testing.assert_frame_equal(
+        fc_default.forecast_horizon(df, horizon=3, exog_future=future), out
+    )
 
 
 def test_predict_stays_aligned_after_interior_nan():
