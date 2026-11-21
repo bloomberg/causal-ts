@@ -91,31 +91,53 @@ def _markov_blanket_from_tigramite(
     cg_tig: np.ndarray,
     var_idx: int,
     num_vars: int,
-) -> set:
-    """Extract Markov blanket variable indices from a tigramite graph array.
+) -> set[tuple[int, int]]:
+    """Extract the time-unrolled Markov blanket from a tigramite graph array.
 
     cg_tig[i, j, tau] == 1 means variable i at lag tau causes variable j at lag 0.
-    Returns indices restricted to range(num_vars) (excludes C if present).
+    For the target ``k`` at time ``t``, returns ``(variable, shift)`` pairs where
+    the regressor is ``variable`` at time ``t + shift``:
+
+    - parents ``i(t - tau)``, including the target's own lags;
+    - children ``j(t + tau)`` for every edge ``k(t - tau) -> j(t)``;
+    - the children's other parents ``i(t + tau_child - tau_parent)``.
+
+    Only the unshifted target ``(k, 0)`` is left out. Indices are restricted to
+    range(num_vars) (excludes C if present).
     """
     L = cg_tig.shape[2] - 1
     k = var_idx
 
-    parents = {
-        i
-        for i in range(num_vars)
-        for tau in range(L + 1)
-        if cg_tig[i, k, tau] == 1 and i != k
-    }
-    children = {j for j in range(num_vars) if cg_tig[k, j, 0] == 1 and j != k}
-    parents_of_children = {
-        i
-        for j in children
-        for i in range(num_vars)
-        for tau in range(L + 1)
-        if cg_tig[i, j, tau] == 1 and i not in {k, j}
-    }
+    def _parents(j):
+        return [
+            (i, tau)
+            for i in range(num_vars)
+            for tau in range(L + 1)
+            if cg_tig[i, j, tau] == 1 and not (i == j and tau == 0)
+        ]
 
-    return parents | children | parents_of_children
+    blanket = {(i, -tau) for i, tau in _parents(k)}
+    for j in range(num_vars):
+        for tau_child in range(L + 1):
+            if cg_tig[k, j, tau_child] != 1 or (j == k and tau_child == 0):
+                continue
+            blanket.add((j, tau_child))
+            blanket.update((i, tau_child - tau_parent) for i, tau_parent in _parents(j))
+
+    blanket.discard((k, 0))
+    return blanket
+
+
+def _shifted_design(filled_arr: np.ndarray, blanket) -> np.ndarray:
+    """Column per ``(variable, shift)``: value at ``t + shift``, NaN past the ends."""
+    T = filled_arr.shape[0]
+    X = np.full((T, len(blanket)), np.nan)
+    for col, (var, shift) in enumerate(blanket):
+        if shift >= 0:
+            X[: T - shift, col] = filled_arr[shift:, var]
+        else:
+            X[-shift:, col] = filled_arr[: T + shift, var]
+    return X
 
 
 def iterative_causal_impute(
@@ -135,6 +157,10 @@ def iterative_causal_impute(
 
     Warm-starts with VAR-EM, then alternates between discovering the causal graph
     and re-imputing each variable using only its Markov blanket as predictors.
+    Each blanket member enters at its own time offset (a parent ``X(t-1)`` is
+    regressed on as ``X`` shifted by one row), the regression is fitted on rows
+    where the target is observed, and a variable with an empty blanket keeps its
+    VAR-EM values.
     This restricts imputation to causally relevant variables, reducing the risk of
     injecting spurious cross-variable dependencies.
     """
@@ -178,12 +204,18 @@ def iterative_causal_impute(
             if not nan_mask_arr[:, k].any():
                 continue
             mb = _markov_blanket_from_tigramite(cdnots_res.cg_tig, k, num_vars)
-            predictors = sorted(mb) if mb else list(range(num_vars))
-            X_all = filled_arr[:, predictors]
-            y_all = filled_arr[:, k]
-            model = Ridge(alpha=1e-3).fit(X_all, y_all)
-            nan_rows = nan_mask_arr[:, k]
-            filled_arr[nan_rows, k] = model.predict(X_all[nan_rows])
+            if not mb:
+                # Nothing causally relevant: keep the VAR-EM values.
+                continue
+            X_all = _shifted_design(filled_arr, sorted(mb))
+            defined = ~np.isnan(X_all).any(axis=1)
+            fit_rows = defined & ~nan_mask_arr[:, k]
+            if not fit_rows.any():
+                continue
+            model = Ridge(alpha=1e-3).fit(X_all[fit_rows], filled_arr[fit_rows, k])
+            nan_rows = nan_mask_arr[:, k] & defined
+            if nan_rows.any():
+                filled_arr[nan_rows, k] = model.predict(X_all[nan_rows])
 
         filled_arr[~nan_mask_arr] = original_vals[~nan_mask_arr]
         df_filled = pd.DataFrame(filled_arr, columns=df.columns, index=df.index)
