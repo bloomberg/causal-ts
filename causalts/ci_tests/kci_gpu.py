@@ -307,7 +307,7 @@ def kci_cind(
                 sub_eig_uu = eig_uu[i * length : (i + 1) * length]
                 f_rand1 = _chi2(len(sub_eig_uu))
                 null_dstr += sub_eig_uu @ f_rand1
-        null_dstr = np.array(torch.tensor(null_dstr).cpu())
+        null_dstr = torch.as_tensor(null_dstr).cpu().numpy()
         p_val = np.array(null_dstr > stat.item()).mean()
         return p_val, stat.item()
 
