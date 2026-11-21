@@ -744,7 +744,7 @@ def discover(
     n_bootstrap,
     window_frac,
 ):
-    """Run causal discovery on a time series file (CSV, parquet, or feather)."""
+    """Run causal discovery on a time series file (CSV, TSV, parquet, or feather)."""
     json_stdout = _json_only_stdout(ctx) if output_json else None
     if algorithm == "reap":
         # REAP is GRACE's regression-based refinement (run_reap = refine="shrink").

@@ -65,7 +65,7 @@ The same report is available in Python as
 
 ## `discover`
 
-Run causal discovery on a `.csv`, `.parquet`/`.pq`, or `.feather` file.
+Run causal discovery on a `.csv` (including compressed `.csv.gz`, `.csv.bz2`, `.csv.zip`, `.csv.xz`, `.csv.zst`), `.tsv`, `.parquet`/`.pq`, or `.feather` file.
 Parquet and feather need `pip install causalts[parquet]`.
 
 ```bash
