@@ -3,6 +3,8 @@
 
 """Tests for RCOTGPU (Random Fourier Features) conditional independence test."""
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -128,3 +130,12 @@ def test_bandwidth_sample_size_is_part_of_the_cache_key():
     a = RCOTGPU(data, device="cpu", max_sample_4_std_es=50).param_hash
     b = RCOTGPU(data, device="cpu", max_sample_4_std_es=500).param_hash
     assert a != b
+
+
+@pytest.mark.parametrize("z", [[], [2]])
+def test_perm_emits_no_deprecation_warning(dependent_data, z):
+    data = dependent_data(n=100)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        p, _ = RCOTGPU(data=data, approx="perm", device=DEVICE)(0, 1, z)
+    assert 0 <= p <= 1
