@@ -56,7 +56,11 @@ class CausalLearnFisherZ(CIT_Base):
         if len(condition_set) > 0:
             from numpy.linalg import lstsq
 
+            # Include an intercept: without it the residuals still depend
+            # on Z whenever Z has a nonzero mean, and the statistic no longer
+            # matches the partial correlation behind causal-learn's p-value.
             Z = self.data[:, condition_set]
+            Z = np.column_stack([np.ones(len(Z)), Z])
             x = x - Z @ lstsq(Z, x, rcond=None)[0]
             y = y - Z @ lstsq(Z, y, rcond=None)[0]
         stat = float(np.corrcoef(x, y)[0, 1])

@@ -48,6 +48,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   instead of raising `TypeError` in the cache-key helper.
 * `precision_recall_3d` counts the true positives of bool graphs (it returned 0 for
   both) and accepts a graph with only lag 0 instead of raising `IndexError`.
+* The `fisherz` CI test's statistic is the partial correlation behind its p-value when
+  the conditioning variables have a nonzero mean (it regressed on `Z` without an
+  intercept, so value matrices and edge strengths could be far off).
 
 ## [0.28.1]
 
