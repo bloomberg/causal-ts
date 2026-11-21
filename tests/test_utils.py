@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from causalts.utils.helpers import evaluate_graph, shd_2d, shd_3d
+from causalts.utils.io import read_dataframe
 from causalts.utils.linearity import check_linearity
 
 
@@ -223,3 +224,25 @@ def test_shd_3d_empty_lag_axis():
     empty = np.zeros((2, 2, 0), dtype=int)
     assert shd_3d(empty, empty, double_for_anticausal=False) == 0
     assert shd_3d(empty, empty, double_for_anticausal=True) == 0
+
+
+@pytest.mark.parametrize("suffix,kwargs", [
+    (".csv.gz", {}),
+    (".csv.bz2", {}),
+    (".tsv", {"sep": "\t"}),
+])
+def test_read_dataframe_compressed_csv_and_tsv(tmp_path, suffix, kwargs):
+    # Compressed CSVs and TSVs read like plain CSVs (#128).
+    df = pd.DataFrame(np.arange(6).reshape(3, 2), columns=["x", "y"])
+    path = tmp_path / f"d{suffix}"
+    df.to_csv(path, index=False, **kwargs)
+    pd.testing.assert_frame_equal(read_dataframe(str(path)), df)
+
+
+def test_read_dataframe_rejects_parquet_gz(tmp_path):
+    # A compression suffix does not make .parquet.gz supported (#128).
+    df = pd.DataFrame(np.arange(6).reshape(3, 2), columns=["x", "y"])
+    path = tmp_path / "d.parquet.gz"
+    df.to_csv(path, index=False)
+    with pytest.raises(ValueError, match="Unsupported file format"):
+        read_dataframe(str(path))
