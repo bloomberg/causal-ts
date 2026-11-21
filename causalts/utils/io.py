@@ -15,13 +15,16 @@ import os
 import pandas as pd
 
 _PARQUET_EXTS = (".parquet", ".pq")
+_CSV_EXTS = (".csv", ".csv.gz", ".csv.bz2", ".csv.zip", ".csv.xz", ".tsv")
 
 
 def read_dataframe(path: str) -> pd.DataFrame:
     """Read a tabular time series from ``path``, dispatching on file extension.
 
-    Supported: ``.csv``, ``.parquet`` / ``.pq``, ``.feather``.  Parquet and
-    feather require ``pyarrow`` (``pip install causalts[parquet]``).
+    Supported: ``.csv`` (optionally ``.csv.gz`` / ``.csv.bz2`` / ``.csv.zip``
+    / ``.csv.xz``), ``.tsv`` (tab separated), ``.parquet`` / ``.pq``,
+    ``.feather``.  Parquet and feather require ``pyarrow``
+    (``pip install causalts[parquet]``).
 
     Parameters
     ----------
@@ -39,10 +42,12 @@ def read_dataframe(path: str) -> pd.DataFrame:
     ImportError
         If a parquet/feather engine (pyarrow) is required but not installed.
     """
-    ext = os.path.splitext(path)[1].lower()
+    name = os.path.basename(path).lower()
 
-    if ext == ".csv":
-        return pd.read_csv(path)
+    if name.endswith(_CSV_EXTS):
+        return pd.read_csv(path, sep="\t" if name.endswith(".tsv") else ",")
+
+    ext = os.path.splitext(path)[1].lower()
 
     if ext in _PARQUET_EXTS:
         try:
@@ -64,5 +69,6 @@ def read_dataframe(path: str) -> pd.DataFrame:
 
     raise ValueError(
         f"Unsupported file format '{ext}' for '{path}'. "
-        "Supported: .csv, .parquet, .pq, .feather"
+        "Supported: .csv, .csv.gz, .csv.bz2, .csv.zip, .csv.xz, .tsv, "
+        ".parquet, .pq, .feather"
     )
