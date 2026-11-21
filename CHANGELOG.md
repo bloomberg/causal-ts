@@ -36,6 +36,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   strokes, and a pair with three or more strokes no longer draws two on the same arc.
 * `CausalForecaster.forecast_horizon(targets=...)` with a subset of variables no longer
   returns NaN from the second step on.
+* `CausalForecaster.forecast_horizon` only refuses to run when a fitted model uses a
+  lag-0 parent, so the default `include_contemp=True` works with lagged-only graphs
+  (exogenous columns are allowed); the forecast index continues the input's
+  `DatetimeIndex` (with a frequency) or `RangeIndex` and keeps its name (#144).
 * `plot_time_series_graph(order=...)` lists variables top to bottom, as documented (also
   `order="auto"`); single-variable graphs plot; `plot_lagfuncs(dpi=...)` is honoured.
 * The deprecated `causalts.ci_tests.cit_base` import gives the unified `CIT_Base`; pass its

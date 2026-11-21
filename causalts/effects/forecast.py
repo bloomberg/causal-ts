@@ -96,6 +96,17 @@ def _feature_frame(
     return pd.DataFrame(frames, index=data.index)
 
 
+def _future_index(index: pd.Index, horizon: int) -> pd.Index:
+    """Index for ``horizon`` steps after the last entry of ``index``."""
+    if isinstance(index, pd.DatetimeIndex) and index.freq is not None and len(index):
+        out = pd.date_range(start=index[-1], periods=horizon + 1, freq=index.freq)[1:]
+    elif isinstance(index, pd.RangeIndex):
+        out = pd.RangeIndex(index.stop, index.stop + index.step * horizon, index.step)
+    else:
+        out = pd.RangeIndex(horizon)
+    return out.rename(index.name)
+
+
 def _build_feature_matrix(
     data: pd.DataFrame,
     parents: list[tuple[str, int]],
@@ -277,7 +288,10 @@ class CausalForecaster:
 
         from causalts.effects.forecast import CausalForecaster
 
-        forecaster = CausalForecaster(G_hat, var_names=df.columns)
+        # forecast_horizon() needs models without lag-0 parents
+        forecaster = CausalForecaster(
+            G_hat, var_names=df.columns, include_contemp=False
+        )
         forecaster.fit(df_train, exog=exog_train)
         preds = forecaster.predict(df_test, exog=exog_test)
         scores = forecaster.score(df_train, exog=exog_train)
@@ -548,7 +562,9 @@ class CausalForecaster:
 
         Uses fitted models to predict forward one step at a time,
         feeding predictions back as inputs for subsequent steps.
-        Only works when include_contemp=False (pure lagged models).
+        Only works when no fitted model uses a lag-0 parent (always
+        the case with ``include_contemp=False``). Exogenous columns
+        enter at lag 0 through ``exog_future`` and are allowed.
 
         Parameters
         ----------
@@ -568,12 +584,23 @@ class CausalForecaster:
         -------
         pd.DataFrame
             DataFrame of shape (horizon, len(targets)) with forecasted
-            values.
+            values. Its index continues ``data.index``: the next dates of
+            a ``DatetimeIndex`` with a frequency, the next integers of a
+            ``RangeIndex`` (same step), otherwise positions ``0..horizon-1``.
+            The index name is kept.
         """
-        if self.include_contemp:
+        contemp = sorted(
+            f"{var} -> {target}"
+            for target, parents in self.parents_.items()
+            for var, lag in parents
+            if lag == 0
+        )
+        if contemp:
             raise ValueError(
-                "Multi-step forecasting requires include_contemp=False. "
-                "Contemporaneous parents are unavailable at forecast time."
+                "Multi-step forecasting requires models without lag-0 parents "
+                f"(fitted with {', '.join(contemp)}); refit with "
+                "include_contemp=False. Contemporaneous parents are unavailable "
+                "at forecast time."
             )
         if self.exog_cols_ and exog_future is None:
             raise ValueError(
@@ -636,7 +663,9 @@ class CausalForecaster:
                 new_row[col] = row.get(col, np.nan)
             extended = pd.concat([extended, pd.DataFrame([new_row])], ignore_index=True)
 
-        return pd.DataFrame(forecasts, columns=step_vars)[list(targets)]
+        out = pd.DataFrame(forecasts, columns=step_vars)[list(targets)]
+        out.index = _future_index(data.index, horizon)
+        return out
 
     def __repr__(self):
         n_causal = len(self.models_)
