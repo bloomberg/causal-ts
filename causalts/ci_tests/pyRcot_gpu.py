@@ -183,8 +183,8 @@ def RIT(
             perm = torch.randperm(T, generator=gen)
             Sta_p = Sta_perm(f_x[perm, :], f_y, T, num_f2)
             Stas.append(Sta_p)
-        Stas = np.array(torch.tensor(Stas).cpu())
-        p = 1 - len(Stas[Stas < Sta]) / len(Stas)
+        Stas = torch.stack(Stas)
+        p = 1 - (Stas < Sta).sum().item() / len(Stas)
 
     else:
         res_x = f_x - f_x.mean(axis=0).reshape(-1)
@@ -335,9 +335,8 @@ def rcot(
             perm = torch.randperm(T, generator=gen)
             Sta_p = Sta_perm(res_x[perm], res_y, T, num_f2)
             Stas.append(Sta_p)
-        # Stas = np.array(Stas)
-        Stas = np.array(torch.tensor(Stas).cpu())
-        p = np.array(1 - len(Stas[Stas < Sta]) / len(Stas))
+        Stas = torch.stack(Stas)
+        p = np.array(1 - (Stas < Sta).sum().item() / len(Stas))
 
     else:
         matmul = Cxz @ (i_Czz @ Czy)
