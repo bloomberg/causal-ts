@@ -22,7 +22,7 @@ def data():
     )
 
 
-@pytest.mark.parametrize("name", ["parcorr", "parcorr-gpu"])
+@pytest.mark.parametrize("name", ["parcorr", "parcorr-gpu", "fisherz"])
 @pytest.mark.parametrize("cond", [[], [2]])
 def test_constant_column_is_independent(data, name, cond):
     # A constant column is independent of everything: p must be 1, never NaN
@@ -35,9 +35,21 @@ def test_constant_column_is_independent(data, name, cond):
             assert pval == 1.0 and stat == 0.0
 
 
-def test_constant_column_does_not_change_other_tests(data):
-    pval, stat = create_ci_test("parcorr", data)(2, 3, [])
+@pytest.mark.parametrize("name", ["parcorr", "fisherz"])
+def test_constant_column_does_not_change_other_tests(data, name):
+    pval, stat = create_ci_test(name, data)(2, 3, [])
     assert np.isfinite(pval) and pval < 1e-6 and 0.4 < stat < 0.9
+
+
+def test_fisherz_constant_conditioning_column_is_ignored(data):
+    # A constant Z carries no information: a dependent pair stays dependent,
+    # with the same result as the unconditional test (#134).
+    test = create_ci_test("fisherz", data)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        pval, stat = test(2, 3, [1])
+    assert np.isfinite(pval) and np.isfinite(stat)
+    assert (pval, stat) == pytest.approx(test(2, 3, []))
 
 
 def test_parcorr_run_test_raw_constant_column():
