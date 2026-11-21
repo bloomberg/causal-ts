@@ -81,6 +81,16 @@ def test_lorenz96_without_noise_settles_at_the_fixed_point_for_small_forcing():
     np.testing.assert_allclose(b["df"].to_numpy(), 0.5, atol=1e-3)
 
 
+def test_lorenz96_leaves_global_numpy_random_state_untouched():
+    # lorenz96 draws from its own default_rng, so the caller's global
+    # legacy NumPy state must survive the call unchanged.
+    np.random.seed(123)
+    expected = np.random.rand()
+    np.random.seed(123)
+    sd.lorenz96(seed=7, T=50, N=6, burn_in=10)
+    assert np.random.rand() == expected
+
+
 def test_henon_bounded_start_raises_when_every_start_escapes():
     # Q far outside the stable range makes every interior start diverge.
     with pytest.raises(RuntimeError, match="diverged from 100 initial states"):
