@@ -419,3 +419,112 @@ def test_discover_alpha_defaults_per_algorithm(tmp_path):
         assert result.exit_code == 0, result.output
         summary = json.loads(result.output[result.output.index("{") :])
         assert summary["alpha"] == expected, (algorithm, extra)
+
+
+# ---------------------------------------------------------------------------
+# Non-numeric columns and --index-col (#130)
+# ---------------------------------------------------------------------------
+
+
+def _dated_csv(tmp_path, periods=200):
+    """A CSV with a date column next to two numeric series, as in #130."""
+    rng = np.random.default_rng(0)
+    path = tmp_path / "dated.csv"
+    pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=periods).strftime("%Y-%m-%d"),
+            "x": rng.normal(size=periods),
+            "y": rng.normal(size=periods),
+        }
+    ).to_csv(path, index=False)
+    return path
+
+
+def test_discover_names_non_numeric_columns_before_running(tmp_path):
+    out = tmp_path / "out"
+    result = CliRunner().invoke(
+        main,
+        ["-o", str(out), "discover", str(_dated_csv(tmp_path)), "--max-lag", "1"],
+    )
+    assert result.exit_code == 2, result.output
+    assert "column(s) ['date'] are not numeric" in result.output
+    assert "--index-col date" in result.output
+    assert not out.exists()  # rejected before the output directory is made
+
+
+@pytest.mark.parametrize("index_col", ["date", "0"])
+def test_discover_index_col_is_left_out_of_the_variables(tmp_path, index_col):
+    import json
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--quiet",
+            "-o",
+            str(tmp_path),
+            "discover",
+            str(_dated_csv(tmp_path)),
+            "--ci-test",
+            "parcorr-gpu",
+            "--max-lag",
+            "1",
+            "--no-plot",
+            "--json",
+            "--index-col",
+            index_col,
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    summary = json.loads(result.output[result.output.index("{") :])
+    assert summary["var_names"] == ["x", "y"]
+    assert summary["data_shape"] == [200, 2]
+
+
+def test_inspect_index_col_is_left_out_of_the_report(tmp_path):
+    import json
+
+    result = CliRunner().invoke(
+        main, ["inspect", str(_dated_csv(tmp_path)), "--index-col", "date"]
+    )
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.output)
+    assert report["data"]["var_names"] == ["x", "y"]
+    assert not any("Non-numeric" in w for w in report["warnings"])
+
+
+def test_index_col_the_file_lacks_is_a_usage_error(tmp_path):
+    result = CliRunner().invoke(
+        main, ["inspect", str(_dated_csv(tmp_path)), "--index-col", "time"]
+    )
+    assert result.exit_code == 2
+    assert "--index-col" in result.output
+    assert "['date', 'x', 'y']" in result.output
+
+
+def test_deconfound_names_non_numeric_columns_and_takes_index_col(tmp_path):
+    import json
+
+    graph = np.zeros((2, 2, 2), dtype=int)
+    graph[0, 1, 1] = 1
+    np.save(tmp_path / "graph.npy", graph)
+    out = tmp_path / "out"
+    args = [
+        "-o",
+        str(out),
+        "deconfound",
+        str(tmp_path / "graph.npy"),
+        "--data",
+        str(_dated_csv(tmp_path)),
+        "--strategy",
+        "pds",
+    ]
+
+    rejected = CliRunner().invoke(main, args)
+    assert rejected.exit_code == 2, rejected.output
+    assert "--index-col date" in rejected.output
+    assert not out.exists()
+
+    accepted = CliRunner().invoke(main, [*args, "--index-col", "date"])
+    assert accepted.exit_code == 0, accepted.output
+    (summary_path,) = out.glob("deconfound_pds_*/summary.json")
+    assert json.loads(summary_path.read_text())["n_vars"] == 2
