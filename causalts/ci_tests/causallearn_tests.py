@@ -42,6 +42,15 @@ class CausalLearnFisherZ(CIT_Base):
         # assert_input_data_is_valid is an assert, which python -O drops.
         self._reject_inf(X, Y, condition_set)
 
+        # A constant column is independent of everything: p = 1, never NaN
+        # (NaN > alpha is False, so the skeleton search would keep the edge).
+        # A constant conditioning column carries no information, so drop it.
+        # Without data, fall through to _get_array_hash's 'Data not set' error.
+        if self.data is not None:
+            if np.ptp(self.data[:, X]) == 0 or np.ptp(self.data[:, Y]) == 0:
+                return 1.0, 0.0
+            condition_set = [c for c in condition_set if np.ptp(self.data[:, c]) != 0]
+
         cache_key = self._get_array_hash(X, Y, condition_set)
         # Versioned: rows cached before the intercept fix carry the old statistic.
         param_hash = "fisherz-intercept"
