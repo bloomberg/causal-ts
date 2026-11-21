@@ -40,6 +40,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `order="auto"`); single-variable graphs plot; `plot_lagfuncs(dpi=...)` is honoured.
 * The deprecated `causalts.ci_tests.cit_base` import gives the unified `CIT_Base`; pass its
   arguments by keyword.
+* `rcot` / `RCOTGPU` with `approx="perm"` no longer emits a NumPy 2
+  `DeprecationWarning`; p-values are unchanged (#137).
 * `WrappedGraph.summary()` and `run_cdnots_gated(verbose=True)` print correctly;
   `set_up_logging` cleans up after a failed setup.
 * `import causalts.plotting` no longer loads `dcor` and numba; parallel docs builds crashed
