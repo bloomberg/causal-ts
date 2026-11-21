@@ -32,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `gcmi` no longer returns p = 1 (independent) when the conditioning set has a redundant column, such as `z` and `2*z` or any increasing function of `z`, which are exact copies after the copula transform (#142). The univariate test now takes the partial correlation from the covariance given Z with a pseudo-inverse of the Z block, as the multivariate test does, and its degrees of freedom count the rank of Z. A variable compared with itself is dependent; X or Y determined by Z still gives p = 1; a covariance that is not finite raises `ValueError`. Results cached by earlier builds are not reused.
 * `compare_graphs`: `curved_radius=0` no longer hangs when a node pair has two
   strokes, and a pair with three or more strokes no longer draws two on the same arc.
 * `CausalForecaster.forecast_horizon(targets=...)` with a subset of variables no longer
