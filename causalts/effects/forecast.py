@@ -270,6 +270,12 @@ class CausalForecaster:
         exogenous variables (no causal parents) so that multi-step
         forecasting does not break on missing root-node predictions.
         Ignored when exog columns are provided.
+    exclude_C : bool
+        If True, drop the last graph row/column (the time-index node C
+        appended by discovery engines with ``include_C=True``) and a
+        trailing ``"C"`` name. Handles a single time node only; engines
+        that append several C basis columns need manual slicing.
+        Default False.
 
     Examples
     --------
@@ -293,12 +299,45 @@ class CausalForecaster:
         model=None,
         include_contemp: bool = True,
         exog_fallback: bool = True,
+        *,
+        exclude_C: bool = False,
     ):
+        graph = np.asarray(graph)
+        if exclude_C:
+            # Discovery engines with include_C=True append one time-index
+            # node as the last row/column; drop exactly that node. Engines
+            # that append several C basis columns are not handled here.
+            if graph.ndim != 3:
+                raise ValueError(
+                    f"exclude_C=True needs a 3-D graph, got shape {graph.shape}."
+                )
+            graph = graph[:-1, :-1, :]
+        if graph.ndim != 3 or graph.shape[0] != graph.shape[1]:
+            raise ValueError(
+                f"graph must be a square 3-D array, got shape {graph.shape}."
+            )
         d = graph.shape[0]
+        if var_names is None:
+            self.var_names = [f"X{i}" for i in range(d)]
+        else:
+            names = list(var_names)
+            if exclude_C and len(names) == d + 1 and names[-1] == "C":
+                names = names[:-1]
+            if len(names) != d:
+                hint = ""
+                if d == len(names) + 1:
+                    hint = (
+                        " The graph has one more node than names; if the "
+                        "extra node is the time-index C node from a "
+                        "discovery engine, drop it with graph[:d, :d, :] "
+                        "or pass exclude_C=True."
+                    )
+                raise ValueError(
+                    f"len(var_names) ({len(names)}) does not match the "
+                    f"number of graph nodes ({d}).{hint}"
+                )
+            self.var_names = names
         self.graph = graph
-        self.var_names = (
-            list(var_names) if var_names is not None else [f"X{i}" for i in range(d)]
-        )
         self.model_template = model if model is not None else LinearRegression()
         self.include_contemp = include_contemp
         self.exog_fallback = exog_fallback
@@ -347,6 +386,18 @@ class CausalForecaster:
             self (fitted).
         """
         self.exog_cols_ = list(exog.columns) if exog is not None else []
+        missing = [n for n in self.var_names if n not in data.columns]
+        if missing:
+            hint = ""
+            if "C" in missing:
+                hint = (
+                    " If the missing column is 'C', the graph likely "
+                    "carries the time-index (C) node: drop it with "
+                    "graph[:d, :d, :] or pass exclude_C=True."
+                )
+            raise ValueError(
+                f"data is missing columns {missing} named by the graph.{hint}"
+            )
         data_ext = self._merge_exog(data, exog)
 
         if targets is None:
