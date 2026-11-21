@@ -3,7 +3,11 @@
 
 """Tests for GCMIGPU (Gaussian Copula MI) conditional independence test."""
 
+import csv
+
 import numpy as np
+import pytest
+import torch
 
 from causalts.ci_tests import GCMIGPU
 
@@ -154,3 +158,79 @@ def test_multivariate_orderings_give_one_answer():
 def test_multivariate_single_row_is_undefined():
     p, _ = GCMIGPU(np.zeros((1, 6)), device=DEVICE)([0, 1], 2, [3, 4, 5])
     assert np.isnan(p)
+
+
+def _redundant_z_data(z2_of, T=500, seed=0):
+    """y depends on x; Z = [z, z2] with z2 redundant with z after the copula."""
+    rng = np.random.default_rng(seed)
+    z = rng.normal(size=T)
+    x = rng.normal(size=T)
+    y = x + rng.normal(size=T)
+    return np.c_[x, y, z, z2_of(z, rng)]
+
+
+@pytest.mark.parametrize(
+    "z2_of",
+    [
+        lambda z, rng: z,
+        lambda z, rng: 2 * z,
+        lambda z, rng: z + 1e-6 * rng.normal(size=z.size),
+    ],
+    ids=["z", "2*z", "z+1e-6*noise"],
+)
+def test_redundant_conditioning_column_keeps_the_dependence(z2_of):
+    """It returned p = 1.0: the singular covariance failed to invert (#142)."""
+    data = _redundant_z_data(z2_of)
+    p, _ = GCMIGPU(data, device=DEVICE)(0, 1, [2, 3])
+    assert p < 1e-10
+
+
+def test_redundant_conditioning_column_does_not_change_the_answer():
+    data = _redundant_z_data(lambda z, rng: np.exp(z))
+    single = GCMIGPU(data, device=DEVICE, jitter=0)(0, 1, [2])
+    both = GCMIGPU(data, device=DEVICE, jitter=0)(0, 1, [2, 3])
+    assert both == pytest.approx(single, rel=1e-6)
+
+
+def test_independent_given_a_duplicated_conditioning_column():
+    rng = np.random.default_rng(1)
+    z = rng.normal(size=500)
+    x = z + rng.normal(size=500)
+    y = -z + rng.normal(size=500)
+    p, _ = GCMIGPU(np.c_[x, y, z, 3 * z], device=DEVICE)(0, 1, [2, 3])
+    assert p > 0.05
+
+
+def test_variable_against_itself_is_dependent():
+    rng = np.random.default_rng(2)
+    p, _ = GCMIGPU(rng.normal(size=(200, 2)), device=DEVICE)(0, 0)
+    assert p < 1e-10
+
+
+def test_variable_determined_by_the_conditioning_set_has_nothing_left_to_test():
+    rng = np.random.default_rng(3)
+    z = rng.normal(size=300)
+    y = z + rng.normal(size=300)
+    data = np.c_[np.exp(z), y, z]  # X is an increasing function of Z
+    assert GCMIGPU(data, device=DEVICE)(0, 1, [2]) == (1.0, 0.0)
+
+
+def test_non_finite_covariance_raises():
+    cov = torch.full((3, 3), float("nan"), dtype=torch.float64)
+    with pytest.raises(ValueError, match="not finite"):
+        GCMIGPU._gcmi_univariate(cov, T=50, n_z=1)
+
+
+def test_univariate_does_not_serve_a_result_cached_before_the_fix(tmp_path):
+    data = _redundant_z_data(lambda z, rng: z)
+    want = GCMIGPU(data, device=DEVICE)(0, 1, [2, 3])
+    old = GCMIGPU(data, device=DEVICE, cache_dir=str(tmp_path))
+    # The only row in the cache: the p = 1 earlier builds wrote for this query,
+    # under the key they used.
+    old_key = f"gcmi_gpu-jit{old.jitter}-seed{old._base_seed}-ms{old._min_samples}"
+    with open(old.cache_file, "a", newline="") as fout:
+        csv.writer(fout).writerow(
+            [old._get_array_hash(0, 1, [2, 3]), old_key, 1.0, 0.0]
+        )
+    got = GCMIGPU(data, device=DEVICE, cache_dir=str(tmp_path))(0, 1, [2, 3])
+    assert got == pytest.approx(want)
