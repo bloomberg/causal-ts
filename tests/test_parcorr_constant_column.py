@@ -1,7 +1,7 @@
 # Copyright 2026 Bloomberg Finance L.P.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""CPU ParCorr on a constant column (#111): p = 1, never NaN."""
+"""ParCorr and FisherZ on a constant column (#111, #134): p = 1, never NaN."""
 
 import warnings
 
@@ -22,7 +22,7 @@ def data():
     )
 
 
-@pytest.mark.parametrize("name", ["parcorr", "parcorr-gpu"])
+@pytest.mark.parametrize("name", ["parcorr", "parcorr-gpu", "fisherz"])
 @pytest.mark.parametrize("cond", [[], [2]])
 def test_constant_column_is_independent(data, name, cond):
     # A constant column is independent of everything: p must be 1, never NaN
@@ -37,6 +37,16 @@ def test_constant_column_is_independent(data, name, cond):
 
 def test_constant_column_does_not_change_other_tests(data):
     pval, stat = create_ci_test("parcorr", data)(2, 3, [])
+    assert np.isfinite(pval) and pval < 1e-6 and 0.4 < stat < 0.9
+
+
+def test_fisherz_constant_conditioning_column_leaves_dependent_pair_dependent(
+    data,
+):
+    # A constant conditioning column carries no information: dropping it
+    # gives the unconditional test, so a dependent pair stays dependent
+    # instead of returning a NaN p-value (#134).
+    pval, stat = create_ci_test("fisherz", data)(2, 3, [1])
     assert np.isfinite(pval) and pval < 1e-6 and 0.4 < stat < 0.9
 
 
