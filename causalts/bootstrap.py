@@ -158,7 +158,8 @@ def temporal_bootstrap(
         window = df.iloc[start : start + W].reset_index(drop=True)
         try:
             result = discovery_fn(window)
-            graphs.append(np.asarray(result))
+            # Copy: discovery_fn may reuse one output buffer across runs.
+            graphs.append(np.array(result, copy=True))
         except Exception:
             errors.append((i, traceback.format_exc()))
 
