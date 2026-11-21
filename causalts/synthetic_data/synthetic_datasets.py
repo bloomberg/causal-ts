@@ -1040,7 +1040,6 @@ def lorenz96(seed=42, T=1000, N=10, F=10.0, dt=0.1, obs_noise=0.1, burn_in=1000)
     from scipy.integrate import odeint
 
     rng = np.random.default_rng(seed)
-    np.random.seed(seed)
 
     def _rhs(x_state, t, F_val):
         p = len(x_state)

@@ -44,6 +44,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `set_up_logging` cleans up after a failed setup.
 * `import causalts.plotting` no longer loads `dcor` and numba; parallel docs builds crashed
   on numba's cache.
+* `lorenz96` no longer reseeds NumPy's global random state (it drew only from its own
+  `default_rng`); its output for a given seed is unchanged (#129).
 * `CondIndTest.run_test_raw(x, y)` with the default `z=None` runs the unconditional test
   instead of raising `TypeError` in the cache-key helper.
 * `precision_recall_3d` counts the true positives of bool graphs (it returned 0 for
