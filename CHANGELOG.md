@@ -50,6 +50,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `default_rng`); its output for a given seed is unchanged (#129).
 * `CondIndTest.run_test_raw(x, y)` with the default `z=None` runs the unconditional test
   instead of raising `TypeError` in the cache-key helper.
+* `run_pcmci` and `run_pcmciplus` take tigramite's `link_assumptions`; `selected_links`,
+  which tigramite 5.2 removed, raises a clear `ValueError`. The `tigramite` extra needs
+  `tigramite>=5.2` (#146).
 * `precision_recall_3d` counts the true positives of bool graphs (it returned 0 for
   both) and accepts a graph with only lag 0 instead of raising `IndexError`.
 * The `fisherz` CI test's statistic is the partial correlation behind its p-value when

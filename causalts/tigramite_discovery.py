@@ -481,9 +481,8 @@ def run_pcmciplus(
     fdr_method : str
         FDR correction method ("none", "fdr_bh", "fdr_by").
     selected_links : dict or None
-        .. deprecated::
-            Tigramite 5.2 removed this argument; any non-None value
-            raises ``ValueError``. Use ``link_assumptions`` instead.
+        Removed: tigramite 5.2 dropped this argument, and any non-None
+        value raises ``ValueError``. Use ``link_assumptions`` instead.
     link_assumptions : dict or None
         Dict restricting which links to test, in tigramite format
         ``{j: {(i, -tau): link_type}}`` where ``link_type`` is
@@ -588,9 +587,8 @@ def run_pcmci(
     fdr_method : str
         FDR correction ("none", "fdr_bh", "fdr_by").
     selected_links : dict or None
-        .. deprecated::
-            Tigramite 5.2 removed this argument; any non-None value
-            raises ``ValueError``. Use ``link_assumptions`` instead.
+        Removed: tigramite 5.2 dropped this argument, and any non-None
+        value raises ``ValueError``. Use ``link_assumptions`` instead.
     link_assumptions : dict or None
         Dict restricting which links to test, in tigramite format
         ``{j: {(i, -tau): link_type}}`` where ``link_type`` is
