@@ -58,6 +58,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `DeprecationWarning`; p-values are unchanged (#137).
 * `WrappedGraph.summary()` and `run_cdnots_gated(verbose=True)` print correctly;
   `set_up_logging` cleans up after a failed setup.
+* `CausalForecaster` checks the graph shape and the number of `var_names`, with a hint for
+  a time-index (C) node; `exclude_C=True` drops it, and `WrappedGraph.forecast()` forecasts
+  the observed variables of a graph discovered with `include_C=True` (#145).
 * `import causalts.plotting` no longer loads `dcor` and numba; parallel docs builds crashed
   on numba's cache.
 * `lorenz96` no longer reseeds NumPy's global random state (it drew only from its own
