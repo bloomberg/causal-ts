@@ -556,7 +556,6 @@ def run_regime_module(args, df, gt_ce, var_names):
 
         detector = PeltRegimeDetector(
             n_regimes=n_regimes,
-            model="l2",
             min_size=args.pelt_min_size,
             pen=args.pelt_pen,
             signal=args.pelt_signal,
