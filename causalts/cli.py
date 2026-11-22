@@ -1182,10 +1182,10 @@ def discover(
 
         if save_plot:
             try:
-                plot_names = list(var_name_list)
-                if include_c and res.cg_tig.shape[0] > len(plot_names):
-                    plot_names.append("C")
-                plot_result = res.plot(var_names=plot_names, exclude_C=not include_c)
+                # CdnotsResult.plot labels the C rows itself.
+                plot_result = res.plot(
+                    var_names=list(var_name_list), exclude_C=not include_c
+                )
                 fig = plot_result[0] if isinstance(plot_result, tuple) else plot_result
                 if fig is not None:
                     fname = f"network.{plot_format}"
