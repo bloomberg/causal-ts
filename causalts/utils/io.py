@@ -3,9 +3,9 @@
 
 """Multi-format table reader for the CLI.
 
-A single dispatch point so the file-based CLI (``inspect``, ``discover``) accepts
-the same formats regardless of command, and errors actionably when an optional
-engine is missing.
+A single dispatch point so the file-based CLI (``inspect``, ``discover``,
+``deconfound``) accepts the same formats regardless of command, and errors
+actionably when an optional engine is missing.
 """
 
 from __future__ import annotations
@@ -29,7 +29,11 @@ def _base_ext(path: str) -> str:
     return ext
 
 
-def read_dataframe(path: str) -> pd.DataFrame:
+class IndexColumnError(ValueError):
+    """:func:`read_dataframe` was given an ``index_col`` the file does not have."""
+
+
+def read_dataframe(path: str, index_col: str | int | None = None) -> pd.DataFrame:
     """Read a tabular time series from ``path``, dispatching on file extension.
 
     Supported: ``.csv`` (including compressed ``.csv.gz``, ``.csv.bz2``,
@@ -44,6 +48,10 @@ def read_dataframe(path: str) -> pd.DataFrame:
     ----------
     path : str
         Path to the data file.
+    index_col : str or int, optional
+        Column to read as the row index (e.g. a timestamp column), so that it is
+        not one of the variables. A column name, or a 0-based position; a name
+        is matched first, so a column called ``"0"`` wins over position 0.
 
     Returns
     -------
@@ -53,9 +61,19 @@ def read_dataframe(path: str) -> pd.DataFrame:
     ------
     ValueError
         If the extension is not recognised.
+    IndexColumnError
+        If ``index_col`` is neither a column name nor a valid position. Subclass
+        of ``ValueError``.
     ImportError
         If a parquet/feather engine (pyarrow) is required but not installed.
     """
+    df = _read_table(path)
+    if index_col is not None:
+        df = df.set_index(_index_label(df, index_col))
+    return df
+
+
+def _read_table(path: str) -> pd.DataFrame:
     ext = os.path.splitext(path)[1].lower()
     base_ext = _base_ext(path)
 
@@ -87,4 +105,18 @@ def read_dataframe(path: str) -> pd.DataFrame:
         f"Unsupported file format '{ext}' for '{path}'. "
         "Supported: .csv (.csv.gz, .csv.bz2, .csv.zip, .csv.xz, .csv.zst), "
         ".tsv, .parquet, .pq, .feather"
+    )
+
+
+def _index_label(df: pd.DataFrame, index_col: str | int):
+    """The column label ``index_col`` refers to: a name first, then a position."""
+    names = [str(c) for c in df.columns]
+    key = str(index_col)
+    if key in names:
+        return df.columns[names.index(key)]
+    if key.isdecimal() and int(key) < len(names):
+        return df.columns[int(key)]
+    raise IndexColumnError(
+        f"index column {index_col!r} is neither a column name nor a 0-based "
+        f"position; the columns are {names}."
     )

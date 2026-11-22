@@ -458,8 +458,11 @@ class WrappedGraph:
         """
         from .forecast import CausalForecaster
 
+        # Results discovered with include_C=True carry trailing C-node
+        # rows/columns (one per C basis column); forecast observed variables only.
+        d = len(self._var_names)
         forecaster = CausalForecaster(
-            self.cg_tig,
+            np.asarray(self.cg_tig)[:d, :d, :],
             var_names=self._var_names,
             model=model,
             include_contemp=include_contemp,

@@ -76,7 +76,7 @@ Changelog = "https://github.com/bloomberg/causal-ts/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dowhy = ["dowhy>=0.11"]
-tigramite = ["tigramite"]
+tigramite = ["tigramite>=5.2"]
 parquet = ["pyarrow>=10.0"]
 dev = [
   "pytest>=7.0",
