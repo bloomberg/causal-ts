@@ -60,6 +60,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `RangeIndex` and keeps its name (#144).
 * `fisherz` returns p = 1 for a constant column instead of NaN, and ignores a constant
   conditioning column, as `parcorr` does (#134).
+* `extract_segments` applies `min_length` to the regime run itself, not to the run plus
+  its lag buffer, so a short regime run no longer passes on rows from the previous
+  regime (#163).
 * `plot_time_series_graph(order=...)` lists variables top to bottom, as documented (also
   `order="auto"`); single-variable graphs plot; `plot_lagfuncs(dpi=...)` is honoured.
 * The deprecated `causalts.ci_tests.cit_base` import gives the unified `CIT_Base`; pass its
@@ -78,6 +81,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   the observed variables of a graph discovered with `include_C=True` (#145).
 * `import causalts.plotting` no longer loads `dcor` and numba; parallel docs builds crashed
   on numba's cache.
+* CLI runs that start in the same second (scripted sweeps, parallel jobs) no longer
+  share and overwrite one output directory: the later run gets a `_1`, `_2`, ...
+  suffix, and the directory is created atomically (#166).
 * `lorenz96` no longer reseeds NumPy's global random state (it drew only from its own
   `default_rng`); its output for a given seed is unchanged (#129).
 * `CondIndTest.run_test_raw(x, y)` with the default `z=None` runs the unconditional test
