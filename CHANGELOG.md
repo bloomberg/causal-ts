@@ -37,6 +37,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   strokes, and a pair with three or more strokes no longer draws two on the same arc.
 * `CausalForecaster.forecast_horizon(targets=...)` with a subset of variables no longer
   returns NaN from the second step on.
+* `fisherz` returns p = 1 for a constant column instead of NaN, and ignores a constant
+  conditioning column, as `parcorr` does (#134).
 * `plot_time_series_graph(order=...)` lists variables top to bottom, as documented (also
   `order="auto"`); single-variable graphs plot; `plot_lagfuncs(dpi=...)` is honoured.
 * The deprecated `causalts.ci_tests.cit_base` import gives the unified `CIT_Base`; pass its
