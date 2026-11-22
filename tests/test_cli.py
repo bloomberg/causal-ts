@@ -3,11 +3,16 @@
 
 """CLI smoke tests."""
 
+import json
+import os
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
 import pytest
 from click.testing import CliRunner
 
+import causalts.cli as cli_module
 from causalts.cli import CI_TEST_CHOICES, CI_TEST_GUIDE, main
 
 
@@ -689,3 +694,48 @@ def test_evaluate_var_names_wrong_count(tmp_path):
         assert "--var-names" in result.output
         # A usage error leaves no output directory behind.
         assert not out.exists()
+
+
+class _FrozenClock:
+    @staticmethod
+    def now():
+        return datetime(2026, 1, 2, 3, 4, 5)
+
+
+def test_make_output_dir_same_second_gets_new_dir(tmp_path, monkeypatch):
+    # Runs that start in the same second must not share a directory (#166).
+    monkeypatch.setattr(cli_module, "datetime", _FrozenClock)
+    base = tmp_path / "out"
+    first = cli_module._make_output_dir(str(base), "x")
+    second = cli_module._make_output_dir(str(base), "x")
+    third = cli_module._make_output_dir(str(base), "x")
+    assert first == str(base / "x_20260102_030405")
+    assert second == str(base / "x_20260102_030405_1")
+    assert third == str(base / "x_20260102_030405_2")
+    assert all(os.path.isdir(p) for p in (first, second, third))
+
+
+def test_generate_twice_in_same_second_keeps_both_runs(tmp_path, monkeypatch):
+    # Two `generate` runs under a frozen clock write to separate directories
+    # (#166); the second used to overwrite the first.
+    monkeypatch.setattr(cli_module, "datetime", _FrozenClock)
+    for seed in ("1", "2"):
+        result = CliRunner().invoke(
+            main,
+            [
+                "-o",
+                str(tmp_path),
+                "-s",
+                seed,
+                "generate",
+                "--dataset",
+                "ex2",
+                "-T",
+                "50",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+    dirs = sorted(p.name for p in tmp_path.iterdir())
+    assert dirs == ["generate_20260102_030405", "generate_20260102_030405_1"]
+    seeds = [json.loads((tmp_path / d / "meta.json").read_text())["seed"] for d in dirs]
+    assert seeds == [1, 2]

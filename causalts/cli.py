@@ -222,10 +222,25 @@ def _align_graphs(gt, pred, ctx=None):
 
 
 def _make_output_dir(base, prefix):
+    """Create and return a new, empty output directory for one run.
+
+    The name is ``<prefix>_<YYYYmmdd_HHMMSS>``. If that directory already exists
+    (another run started in the same second), ``_1``, ``_2``, ... is appended.
+    The leaf is created with ``os.mkdir``, so two processes never get the same
+    directory.
+    """
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(base, f"{prefix}_{ts}")
-    os.makedirs(path, exist_ok=True)
-    return path
+    os.makedirs(base, exist_ok=True)
+    name = f"{prefix}_{ts}"
+    path = os.path.join(base, name)
+    n = 0
+    while True:
+        try:
+            os.mkdir(path)
+            return path
+        except FileExistsError:
+            n += 1
+            path = os.path.join(base, f"{name}_{n}")
 
 
 def _save_json(data, path):
