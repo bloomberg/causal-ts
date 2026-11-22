@@ -216,6 +216,12 @@ class GCMIGPU(CIT_Base):
             s_xz = cov[:2, 2:]
             szz_pinv = torch.linalg.pinv(szz, atol=tol * scale, hermitian=True)
             resid = resid - s_xz @ szz_pinv @ s_xz.T
+        # Before the 'determined by Z' check: when Z spans the centred sample
+        # (rank(Z) >= T - 1) the residuals vanish for any X and Y, which would
+        # reflect the sample, not X or Y being set by Z.
+        df = T - r_z - 2  # t-test degrees of freedom
+        if df < 1:
+            return 0.0, np.nan
         s_xx, s_yy, s_xy = float(resid[0, 0]), float(resid[1, 1]), float(resid[0, 1])
         if s_xx <= tol * scale or s_yy <= tol * scale:
             return 0.0, 1.0  # X or Y is determined by Z: nothing left to test
@@ -227,9 +233,6 @@ class GCMIGPU(CIT_Base):
         cmi = -0.5 * np.log(1.0 - r**2)
 
         # Analytic p-value: t-distribution with df = T - rank(Z) - 2
-        df = T - r_z - 2
-        if df < 1:
-            return cmi, np.nan
         if abs(abs(r) - 1.0) <= sys.float_info.min:
             return cmi, 0.0
 

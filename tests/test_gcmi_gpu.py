@@ -215,6 +215,14 @@ def test_variable_determined_by_the_conditioning_set_has_nothing_left_to_test():
     assert GCMIGPU(data, device=DEVICE)(0, 1, [2]) == (1.0, 0.0)
 
 
+def test_conditioning_set_spanning_the_sample_is_undefined():
+    # Z fills the centred sample: residuals vanish for any X and Y, so p is
+    # undefined (NaN), not 1.
+    rng = np.random.default_rng(4)
+    p, _ = GCMIGPU(rng.normal(size=(5, 6)), device=DEVICE)(0, 1, [2, 3, 4, 5])
+    assert np.isnan(p)
+
+
 def test_non_finite_covariance_raises():
     cov = torch.full((3, 3), float("nan"), dtype=torch.float64)
     with pytest.raises(ValueError, match="not finite"):
