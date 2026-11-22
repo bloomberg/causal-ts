@@ -93,6 +93,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `tigramite>=5.2` (#146).
 * `precision_recall_3d` counts the true positives of bool graphs (it returned 0 for
   both) and accepts a graph with only lag 0 instead of raising `IndexError`.
+* `evaluate_graph` and `plot_metrics_summary` raise a `ValueError` for a graph that is not
+  0/1 (or bool), such as bootstrap persistence scores, instead of casting it to `int8`,
+  which scored 0.7 as "no edge"; a shape mismatch is a `ValueError`, not an `assert` (#165).
 * The `fisherz` CI test's statistic is the partial correlation behind its p-value when
   the conditioning variables have a nonzero mean (it regressed on `Z` without an
   intercept, so value matrices and edge strengths could be far off).
