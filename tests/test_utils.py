@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from causalts.utils.helpers import evaluate_graph, shd_2d, shd_3d
+from causalts.utils.io import read_dataframe
 from causalts.utils.linearity import check_linearity
 
 
@@ -223,3 +224,70 @@ def test_shd_3d_empty_lag_axis():
     empty = np.zeros((2, 2, 0), dtype=int)
     assert shd_3d(empty, empty, double_for_anticausal=False) == 0
     assert shd_3d(empty, empty, double_for_anticausal=True) == 0
+
+
+@pytest.fixture
+def labelled_csv(tmp_path):
+    path = tmp_path / "labelled.csv"
+    pd.DataFrame({"t": ["a", "b"], "0": [1.0, 2.0], "y": [3.0, 4.0]}).to_csv(
+        path, index=False
+    )
+    return str(path)
+
+
+def test_read_dataframe_index_col_by_name_or_position(labelled_csv):
+    from causalts.utils.io import read_dataframe
+
+    assert list(read_dataframe(labelled_csv).columns) == ["t", "0", "y"]
+    by_name = read_dataframe(labelled_csv, index_col="t")
+    assert list(by_name.columns) == ["0", "y"]
+    assert list(by_name.index) == ["a", "b"]
+    assert list(read_dataframe(labelled_csv, index_col=2).columns) == ["t", "0"]
+    # A name is matched before a position: "0" is the column called "0".
+    assert list(read_dataframe(labelled_csv, index_col="0").columns) == ["t", "y"]
+
+
+@pytest.mark.parametrize("index_col", ["missing", 3, -1, "1.0"])
+def test_read_dataframe_rejects_an_index_col_the_file_lacks(labelled_csv, index_col):
+    from causalts.utils.io import IndexColumnError, read_dataframe
+
+    with pytest.raises(IndexColumnError, match=r"the columns are \['t', '0', 'y'\]"):
+        read_dataframe(labelled_csv, index_col=index_col)
+
+
+def test_read_dataframe_index_col_on_parquet(tmp_path):
+    pytest.importorskip("pyarrow")
+    from causalts.utils.io import read_dataframe
+
+    path = tmp_path / "d.parquet"
+    pd.DataFrame({"date": ["2024-01-01", "2024-01-02"], "x": [1.0, 2.0]}).to_parquet(
+        path, index=False
+    )
+    df = read_dataframe(str(path), index_col="date")
+    assert list(df.columns) == ["x"]
+    assert list(df.index) == ["2024-01-01", "2024-01-02"]
+
+
+@pytest.mark.parametrize(
+    "suffix,kwargs",
+    [
+        (".csv.gz", {}),
+        (".csv.bz2", {}),
+        (".tsv", {"sep": "\t"}),
+    ],
+)
+def test_read_dataframe_compressed_csv_and_tsv(tmp_path, suffix, kwargs):
+    # Compressed CSVs and TSVs read like plain CSVs (#128).
+    df = pd.DataFrame(np.arange(6).reshape(3, 2), columns=["x", "y"])
+    path = tmp_path / f"d{suffix}"
+    df.to_csv(path, index=False, **kwargs)
+    pd.testing.assert_frame_equal(read_dataframe(str(path)), df)
+
+
+def test_read_dataframe_rejects_parquet_gz(tmp_path):
+    # A compression suffix does not make .parquet.gz supported (#128).
+    df = pd.DataFrame(np.arange(6).reshape(3, 2), columns=["x", "y"])
+    path = tmp_path / "d.parquet.gz"
+    df.to_csv(path, index=False)
+    with pytest.raises(ValueError, match="Unsupported file format"):
+        read_dataframe(str(path))

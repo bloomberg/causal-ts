@@ -519,3 +519,86 @@ def test_fit_auto_ets_warns_when_every_ar_candidate_fails(monkeypatch):
     monkeypatch.setattr(ar_model, "AutoReg", broken)
     with pytest.warns(RuntimeWarning, match="every AR candidate failed"):
         _fit_auto_ets(np.random.default_rng(0).standard_normal(120))
+
+
+# ---------------------------------------------------------------------------
+# C-node graphs (#145)
+# ---------------------------------------------------------------------------
+
+
+def _c_node_graph_data():
+    """Two variables plus a C (time-index) node as the last row/column."""
+    df = pd.DataFrame(
+        np.random.default_rng(0).normal(size=(300, 2)).cumsum(0) * 0.1,
+        columns=["x", "y"],
+    )
+    Gc = np.zeros((3, 3, 2), int)
+    Gc[0, 1, 1] = 1  # x(t-1) -> y(t)
+    Gc[2, 0, 0] = 1  # C node edge, dropped with the C row/column
+    return Gc, df
+
+
+def test_c_node_name_count_mismatch_raises():
+    Gc, _ = _c_node_graph_data()
+    with pytest.raises(ValueError, match="C node"):
+        CausalForecaster(Gc, var_names=["x", "y"])
+
+
+def test_c_node_name_missing_from_data_raises():
+    Gc, df = _c_node_graph_data()
+    fc = CausalForecaster(Gc, var_names=["x", "y", "C"])
+    with pytest.raises(ValueError, match="missing columns.*'C'"):
+        fc.fit(df)
+
+
+@pytest.mark.parametrize("names", [["x", "y"], ["x", "y", "C"]])
+def test_exclude_c_fits_and_predicts(names):
+    Gc, df = _c_node_graph_data()
+    fc = CausalForecaster(Gc, var_names=names, exclude_C=True).fit(df)
+    assert fc.var_names == ["x", "y"]
+    assert fc.graph.shape == (2, 2, 2)
+    pred = fc.predict(df)
+    assert list(pred.columns) == ["x", "y"]
+    assert pred["y"].notna().sum() > 100
+
+
+def test_exclude_c_default_names():
+    Gc, _ = _c_node_graph_data()
+    fc = CausalForecaster(Gc, exclude_C=True)
+    assert fc.var_names == ["X0", "X1"]
+    assert fc.graph.shape == (2, 2, 2)
+
+
+def test_non_square_or_non_3d_graph_raises():
+    with pytest.raises(ValueError, match="square 3-D"):
+        CausalForecaster(np.zeros((2, 3, 2), int))
+    with pytest.raises(ValueError, match="square 3-D"):
+        CausalForecaster(np.zeros((2, 2), int))
+
+
+def test_multi_c_graph_hint_names_slice():
+    # Multi-C presets append several C columns; exclude_C drops only one.
+    G = np.zeros((4, 4, 2), int)
+    with pytest.raises(ValueError, match=r"2 more node\(s\).*graph\[:2, :2, :\]\.$"):
+        CausalForecaster(G, var_names=["x", "y"])
+
+
+@pytest.mark.parametrize("n_c", [1, 2])
+def test_wrapped_graph_forecast_drops_c_nodes(n_c):
+    # wrap_graph(result.cg_tig, df).forecast() on an include_C=True result.
+    from causalts.effects import wrap_graph
+
+    Gc, df = _c_node_graph_data()
+    G = np.zeros((2 + n_c, 2 + n_c, 2), int)
+    G[:3, :3] = Gc
+    fc = wrap_graph(G, df).forecast()
+    assert fc.var_names == ["x", "y"] and fc.graph.shape == (2, 2, 2)
+
+
+def test_exclude_c_recognises_cedar_preset_names():
+    # Cedar names its time node after the preset (e.g. "C_lin"), not "C".
+    Gc, df = _c_node_graph_data()
+    fc = CausalForecaster(Gc, var_names=["x", "y", "C_lin"], exclude_C=True).fit(df)
+    assert fc.var_names == ["x", "y"]
+    with pytest.raises(ValueError, match="time-index"):
+        CausalForecaster(Gc, var_names=["x", "y", "C_lin"]).fit(df)

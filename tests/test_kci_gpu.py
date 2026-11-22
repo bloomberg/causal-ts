@@ -3,6 +3,8 @@
 
 """Tests for KCIGPU (kernel) conditional independence test."""
 
+import warnings
+
 import numpy as np
 
 from causalts.ci_tests import KCIGPU
@@ -42,3 +44,11 @@ def test_cache(independent_data):
     p2, s2 = ci(0, 1, [2])
     assert p1 == p2 and s1 == s2
     assert ci.n_actual_tests == n_after
+
+
+def test_bootstrap_emits_no_deprecation_warning(dependent_data):
+    data = dependent_data(n=80)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        p, _ = KCIGPU(data, approx="bootstrap", device=DEVICE)(0, 1, [2])
+    assert 0 <= p <= 1

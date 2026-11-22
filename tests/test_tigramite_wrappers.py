@@ -359,3 +359,53 @@ def test_run_tigramite_without_a_graph_thresholds_the_p_matrix(monkeypatch, chai
 def test_run_tigramite_rejects_unknown_methods(chain):
     with pytest.raises(ValueError, match="Unknown method"):
         td.run_tigramite(chain, method="granger")
+
+
+# ---------------------------------------------------------------------------
+# selected_links -> link_assumptions (#146)
+# ---------------------------------------------------------------------------
+
+
+def test_run_pcmciplus_accepts_link_assumptions():
+    # Issue #146 example: the "o?o at lag 0" assumptions run cleanly.
+    df = pd.DataFrame(
+        np.random.default_rng(0).normal(size=(300, 2)), columns=["a", "b"]
+    )
+    old = {0: [(1, 0), (0, -1)], 1: [(0, 0), (1, -1)]}
+    link_assumptions = {
+        j: {k: ("o?o" if k[1] == 0 else "-?>") for k in links}
+        for j, links in old.items()
+    }
+    G, _ = td.run_pcmciplus(df, tau_max=1, link_assumptions=link_assumptions)
+    assert G.shape == (2, 2, 2)
+
+
+def test_run_pcmciplus_link_assumptions_restricts_links(chain):
+    # Links missing from link_assumptions are assumed absent by tigramite,
+    # so only the allowed self-lags can appear and no cross edge survives.
+    link_assumptions = {j: {(j, -1): "-?>"} for j in range(3)}
+    G, _ = td.run_pcmciplus(chain, tau_max=1, link_assumptions=link_assumptions)
+    assert _cross_edges(G) == set()
+
+
+def test_run_pcmci_link_assumptions_restricts_links(chain):
+    link_assumptions = {j: {(j, -1): "-?>"} for j in range(3)}
+    G, _ = td.run_pcmci(chain, tau_max=1, link_assumptions=link_assumptions)
+    assert _cross_edges(G) == set()
+
+
+@pytest.mark.parametrize(
+    "fn", [td.run_pcmciplus, td.run_pcmci], ids=["pcmciplus", "pcmci"]
+)
+def test_selected_links_raises_and_points_to_link_assumptions(fn, chain):
+    selected = {0: [(0, -1)], 1: [(0, -1), (1, -1)]}
+    with pytest.raises(ValueError, match="link_assumptions"):
+        fn(chain, tau_max=1, selected_links=selected)
+    # Passing both arguments still raises for selected_links.
+    with pytest.raises(ValueError, match="link_assumptions"):
+        fn(
+            chain,
+            tau_max=1,
+            selected_links=selected,
+            link_assumptions={0: {(0, -1): "-?>"}},
+        )

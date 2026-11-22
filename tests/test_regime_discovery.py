@@ -214,3 +214,72 @@ def test_threshold_rounding_set_after_construction_is_still_checked():
 def test_regime_config_positional_order_is_unchanged():
     cfg = RegimeConfig(1, None, None, 0, "or", 0.5, ["r0"])
     assert cfg.regime_names == ["r0"] and cfg.threshold_rounding == "floor"
+
+
+def test_all_segments_failing_raises_instead_of_empty_graph():
+    # A discovery_fn bug used to return an empty graph with no warning (#136).
+    df = pd.DataFrame(
+        np.random.default_rng(0).normal(size=(1200, 3)), columns=list("abc")
+    )
+    labels = np.repeat([0, 1, 2], 400)
+
+    def bad(seg_df, max_lag, alpha, **_):
+        raise TypeError("bad kwarg")
+
+    with pytest.raises(RuntimeError, match="All 3 discovery segments failed"):
+        run_regime_discovery(df, bad, regime_labels=labels)
+
+
+def test_partial_segment_failure_warns_and_records_metadata():
+    # One regime failing warns once and records the failure (#136).
+    df = pd.DataFrame(np.zeros((1200, 3)), columns=["A", "B", "C"])
+    labels = np.repeat([0, 1], 600)
+
+    def flaky(seg_df, max_lag, alpha, **_):
+        if seg_df.index[0] >= 600:
+            raise TypeError("bad kwarg")
+        return types.SimpleNamespace(cg_tig=_graph((A, B, 1)))
+
+    config = RegimeConfig(n_regimes=2)
+    with pytest.warns(UserWarning, match="1 of 2 discovery segments failed"):
+        res = run_regime_discovery(df, flaky, config=config, regime_labels=labels)
+    assert 0 in res.regime_graphs and 1 not in res.regime_graphs
+    assert len(res.metadata["failed_segments"]) == 1
+    failed = res.metadata["failed_segments"][0]
+    assert failed["regime"] == "regime-1"
+    assert "bad kwarg" in failed["error"]
+
+
+def test_empty_graph_result_has_failed_segments_key():
+    # No segment is long enough, so nothing runs: the metadata keys still exist.
+    df = pd.DataFrame(np.zeros((60, 3)), columns=["A", "B", "C"])
+    res = run_regime_discovery(
+        df,
+        lambda *a, **k: None,
+        config=RegimeConfig(n_regimes=2, min_segment_length=100),
+        regime_labels=np.repeat([0, 1], 30),
+    )
+    assert res.metadata["failed_segments"] == []
+    assert res.regime_graphs == {}
+
+
+def test_failed_regime_does_not_dilute_the_weighted_vote():
+    # Three equal regimes, one fails: an edge found in one of the two that ran
+    # scores 1/2 and passes the 0.5 weighted vote (it scored 1/3 when the failed
+    # regime kept its weight).
+    df = pd.DataFrame(np.zeros((1200, 3)), columns=["A", "B", "C"])
+    labels = np.repeat([0, 1, 2], 400)
+
+    def by_regime(seg_df, max_lag, alpha, **_):
+        start = seg_df.index[0]
+        if start >= 800:
+            raise TypeError("bad kwarg")
+        return types.SimpleNamespace(
+            cg_tig=_graph((A, B, 1)) if start < 400 else _graph()
+        )
+
+    config = RegimeConfig(n_regimes=3, aggregation="weighted")
+    with pytest.warns(UserWarning, match="1 of 3 discovery segments failed"):
+        res = run_regime_discovery(df, by_regime, config=config, regime_labels=labels)
+    assert res.cg_tig[A, B, 1] == 1
+    assert res.metadata["regime_weights"] == {0: 400.0, 1: 400.0}

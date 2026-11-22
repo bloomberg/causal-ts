@@ -30,6 +30,7 @@ causal-ts inspect DATA.csv [OPTIONS]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--var-names TEXT` | from file | Comma-separated variable names |
+| `--index-col NAME_OR_POSITION` | — | Column to read as the index (e.g. a date column) instead of a variable: a name or a 0-based position |
 | `--max-lag INT` | inferred | Override the suggested max lag |
 
 The report has six blocks:
@@ -65,8 +66,11 @@ The same report is available in Python as
 
 ## `discover`
 
-Run causal discovery on a `.csv`, `.parquet`/`.pq`, or `.feather` file.
+Run causal discovery on a `.csv` (including compressed `.csv.gz`, `.csv.bz2`, `.csv.zip`, `.csv.xz`, `.csv.zst`), `.tsv`, `.parquet`/`.pq`, or `.feather` file.
 Parquet and feather need `pip install causalts[parquet]`.
+Every column is a variable and must be numeric (Booleans are read as 0/1);
+any other column, such as a date, is a usage error that names it before
+anything runs. Pass a date or time column as `--index-col`, and drop the rest.
 
 ```bash
 causal-ts discover DATA.csv [OPTIONS]
@@ -82,6 +86,7 @@ causal-ts discover DATA.csv [OPTIONS]
 | `--alpha FLOAT` | `0.01` for `cdnots+`, else `0.05` | Significance level for `cdnots`, `cdnots+`, `grace`, `grace-ss`, `reap`; Cedar uses `--alpha-cond1`/`--alpha-cond2` |
 | `--lag-list TEXT` | — | Comma-separated explicit lags, e.g. `1,3,12` (`cdnots` and `cdnots+` only; other algorithms use `--max-lag`) |
 | `--var-names TEXT` | from CSV | Comma-separated variable names |
+| `--index-col NAME_OR_POSITION` | — | Column to read as the index (e.g. a date column) instead of a variable: a name or a 0-based position |
 
 ### CDNOTS-specific
 
@@ -298,6 +303,7 @@ causal-ts deconfound GRAPH --data data.csv
 | `--threshold FLOAT` | `0.25` | Tetrad factor-consistency threshold (`--strategy tetrad` only) |
 | `--alpha FLOAT` | `1e-10` | Significance level for the PDS filter (`--strategy pds` only) |
 | `--var-names` | — | Comma-separated variable names |
+| `--index-col NAME_OR_POSITION` | — | Column to read as the index, as in `discover`; pass the one you discovered with |
 | `--json` | off | Echo the run summary as JSON to stdout (stdout carries only the JSON; progress goes to stderr) |
 
 ## `ci-test-info`
