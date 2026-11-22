@@ -57,16 +57,18 @@ def extract_segments(
             start = i
             in_segment = True
         elif not mask[i] and in_segment:
-            buf_start = max(0, start - buffer)
-            seg_df = df.iloc[buf_start:i].copy()
-            if len(seg_df) >= min_length:
+            # min_length is the regime run itself. Lag-buffer rows belong to
+            # the previous regime and must not count toward it.
+            if i - start >= min_length:
+                buf_start = max(0, start - buffer)
+                seg_df = df.iloc[buf_start:i].copy()
                 segments.append(Segment(seg_df, regime, buf_start, i))
             in_segment = False
 
     if in_segment:
-        buf_start = max(0, start - buffer)
-        seg_df = df.iloc[buf_start : len(df)].copy()
-        if len(seg_df) >= min_length:
+        if len(df) - start >= min_length:
+            buf_start = max(0, start - buffer)
+            seg_df = df.iloc[buf_start : len(df)].copy()
             segments.append(Segment(seg_df, regime, buf_start, len(df)))
 
     return segments
