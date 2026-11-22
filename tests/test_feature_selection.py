@@ -173,6 +173,73 @@ def test_fastpc_design_matrix(data):
     assert X.shape[1] == n_cross + n_self
     assert n_self >= 1  # X3 has real self-history
 
+def test_design_matrix_dropna_keeps_lag0_rows():
+    df = pd.DataFrame({"X": np.arange(8, dtype=float), "Y": np.arange(8, dtype=float)})
+    result = FeatureSelectionResult(
+        target="Y",
+        features=[Feature("X", 0, "parent")],
+        var_names=["X", "Y"],
+        max_lag=3,
+        algo="cdnots",
+        _df=df,
+    )
+    X = result.to_design_matrix(dropna=True)
+    assert list(X.columns) == ["X_lag0"]
+    assert X.shape == (8, 1)
+    assert list(X.index) == list(range(8))
+    assert X["X_lag0"].tolist() == list(range(8))
+    used_lags = [int(c.rsplit("_lag", 1)[1]) for c in X.columns]
+    assert X.shape[0] == len(df) - max(used_lags)
+    X_all = result.to_design_matrix(dropna=False)
+    assert X_all.shape == (8, 1)
+
+def test_design_matrix_dropna_drops_only_largest_used_lag():
+    df = pd.DataFrame({"X": np.arange(8, dtype=float), "Y": np.arange(8, dtype=float)})
+    cases = [
+        ([Feature("X", 0, "parent")], 8),
+        ([Feature("X", 1, "parent")], 7),
+        ([Feature("X", 2, "parent")], 6),
+        ([Feature("X", 3, "parent")], 5),
+        ([Feature("X", 0, "parent"), Feature("X", 2, "parent")], 6),
+    ]
+    for features, expected_rows in cases:
+        result = FeatureSelectionResult(
+            target="Y",
+            features=features,
+            var_names=["X", "Y"],
+            max_lag=3,
+            algo="cdnots",
+            _df=df,
+        )
+        X = result.to_design_matrix(dropna=True)
+        used_lags = [int(c.rsplit("_lag", 1)[1]) for c in X.columns]
+        assert X.shape[0] == len(df) - max(used_lags)
+        assert X.shape[0] == expected_rows
+        assert list(X.index) == list(range(8 - expected_rows, 8))
+
+def test_design_matrix_dropna_drops_only_largest_self_lag():
+    # AR(2): y depends on its lags 1 and 2 only.
+    rng = np.random.default_rng(0)
+    y = np.zeros(300)
+    eps = rng.normal(size=300)
+    for t in range(2, 300):
+        y[t] = 0.6 * y[t - 1] + 0.3 * y[t - 2] + eps[t]
+    df = pd.DataFrame({"X": rng.normal(size=300), "Y": y})
+    result = FeatureSelectionResult(
+        target="Y",
+        features=[],
+        var_names=["X", "Y"],
+        max_lag=3,
+        algo="cdnots",
+        _df=df,
+    )
+    X = result.to_design_matrix(dropna=True)
+    assert list(X.columns) == ["Y_lag1", "Y_lag2"]
+    assert X.shape == (298, 2)
+    assert list(X.index) == list(range(2, 300))
+    used_lags = [int(c.rsplit("_lag", 1)[1]) for c in X.columns]
+    assert X.shape[0] == len(df) - max(used_lags)
+
 
 def test_real_cdnots_backend_runs(data):
     """algo='cdnots' runs the real (oriented) full algorithm and slices it."""
