@@ -313,6 +313,37 @@ def test_forecast_horizon_continues_datetime_index():
     pd.testing.assert_index_equal(out.index, expected)
 
 
+def test_forecast_horizon_infers_datetime_freq():
+    # Dates read from a CSV carry no freq; a regular spacing is inferred,
+    # an irregular one falls back to positions.
+    graph, df = _var_data(T=300)
+    df.index = pd.DatetimeIndex(
+        pd.bdate_range("2024-01-01", periods=len(df)).tolist(), name="date"
+    )
+    assert df.index.freq is None
+    fc = CausalForecaster(graph, var_names=df.columns).fit(df)
+    out = fc.forecast_horizon(df, horizon=3)
+    last = df.index[-1]
+    expected = pd.bdate_range(last, periods=4, name="date")[1:]
+    pd.testing.assert_index_equal(out.index, expected, check_exact=True)
+
+    dates = df.index.tolist()
+    dates[5] = dates[5] + pd.Timedelta(hours=1)
+    df.index = pd.DatetimeIndex(dates, name="date")
+    with pytest.warns(UserWarning, match="no set or inferable frequency"):
+        out = fc.forecast_horizon(df, horizon=3)
+    pd.testing.assert_index_equal(out.index, pd.RangeIndex(3, name="date"))
+
+
+def test_forecast_horizon_continues_period_index():
+    graph, df = _var_data(T=300)
+    df.index = pd.period_range("2000-01", periods=len(df), freq="M", name="month")
+    fc = CausalForecaster(graph, var_names=df.columns).fit(df)
+    out = fc.forecast_horizon(df, horizon=2)
+    expected = pd.period_range("2025-01", periods=2, freq="M", name="month")
+    pd.testing.assert_index_equal(out.index, expected)
+
+
 def test_forecast_horizon_continues_range_index_step():
     graph, df = _var_data(T=300)
     df.index = pd.RangeIndex(10, 10 + 5 * len(df), 5, name="t")
@@ -323,6 +354,12 @@ def test_forecast_horizon_continues_range_index_step():
     df.index = pd.RangeIndex(len(df))
     out = fc.forecast_horizon(df, horizon=3)
     assert list(out.index) == [300, 301, 302]
+
+    # Downsampling leaves a stop that is not the next value.
+    sub = df.reset_index(drop=True).iloc[::7]
+    assert (sub.index[-1], sub.index.stop) == (294, 300)
+    out = fc.forecast_horizon(sub, horizon=2)
+    assert list(out.index) == [301, 308]
 
 
 def test_forecast_horizon_positions_for_other_indexes():

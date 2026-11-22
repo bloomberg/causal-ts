@@ -98,11 +98,28 @@ def _feature_frame(
 
 def _future_index(index: pd.Index, horizon: int) -> pd.Index:
     """Index for ``horizon`` steps after the last entry of ``index``."""
-    if isinstance(index, pd.DatetimeIndex) and index.freq is not None and len(index):
-        out = pd.date_range(start=index[-1], periods=horizon + 1, freq=index.freq)[1:]
+    # A DatetimeIndex read from a file has no freq even when regular; infer it.
+    freq = None
+    if isinstance(index, pd.DatetimeIndex) and len(index):
+        freq = index.freq or index.inferred_freq
+    if freq is not None:
+        out = pd.date_range(start=index[-1], periods=horizon + 1, freq=freq)[1:]
+    elif isinstance(index, pd.PeriodIndex) and len(index):
+        out = pd.period_range(index[-1] + 1, periods=horizon, freq=index.freq)
     elif isinstance(index, pd.RangeIndex):
-        out = pd.RangeIndex(index.stop, index.stop + index.step * horizon, index.step)
+        # stop need not be the next value (e.g. after df.iloc[::3]).
+        start = index[-1] + index.step if len(index) else index.start
+        out = pd.RangeIndex(start, start + index.step * horizon, index.step)
     else:
+        if isinstance(index, pd.DatetimeIndex) and len(index):
+            # e.g. trading days with holidays: no regular spacing to continue.
+            warnings.warn(
+                "forecast_horizon: data.index is a DatetimeIndex with no set or "
+                "inferable frequency, so the forecast is indexed 0..horizon-1. "
+                "Set data.index.freq to get dates.",
+                UserWarning,
+                stacklevel=3,
+            )
         out = pd.RangeIndex(horizon)
     return out.rename(index.name)
 
@@ -645,9 +662,11 @@ class CausalForecaster:
         pd.DataFrame
             DataFrame of shape (horizon, len(targets)) with forecasted
             values. Its index continues ``data.index``: the next dates of
-            a ``DatetimeIndex`` with a frequency, the next integers of a
-            ``RangeIndex`` (same step), otherwise positions ``0..horizon-1``.
-            The index name is kept.
+            a ``DatetimeIndex`` whose frequency is set or can be inferred,
+            the next periods of a ``PeriodIndex``, the next integers of a
+            ``RangeIndex`` (same step), otherwise positions
+            ``0..horizon-1`` (with a warning for a ``DatetimeIndex``). The
+            index name is kept.
         """
         contemp = sorted(
             f"{var} -> {target}"
@@ -658,8 +677,8 @@ class CausalForecaster:
         if contemp:
             raise ValueError(
                 "Multi-step forecasting requires models without lag-0 parents "
-                f"(fitted with {', '.join(contemp)}); refit with "
-                "include_contemp=False. Contemporaneous parents are unavailable "
+                f"(fitted with {', '.join(contemp)}); fit a new CausalForecaster "
+                "with include_contemp=False. Contemporaneous parents are unavailable "
                 "at forecast time."
             )
         if self.exog_cols_ and exog_future is None:
