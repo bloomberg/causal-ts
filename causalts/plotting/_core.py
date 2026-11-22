@@ -63,10 +63,10 @@ def _check_var_names(var_names, n):
             f"but the graph has {n} variables"
         )
 
-        if len(var_names) == n - 1:
+        if len(var_names) < n:
             message += (
-                ". The graph may include the C node; "
-                "use result.plot(exclude_C=True) or add a name for C"
+                ". The graph may include time-index (C) nodes; plot "
+                f"graph[:{len(var_names)}, :{len(var_names)}] instead, or add their names"
             )
 
         raise ValueError(message)

@@ -72,11 +72,13 @@ def _make_graph():
     g[1, 2, 1] = 1
     return g
 
+
 def test_plot_graph_smoke():
     from causalts.plotting import plot_graph
 
     g = _make_graph()
     plot_graph(g, var_names=["X", "Y", "Z"])
+
 
 def test_plot_graph_var_names_wrong_length():
     from causalts.plotting._core import plot_graph
@@ -85,6 +87,15 @@ def test_plot_graph_var_names_wrong_length():
 
     with pytest.raises(ValueError, match="var_names"):
         plot_graph(g, var_names=["X", "Y"])
+
+
+def test_plot_time_series_graph_var_names_wrong_length():
+    from causalts.plotting import plot_time_series_graph
+
+    g = _make_graph()
+    with pytest.raises(ValueError, match=r"graph\[:2, :2\]"):
+        plot_time_series_graph(g, var_names=["X", "Y"])
+
 
 def test_plot_time_series_graph_smoke():
     from causalts.plotting import plot_time_series_graph
