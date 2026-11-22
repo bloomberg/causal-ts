@@ -242,11 +242,22 @@ def test_partial_segment_failure_warns_and_records_metadata():
 
     config = RegimeConfig(n_regimes=2)
     with pytest.warns(UserWarning, match="1 of 2 discovery segments failed"):
-        res = run_regime_discovery(
-            df, flaky, config=config, regime_labels=labels
-        )
+        res = run_regime_discovery(df, flaky, config=config, regime_labels=labels)
     assert 0 in res.regime_graphs and 1 not in res.regime_graphs
     assert len(res.metadata["failed_segments"]) == 1
     failed = res.metadata["failed_segments"][0]
     assert failed["regime"] == "regime-1"
     assert "bad kwarg" in failed["error"]
+
+
+def test_empty_graph_result_has_failed_segments_key():
+    # No segment is long enough, so nothing runs: the metadata keys still exist.
+    df = pd.DataFrame(np.zeros((60, 3)), columns=["A", "B", "C"])
+    res = run_regime_discovery(
+        df,
+        lambda *a, **k: None,
+        config=RegimeConfig(n_regimes=2, min_segment_length=100),
+        regime_labels=np.repeat([0, 1], 30),
+    )
+    assert res.metadata["failed_segments"] == []
+    assert res.regime_graphs == {}

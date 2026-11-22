@@ -289,6 +289,8 @@ def run_regime_discovery(
             stacklevel=2,
         )
 
+    metadata = {"regime_weights": regime_weights, "failed_segments": failed_segments}
+
     if not regime_graphs:
         # No regimes produced results — return empty graph
         max_lag_global = max(p.max_lag for p in regime_params) + 1
@@ -302,6 +304,7 @@ def run_regime_discovery(
             aggregation_strategy=config.aggregation,
             per_regime_results={},
             df=df,
+            metadata=metadata,
         )
 
     # Cross-regime aggregation
@@ -321,8 +324,5 @@ def run_regime_discovery(
         aggregation_strategy=config.aggregation,
         per_regime_results=per_regime_results,
         df=df,
-        metadata={
-            "regime_weights": regime_weights,
-            "failed_segments": failed_segments,
-        },
+        metadata=metadata,
     )
