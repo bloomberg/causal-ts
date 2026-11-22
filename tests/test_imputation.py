@@ -11,6 +11,7 @@ import pandas as pd
 from causalts.imputation import (
     _initial_fill,
     _markov_blanket_from_tigramite,
+    iterative_causal_impute,
     var_em_impute,
 )
 
@@ -101,7 +102,7 @@ def test_markov_blanket_basic():
     cg_tig[0, 1, 1] = 1
     cg_tig[2, 1, 0] = 1
     mb = _markov_blanket_from_tigramite(cg_tig, var_idx=1, num_vars=3)
-    assert mb == {0, 2}
+    assert mb == {(0, -1), (2, 0)}
 
 
 def test_markov_blanket_includes_parents_of_children():
@@ -110,9 +111,8 @@ def test_markov_blanket_includes_parents_of_children():
     cg_tig[0, 1, 0] = 1
     cg_tig[2, 1, 1] = 1
     mb = _markov_blanket_from_tigramite(cg_tig, var_idx=0, num_vars=3)
-    assert 1 in mb
-    assert 2 in mb
-    assert 0 not in mb
+    # child X1(t), and X1's other parent X2 at t-1
+    assert mb == {(1, 0), (2, -1)}
 
 
 def test_markov_blanket_excludes_C():
@@ -120,7 +120,7 @@ def test_markov_blanket_excludes_C():
     cg_tig = np.zeros((N_with_C, N_with_C, L + 1), dtype=int)
     cg_tig[3, 0, 0] = 1
     mb = _markov_blanket_from_tigramite(cg_tig, var_idx=0, num_vars=num_vars)
-    assert 3 not in mb
+    assert all(var != 3 for var, _ in mb)
 
 
 def test_markov_blanket_empty():
@@ -128,6 +128,75 @@ def test_markov_blanket_empty():
     cg_tig = np.zeros((N, N, L + 1), dtype=int)
     mb = _markov_blanket_from_tigramite(cg_tig, var_idx=1, num_vars=3)
     assert mb == set()
+
+
+def test_markov_blanket_keeps_lags_of_parents_children_and_spouses():
+    N, L = 3, 2
+    cg_tig = np.zeros((N, N, L + 1), dtype=int)
+    cg_tig[1, 1, 1] = 1  # own lag: X1(t-1) -> X1(t)
+    cg_tig[0, 1, 2] = 1  # parent: X0(t-2) -> X1(t)
+    cg_tig[1, 2, 1] = 1  # child: X1(t-1) -> X2(t), so X2(t+1)
+    cg_tig[0, 2, 0] = 1  # spouse: X0(t') -> X2(t'), t' = t+1
+    mb = _markov_blanket_from_tigramite(cg_tig, var_idx=1, num_vars=3)
+    # the self-lag edge also makes X1(t+1) a child, whose parent X0(t-1) is a spouse
+    assert mb == {(1, -1), (0, -2), (1, 1), (2, 1), (0, 1), (0, -1)}
+    assert (1, 0) not in mb
+
+
+def test_markov_blanket_maps_lag_slots_to_lag_list():
+    # lag_list=[2, 5]: slot 1 is lag 2, slot 2 is lag 5
+    cg_tig = np.zeros((3, 3, 3), dtype=int)
+    cg_tig[0, 1, 1] = 1  # X0(t-2) -> X1(t)
+    cg_tig[1, 2, 2] = 1  # X1(t-5) -> X2(t), so X2(t+5)
+    cg_tig[0, 2, 1] = 1  # X0(t-2) -> X2(t), so X0(t+3) is a spouse
+    mb = _markov_blanket_from_tigramite(cg_tig, 1, 3, lags=[0, 2, 5])
+    assert mb == {(0, -2), (2, 5), (0, 3)}
+
+
+def test_iterative_causal_impute_stepped_lag_list():
+    from causalts.ci_tests import ParCorrGPU
+
+    rng = np.random.default_rng(7)
+    x = rng.normal(size=300)
+    y = np.r_[0.0, 0.0, 2 * x[:-2]] + rng.normal(scale=0.01, size=300)
+    clean = pd.DataFrame({"X": x, "Y": y})
+    df = clean.copy()
+    missing = np.arange(20, 280, 9)
+    df.loc[missing, "Y"] = np.nan
+
+    ci = ParCorrGPU(np.zeros((2, 2)), device="cpu")
+    out = iterative_causal_impute(
+        df, ci, lag_list=[2], include_C=False, n_iter=1, var_em_kwargs={"max_iter": 10}
+    )
+    rmse = np.sqrt(np.mean((out.loc[missing, "Y"] - clean.loc[missing, "Y"]) ** 2))
+    assert rmse < 0.05
+
+
+def test_iterative_causal_impute_uses_lagged_regressors():
+    # Y(t) = 2 X(t-1): regressing Y on X(t) instead of X(t-1) wrecked the
+    # VAR warm start (RMSE 0.0103 -> 2.37 on this seed).
+    from causalts.ci_tests import ParCorrGPU
+
+    rng = np.random.default_rng(2026)
+    x = rng.normal(size=200)
+    y = np.r_[0.0, 2 * x[:-1]] + rng.normal(scale=0.01, size=200)
+    clean = pd.DataFrame({"X": x, "Y": y})
+    df = clean.copy()
+    missing = np.arange(20, 180, 8)
+    df.loc[missing, "Y"] = np.nan
+
+    ci = ParCorrGPU(np.zeros((2, 2)), device="cpu")
+    out = iterative_causal_impute(
+        df,
+        ci,
+        num_lags=1,
+        include_C=False,
+        n_iter=1,
+        var_em_kwargs={"max_iter": 10},
+    )
+    rmse = np.sqrt(np.mean((out.loc[missing, "Y"] - clean.loc[missing, "Y"]) ** 2))
+    assert rmse < 0.05
+    pd.testing.assert_frame_equal(out.drop(index=missing), clean.drop(index=missing))
 
 
 def test_cdnots_discovery_impute_var_em():

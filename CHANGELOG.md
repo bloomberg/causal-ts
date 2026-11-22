@@ -85,6 +85,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * The `fisherz` CI test's statistic is the partial correlation behind its p-value when
   the conditioning variables have a nonzero mean (it regressed on `Z` without an
   intercept, so value matrices and edge strengths could be far off).
+* `iterative_causal_impute` regresses each variable on its Markov blanket at the
+  right time offsets (parents and own lags, children as leads, spouses shifted
+  accordingly) instead of the same-time values of those variables, fits only on rows
+  where the target is observed, and leaves a variable with an empty blanket unchanged
+  (it regressed the target on itself). Lags from a stepped `lag_list` are mapped
+  correctly (#141).
 
 ## [0.28.1]
 
