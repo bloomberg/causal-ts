@@ -173,6 +173,7 @@ def test_fastpc_design_matrix(data):
     assert X.shape[1] == n_cross + n_self
     assert n_self >= 1  # X3 has real self-history
 
+
 def test_design_matrix_dropna_keeps_lag0_rows():
     df = pd.DataFrame({"X": np.arange(8, dtype=float), "Y": np.arange(8, dtype=float)})
     result = FeatureSelectionResult(
@@ -192,6 +193,7 @@ def test_design_matrix_dropna_keeps_lag0_rows():
     assert X.shape[0] == len(df) - max(used_lags)
     X_all = result.to_design_matrix(dropna=False)
     assert X_all.shape == (8, 1)
+
 
 def test_design_matrix_dropna_drops_only_largest_used_lag():
     df = pd.DataFrame({"X": np.arange(8, dtype=float), "Y": np.arange(8, dtype=float)})
@@ -216,6 +218,7 @@ def test_design_matrix_dropna_drops_only_largest_used_lag():
         assert X.shape[0] == len(df) - max(used_lags)
         assert X.shape[0] == expected_rows
         assert list(X.index) == list(range(8 - expected_rows, 8))
+
 
 def test_design_matrix_dropna_drops_only_largest_self_lag():
     # AR(2): y depends on its lags 1 and 2 only.
