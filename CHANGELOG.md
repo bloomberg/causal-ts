@@ -53,6 +53,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   strokes, and a pair with three or more strokes no longer draws two on the same arc.
 * `CausalForecaster.forecast_horizon(targets=...)` with a subset of variables no longer
   returns NaN from the second step on.
+* `CausalForecaster.forecast_horizon` only refuses to run when a fitted model uses a
+  lag-0 parent, so the default `include_contemp=True` works with lagged-only graphs
+  (exogenous columns are allowed); the forecast index continues the input's
+  `DatetimeIndex` (using its frequency, or the inferred one), `PeriodIndex` or
+  `RangeIndex` and keeps its name (#144).
 * `fisherz` returns p = 1 for a constant column instead of NaN, and ignores a constant
   conditioning column, as `parcorr` does (#134).
 * `plot_time_series_graph(order=...)` lists variables top to bottom, as documented (also
