@@ -67,11 +67,20 @@ def evaluate_graph(
                 "scored. This looks like the lossless edge-mark rendering "
                 "from result.to_marks(); pass result.to_binary(...) instead."
             )
-    G_est = np.asarray(G_est, dtype=np.int8)
-    G_true = np.asarray(G_true, dtype=np.int8)
-    assert (
-        G_est.shape == G_true.shape
-    ), f"Shape mismatch: {G_est.shape} vs {G_true.shape}"
+    graphs = {"G_est": np.asarray(G_est), "G_true": np.asarray(G_true)}
+    for name, arr in graphs.items():
+        # Casting straight to int8 truncates scores in (0, 1) to "no edge"
+        # and wraps integers >= 256, so non-binary input is rejected instead.
+        if not np.isin(arr, (0, 1)).all():
+            raise ValueError(
+                f"{name} must be a binary graph (0/1 or bool entries). "
+                "Threshold scores first, e.g. "
+                "temporal_bootstrap(...)['persistence'] >= 0.6."
+            )
+    G_est = (graphs["G_est"] != 0).astype(np.int8)
+    G_true = (graphs["G_true"] != 0).astype(np.int8)
+    if G_est.shape != G_true.shape:
+        raise ValueError(f"Shape mismatch: {G_est.shape} vs {G_true.shape}")
 
     d = G_est.shape[0]
     # Build mask excluding self-loops
