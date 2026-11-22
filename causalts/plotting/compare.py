@@ -925,9 +925,11 @@ def plot_metrics_summary(
     """
     from ..utils.helpers import evaluate_graph
 
-    gt = np.asarray(graph_true).astype(np.int8)
-    disc = np.asarray(graph_discovered).astype(np.int8)
-    results = evaluate_graph(disc, gt, exclude_self_loops=exclude_self_loops)
+    # Uncast, so evaluate_graph rejects scores or marks instead of an int8
+    # cast silently scoring them as "no edge".
+    results = evaluate_graph(
+        graph_discovered, graph_true, exclude_self_loops=exclude_self_loops
+    )
 
     if metrics is None:
         metrics = ["Precision", "Recall", "F1", "SHD"]
