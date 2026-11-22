@@ -293,6 +293,23 @@ def test_object_true_false_column_with_blank_is_numeric():
     assert inspect_df(df, max_lag=1)["data"]["discrete_cols"] == ["b"]
 
 
+def test_numeric_categorical_column_is_numeric():
+    """parquet/feather keep a category dtype; numeric categories are a number."""
+    from causalts.inspection import non_numeric_columns, numeric_frame
+
+    df = pd.DataFrame(
+        {
+            "x": [0.1, 0.2, 0.3, 0.4],
+            "c": pd.Categorical([0, 1, None, 1]),
+            "s": pd.Categorical(["a", "b", "a", "b"]),
+        }
+    )
+    out = numeric_frame(df)
+    assert out["c"].dtype == np.float64
+    assert out["c"].tolist()[:2] == [0.0, 1.0] and np.isnan(out["c"].iloc[2])
+    assert non_numeric_columns(out) == ["s"]
+
+
 def test_any_missing_value_warns_and_imputes():
     df = pd.DataFrame(
         np.random.default_rng(0).normal(size=(120, 3)), columns=list("abc")

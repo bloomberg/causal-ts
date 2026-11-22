@@ -24,6 +24,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   lagged self-links as loops in the widest gap between each node's edges, as thin as
   missed edges (`self_loop_linewidth`); off by default. `compare_graphs(legend_loc="below")`
   puts the legend under the graph so it never covers an edge.
+* `--index-col NAME_OR_POSITION` on `causal-ts inspect`, `discover` and `deconfound`
+  reads a column (e.g. a date) as the index instead of as a variable;
+  `read_dataframe(path, index_col=...)` does the same in Python (#130).
 
 ### Changed
 
@@ -32,6 +35,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `causal-ts discover` and `deconfound` given a non-numeric column (e.g. a date) exit
+  with a usage error that names it, before any engine runs, instead of a `TypeError`
+  from deep inside the engine; `deconfound` reads Booleans as 0/1, as `discover` does
+  (#130).
+  A `category` column with numeric categories (as parquet and feather keep them) is
+  read as numbers; `inspect` used to leave it out as non-numeric.
+  `deconfound` stops with a usage error when the data's columns do not match the
+  variables the graph was discovered on (e.g. a different `--index-col`).
 * `gcmi` no longer returns p = 1 (independent) when the conditioning set has a redundant column, such as `z` and `2*z` or any increasing function of `z`, which are exact copies after the copula transform (#142). The univariate test now takes the partial correlation from the covariance given Z with a pseudo-inverse of the Z block, as the multivariate test does, and its degrees of freedom count the rank of Z. A variable compared with itself is dependent; X or Y determined by Z still gives p = 1; a covariance that is not finite raises `ValueError`. Results cached by earlier builds are not reused.
 * `compare_graphs`: `curved_radius=0` no longer hangs when a node pair has two
   strokes, and a pair with three or more strokes no longer draws two on the same arc.
