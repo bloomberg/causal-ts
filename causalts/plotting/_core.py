@@ -51,6 +51,7 @@ def _myround(x, base=5, round_mode="updown"):
 
     return base * round(float(x) / base)
 
+
 def _check_var_names(var_names, n):
     """Check that var_names has one name for each graph variable."""
     if var_names is None:
@@ -69,6 +70,8 @@ def _check_var_names(var_names, n):
             )
 
         raise ValueError(message)
+
+
 def _draw_plot_graph_loops(
     ax,
     G,
