@@ -54,6 +54,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `order="auto"`); single-variable graphs plot; `plot_lagfuncs(dpi=...)` is honoured.
 * The deprecated `causalts.ci_tests.cit_base` import gives the unified `CIT_Base`; pass its
   arguments by keyword.
+* `run_regime_discovery` raises when every segment's `discovery_fn` fails, instead of
+  returning an empty graph, and warns when some fail; failures are listed in
+  `metadata["failed_segments"]`. With `aggregation="weighted"`, each regime is weighted
+  by the samples of its successful segments, so a failed regime does not dilute the vote
+  (#136).
 * `rcot` / `RCOTGPU` with `approx="perm"` no longer emits a NumPy 2
   `DeprecationWarning`; p-values are unchanged (#137).
 * `WrappedGraph.summary()` and `run_cdnots_gated(verbose=True)` print correctly;

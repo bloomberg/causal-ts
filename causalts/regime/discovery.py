@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from typing import Callable
 
 import numpy as np
@@ -58,6 +59,24 @@ def run_regime_discovery(
     Returns
     -------
     RegimeResult
+        ``metadata["regime_weights"]`` maps each regime index that produced a
+        graph to the number of samples in its successful segments.
+        ``metadata["failed_segments"]`` lists each segment whose
+        ``discovery_fn`` raised, as ``{"regime", "segment_start", "error"}``,
+        where ``"regime"`` is the regime name and ``"segment_start"`` the
+        segment's first row, buffer included.
+
+    Raises
+    ------
+    RuntimeError
+        If ``discovery_fn`` raises on every segment attempted, chained from
+        the first error, instead of returning an empty graph.
+
+    Warns
+    -----
+    UserWarning
+        If ``discovery_fn`` raises on some segments but not all, once, with
+        the number that failed and the first error.
     """
     if config is None:
         config = RegimeConfig()
@@ -120,6 +139,13 @@ def run_regime_discovery(
     per_regime_results: dict[int, list] = {}
     regime_weights: dict[int, float] = {}
 
+    # Segment failures are surfaced, not swallowed: if every attempted
+    # segment fails the call raises (chaining the first error); partial
+    # failures warn once and are recorded in the result metadata (#136).
+    failed_segments: list[dict] = []
+    first_failure: BaseException | None = None
+    n_segments_attempted = 0
+
     # Pre-group direct segments by regime if available
     if use_direct_segments:
         _direct_segments_by_regime: dict[int, list] = {}
@@ -148,7 +174,6 @@ def run_regime_discovery(
             continue
 
         total_samples = sum(len(s.df) for s in segments)
-        regime_weights[r] = float(total_samples)
 
         if verbose:
             logger.info(
@@ -161,9 +186,11 @@ def run_regime_discovery(
         # Run discovery on each segment
         segment_graphs: list[np.ndarray] = []
         segment_results: list = []
+        ok_samples = 0
 
         for seg in segments:
             seg_df = seg.df.copy()
+            n_segments_attempted += 1
 
             try:
                 result = discovery_fn(
@@ -175,13 +202,26 @@ def run_regime_discovery(
                 g = result.cg_tig[:d, :d, :]
                 segment_graphs.append(g)
                 segment_results.append(result)
+                ok_samples += len(seg.df)
             except Exception as e:
+                failed_segments.append(
+                    {
+                        "regime": regime_names[r],
+                        "segment_start": int(seg.start_idx),
+                        "error": f"{type(e).__name__}: {e}",
+                    }
+                )
+                if first_failure is None:
+                    first_failure = e
                 if verbose:
                     logger.warning("Segment failed for %s: %s", regime_names[r], e)
 
         if not segment_graphs:
             continue
 
+        # Weight by the samples that produced a graph: a failed segment (or a
+        # wholly failed regime) must not dilute the weighted vote.
+        regime_weights[r] = float(ok_samples)
         per_regime_results[r] = segment_results
 
         # Within-regime aggregation: a vote across segments, lagged edges and
@@ -256,6 +296,23 @@ def run_regime_discovery(
                 n_edges,
             )
 
+    if failed_segments and not per_regime_results:
+        # Every attempted segment failed: an empty graph would look like a
+        # real "no edges found", so raise, chaining the first error.
+        raise RuntimeError(
+            f"All {n_segments_attempted} discovery segments failed; "
+            f"first error: {failed_segments[0]['error']}"
+        ) from first_failure
+    if failed_segments:
+        warnings.warn(
+            f"{len(failed_segments)} of {n_segments_attempted} discovery "
+            f"segments failed; first error: {failed_segments[0]['error']}",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    metadata = {"regime_weights": regime_weights, "failed_segments": failed_segments}
+
     if not regime_graphs:
         # No regimes produced results — return empty graph
         max_lag_global = max(p.max_lag for p in regime_params) + 1
@@ -269,6 +326,7 @@ def run_regime_discovery(
             aggregation_strategy=config.aggregation,
             per_regime_results={},
             df=df,
+            metadata=metadata,
         )
 
     # Cross-regime aggregation
@@ -288,5 +346,5 @@ def run_regime_discovery(
         aggregation_strategy=config.aggregation,
         per_regime_results=per_regime_results,
         df=df,
-        metadata={"regime_weights": regime_weights},
+        metadata=metadata,
     )
