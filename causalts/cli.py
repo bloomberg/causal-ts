@@ -239,6 +239,30 @@ def _parse_comma_list(value, cast=str):
     return [cast(x.strip()) for x in value.split(",") if x.strip()]
 
 
+def _check_var_names(names, n_vars):
+    """Validate a ``--var-names`` list against ``n_vars`` variables."""
+    if not names:
+        return
+    if len(names) != n_vars:
+        raise click.BadParameter(
+            f"got {len(names)} names for {n_vars} variables.",
+            param_hint="--var-names",
+        )
+    if len(set(names)) != len(names):
+        raise click.BadParameter(
+            "duplicate names are not allowed.",
+            param_hint="--var-names",
+        )
+
+
+def _apply_var_names(df, names):
+    """Assign ``--var-names`` to a dataframe's columns, validating them first."""
+    if not names:
+        return
+    _check_var_names(names, df.shape[1])
+    df.columns = names
+
+
 def _parse_figsize(value):
     if value is None:
         return None
@@ -436,8 +460,7 @@ def inspect(data, var_names, index_col, max_lag):
 
     df = _read_data(data, index_col)
     var_name_list = _parse_comma_list(var_names)
-    if var_name_list:
-        df.columns = var_name_list
+    _apply_var_names(df, var_name_list)
     try:
         report = inspect_df(df, max_lag=max_lag)
     except NoNumericColumnsError as e:
@@ -1016,9 +1039,8 @@ def discover(
     _log(ctx, f"Reading data from {data}")
     # Checked before the output directory exists, so a bad file leaves nothing.
     df = _read_numeric_data(data, index_col)
+    _apply_var_names(df, var_name_list)
     outdir = _make_output_dir(ctx.obj["output_dir"], f"discover_{algorithm}")
-    if var_name_list:
-        df.columns = var_name_list
     var_name_list = list(df.columns)
 
     _log(ctx, f"Data shape: {df.shape}, variables: {var_name_list}")
@@ -1779,10 +1801,8 @@ def evaluate(
     """
     from matplotlib import pyplot as plt
 
-    from .plotting.compare import compare_graphs, plot_metrics_summary
     from .utils.helpers import evaluate_graph
 
-    outdir = _make_output_dir(ctx.obj["output_dir"], "evaluate")
     var_name_list = _parse_comma_list(var_names)
 
     gt = np.load(graph_true)
@@ -1792,6 +1812,9 @@ def evaluate(
         shapes = f"gt={gt.shape}, pred={pred.shape}"
         gt, pred = _align_graphs(gt, pred, ctx)
         _log(ctx, f"Shape mismatch ({shapes}), aligned to {gt.shape}")
+
+    _check_var_names(var_name_list, gt.shape[0])
+    outdir = _make_output_dir(ctx.obj["output_dir"], "evaluate")
 
     _log(ctx, f"Ground truth shape: {gt.shape}, Discovered shape: {pred.shape}")
 
@@ -1828,6 +1851,8 @@ def evaluate(
     _save_json(serializable, os.path.join(outdir, "metrics.json"))
 
     if save_plot:
+        from .plotting.compare import compare_graphs, plot_metrics_summary
+
         try:
             fig, ax = compare_graphs(gt, pred, var_names=var_name_list)
             fname = f"comparison.{plot_format}"
@@ -1892,12 +1917,14 @@ def plot(ctx, graph, plot_type, val_matrix, var_names, figsize, plot_format, sav
 
     from .plotting._core import plot_graph, plot_time_series_graph
 
-    outdir = _make_output_dir(ctx.obj["output_dir"], "plot")
     var_name_list = _parse_comma_list(var_names)
     figsize_parsed = _parse_figsize(figsize)
 
     g = np.load(graph, allow_pickle=True)
     vm = np.load(val_matrix) if val_matrix else None
+
+    _check_var_names(var_name_list, g.shape[0])
+    outdir = _make_output_dir(ctx.obj["output_dir"], "plot")
 
     _log(ctx, f"Graph shape: {g.shape}")
 
@@ -2022,10 +2049,10 @@ def deconfound(
             f"the data has {df.shape[1]} columns {[str(c) for c in df.columns]}; "
             f"{hint}"
         )
-    outdir = _make_output_dir(ctx.obj["output_dir"], f"deconfound_{strategy}")
+    # After the --index-col checks, which explain a column-count mismatch better.
     var_name_list = _parse_comma_list(var_names)
-    if var_name_list:
-        df.columns = var_name_list
+    _apply_var_names(df, var_name_list)
+    outdir = _make_output_dir(ctx.obj["output_dir"], f"deconfound_{strategy}")
 
     d = df.shape[1]
     max_lag = int(graph.shape[2] - 1)

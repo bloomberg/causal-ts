@@ -45,6 +45,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   read as numbers; `inspect` used to leave it out as non-numeric.
   `deconfound` stops with a usage error when the data's columns do not match the
   variables the graph was discovered on (e.g. a different `--index-col`).
+* `causal-ts inspect`, `discover`, `deconfound`, `evaluate` and `plot` reject a
+  `--var-names` list with the wrong count or a duplicate name as a usage error, before
+  creating any output, instead of a pandas or plotting traceback (#133).
 * `gcmi` no longer returns p = 1 (independent) when the conditioning set has a redundant column, such as `z` and `2*z` or any increasing function of `z`, which are exact copies after the copula transform (#142). The univariate test now takes the partial correlation from the covariance given Z with a pseudo-inverse of the Z block, as the multivariate test does, and its degrees of freedom count the rank of Z. A variable compared with itself is dependent; X or Y determined by Z still gives p = 1; a covariance that is not finite raises `ValueError`. Results cached by earlier builds are not reused.
 * `compare_graphs`: `curved_radius=0` no longer hangs when a node pair has two
   strokes, and a pair with three or more strokes no longer draws two on the same arc.

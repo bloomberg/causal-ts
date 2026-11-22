@@ -640,5 +640,52 @@ def test_deconfound_rejects_an_index_col_discovery_did_not_use(tmp_path):
     assert "discovered on 3 variables" in rejected.output
     assert "discover used no --index-col; drop it" in rejected.output
     assert not (tmp_path / "out").exists()
+    # --var-names that fit the discovered graph still get the --index-col hint.
+    named = CliRunner().invoke(
+        main, [*args, "--index-col", "t", "--var-names", "t,x,y"]
+    )
+    assert named.exit_code == 2, named.output
+    assert "discover used no --index-col; drop it" in named.output
+    assert not (tmp_path / "out").exists()
 
     assert CliRunner().invoke(main, args).exit_code == 0
+
+
+def _write_four_column_csv(tmp_path):
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame(rng.normal(size=(200, 4)), columns=list("abcd"))
+    path = tmp_path / "d.csv"
+    df.to_csv(path, index=False)
+    return str(path)
+
+
+@pytest.mark.parametrize("names", ["a,b", "a,a,b,c"])
+def test_inspect_var_names_wrong_count_or_duplicate(tmp_path, names):
+    # A wrong count or a duplicate name is a CLI usage error (#133),
+    # not a raw pandas traceback.
+    path = _write_four_column_csv(tmp_path)
+    result = CliRunner().invoke(main, ["inspect", path, "--var-names", names])
+    assert result.exit_code == 2
+    assert "--var-names" in result.output
+
+
+def test_evaluate_var_names_wrong_count(tmp_path):
+    # evaluate/plot check --var-names against the graph size (#133).
+    gt = np.zeros((2, 2, 2), dtype=np.int8)
+    pred = np.zeros((2, 2, 2), dtype=np.int8)
+    gt_path = tmp_path / "gt.npy"
+    pred_path = tmp_path / "pred.npy"
+    np.save(gt_path, gt)
+    np.save(pred_path, pred)
+    out = tmp_path / "out"
+    for cmd in (
+        ["evaluate", str(gt_path), str(pred_path)],
+        ["plot", str(gt_path)],
+    ):
+        result = CliRunner().invoke(
+            main, ["-o", str(out), *cmd, "--var-names", "a,b,c"]
+        )
+        assert result.exit_code == 2, result.output
+        assert "--var-names" in result.output
+        # A usage error leaves no output directory behind.
+        assert not out.exists()
