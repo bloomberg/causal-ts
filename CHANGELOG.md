@@ -27,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * `--index-col NAME_OR_POSITION` on `causal-ts inspect`, `discover` and `deconfound`
   reads a column (e.g. a date) as the index instead of as a variable;
   `read_dataframe(path, index_col=...)` does the same in Python (#130).
+* `read_dataframe` and the CLI read compressed CSV (`.csv.gz`, `.csv.bz2`, `.csv.zip`,
+  `.csv.xz`, `.csv.zst`) and tab-separated `.tsv` files (#128).
 
 ### Changed
 
