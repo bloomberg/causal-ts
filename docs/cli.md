@@ -66,7 +66,7 @@ The same report is available in Python as
 
 ## `discover`
 
-Run causal discovery on a `.csv`, `.parquet`/`.pq`, or `.feather` file.
+Run causal discovery on a `.csv` (including compressed `.csv.gz`, `.csv.bz2`, `.csv.zip`, `.csv.xz`, `.csv.zst`), `.tsv`, `.parquet`/`.pq`, or `.feather` file.
 Parquet and feather need `pip install causalts[parquet]`.
 Every column is a variable and must be numeric (Booleans are read as 0/1);
 any other column, such as a date, is a usage error that names it before
