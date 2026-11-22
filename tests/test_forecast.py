@@ -518,3 +518,31 @@ def test_non_square_or_non_3d_graph_raises():
         CausalForecaster(np.zeros((2, 3, 2), int))
     with pytest.raises(ValueError, match="square 3-D"):
         CausalForecaster(np.zeros((2, 2), int))
+
+
+def test_multi_c_graph_hint_names_slice():
+    # Multi-C presets append several C columns; exclude_C drops only one.
+    G = np.zeros((4, 4, 2), int)
+    with pytest.raises(ValueError, match=r"2 more node\(s\).*graph\[:2, :2, :\]\.$"):
+        CausalForecaster(G, var_names=["x", "y"])
+
+
+@pytest.mark.parametrize("n_c", [1, 2])
+def test_wrapped_graph_forecast_drops_c_nodes(n_c):
+    # wrap_graph(result.cg_tig, df).forecast() on an include_C=True result.
+    from causalts.effects import wrap_graph
+
+    Gc, df = _c_node_graph_data()
+    G = np.zeros((2 + n_c, 2 + n_c, 2), int)
+    G[:3, :3] = Gc
+    fc = wrap_graph(G, df).forecast()
+    assert fc.var_names == ["x", "y"] and fc.graph.shape == (2, 2, 2)
+
+
+def test_exclude_c_recognises_cedar_preset_names():
+    # Cedar names its time node after the preset (e.g. "C_lin"), not "C".
+    Gc, df = _c_node_graph_data()
+    fc = CausalForecaster(Gc, var_names=["x", "y", "C_lin"], exclude_C=True).fit(df)
+    assert fc.var_names == ["x", "y"]
+    with pytest.raises(ValueError, match="time-index"):
+        CausalForecaster(Gc, var_names=["x", "y", "C_lin"]).fit(df)

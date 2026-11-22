@@ -233,6 +233,11 @@ def _fit_auto_ets(y: np.ndarray, seasonal_period: int | None = None):
     return best_model
 
 
+def _is_c_name(name):
+    """A time-index node name: CDNOTS's ``"C"`` or a preset label like ``"C_lin"``."""
+    return str(name) == "C" or str(name).startswith("C_")
+
+
 class CausalForecaster:
     """Forecast time series using graph-informed feature selection.
 
@@ -321,16 +326,21 @@ class CausalForecaster:
             self.var_names = [f"X{i}" for i in range(d)]
         else:
             names = list(var_names)
-            if exclude_C and len(names) == d + 1 and names[-1] == "C":
+            if exclude_C and len(names) == d + 1 and _is_c_name(names[-1]):
                 names = names[:-1]
             if len(names) != d:
                 hint = ""
-                if d == len(names) + 1:
+                if d > len(names):
                     hint = (
-                        " The graph has one more node than names; if the "
-                        "extra node is the time-index C node from a "
-                        "discovery engine, drop it with graph[:d, :d, :] "
-                        "or pass exclude_C=True."
+                        f" The graph has {d - len(names)} more node(s) than "
+                        "names; if they are trailing time-index C nodes from "
+                        "a discovery engine, drop them with "
+                        f"graph[:{len(names)}, :{len(names)}, :]"
+                        + (
+                            " or pass exclude_C=True."
+                            if d == len(names) + 1 and not exclude_C
+                            else "."
+                        )
                     )
                 raise ValueError(
                     f"len(var_names) ({len(names)}) does not match the "
@@ -389,11 +399,10 @@ class CausalForecaster:
         missing = [n for n in self.var_names if n not in data.columns]
         if missing:
             hint = ""
-            if "C" in missing:
+            if any(_is_c_name(n) for n in missing):
                 hint = (
-                    " If the missing column is 'C', the graph likely "
-                    "carries the time-index (C) node: drop it with "
-                    "graph[:d, :d, :] or pass exclude_C=True."
+                    " The graph likely carries the time-index (C) node: drop "
+                    "it with graph[:d, :d, :] or pass exclude_C=True."
                 )
             raise ValueError(
                 f"data is missing columns {missing} named by the graph.{hint}"
