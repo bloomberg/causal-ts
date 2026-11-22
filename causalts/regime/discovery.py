@@ -59,6 +59,24 @@ def run_regime_discovery(
     Returns
     -------
     RegimeResult
+        ``metadata["regime_weights"]`` maps each regime index that produced a
+        graph to the number of samples in its successful segments.
+        ``metadata["failed_segments"]`` lists each segment whose
+        ``discovery_fn`` raised, as ``{"regime", "segment_start", "error"}``,
+        where ``"regime"`` is the regime name and ``"segment_start"`` the
+        segment's first row, buffer included.
+
+    Raises
+    ------
+    RuntimeError
+        If ``discovery_fn`` raises on every segment attempted, chained from
+        the first error, instead of returning an empty graph.
+
+    Warns
+    -----
+    UserWarning
+        If ``discovery_fn`` raises on some segments but not all, once, with
+        the number that failed and the first error.
     """
     if config is None:
         config = RegimeConfig()
@@ -156,7 +174,6 @@ def run_regime_discovery(
             continue
 
         total_samples = sum(len(s.df) for s in segments)
-        regime_weights[r] = float(total_samples)
 
         if verbose:
             logger.info(
@@ -169,6 +186,7 @@ def run_regime_discovery(
         # Run discovery on each segment
         segment_graphs: list[np.ndarray] = []
         segment_results: list = []
+        ok_samples = 0
 
         for seg in segments:
             seg_df = seg.df.copy()
@@ -184,6 +202,7 @@ def run_regime_discovery(
                 g = result.cg_tig[:d, :d, :]
                 segment_graphs.append(g)
                 segment_results.append(result)
+                ok_samples += len(seg.df)
             except Exception as e:
                 failed_segments.append(
                     {
@@ -200,6 +219,9 @@ def run_regime_discovery(
         if not segment_graphs:
             continue
 
+        # Weight by the samples that produced a graph: a failed segment (or a
+        # wholly failed regime) must not dilute the weighted vote.
+        regime_weights[r] = float(ok_samples)
         per_regime_results[r] = segment_results
 
         # Within-regime aggregation: a vote across segments, lagged edges and

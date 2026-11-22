@@ -261,3 +261,25 @@ def test_empty_graph_result_has_failed_segments_key():
     )
     assert res.metadata["failed_segments"] == []
     assert res.regime_graphs == {}
+
+
+def test_failed_regime_does_not_dilute_the_weighted_vote():
+    # Three equal regimes, one fails: an edge found in one of the two that ran
+    # scores 1/2 and passes the 0.5 weighted vote (it scored 1/3 when the failed
+    # regime kept its weight).
+    df = pd.DataFrame(np.zeros((1200, 3)), columns=["A", "B", "C"])
+    labels = np.repeat([0, 1, 2], 400)
+
+    def by_regime(seg_df, max_lag, alpha, **_):
+        start = seg_df.index[0]
+        if start >= 800:
+            raise TypeError("bad kwarg")
+        return types.SimpleNamespace(
+            cg_tig=_graph((A, B, 1)) if start < 400 else _graph()
+        )
+
+    config = RegimeConfig(n_regimes=3, aggregation="weighted")
+    with pytest.warns(UserWarning, match="1 of 3 discovery segments failed"):
+        res = run_regime_discovery(df, by_regime, config=config, regime_labels=labels)
+    assert res.cg_tig[A, B, 1] == 1
+    assert res.metadata["regime_weights"] == {0: 400.0, 1: 400.0}
