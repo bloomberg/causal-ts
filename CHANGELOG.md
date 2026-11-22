@@ -58,8 +58,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * `iterative_causal_impute` regresses each variable on its Markov blanket at the
   right time offsets (parents and own lags, children as leads, spouses shifted
   accordingly) instead of the same-time values of those variables, fits only on rows
-  where the target is observed, and keeps the VAR-EM values when the blanket is empty
-  (it regressed the target on itself) (#141).
+  where the target is observed, and leaves a variable with an empty blanket unchanged
+  (it regressed the target on itself). Lags from a stepped `lag_list` are mapped
+  correctly (#141).
 
 ## [0.28.1]
 

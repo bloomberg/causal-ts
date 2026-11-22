@@ -91,6 +91,7 @@ def _markov_blanket_from_tigramite(
     cg_tig: np.ndarray,
     var_idx: int,
     num_vars: int,
+    lags=None,
 ) -> set[tuple[int, int]]:
     """Extract the time-unrolled Markov blanket from a tigramite graph array.
 
@@ -103,14 +104,17 @@ def _markov_blanket_from_tigramite(
     - the children's other parents ``i(t + tau_child - tau_parent)``.
 
     Only the unshifted target ``(k, 0)`` is left out. Indices are restricted to
-    range(num_vars) (excludes C if present).
+    range(num_vars) (excludes C if present). ``lags`` maps each lag slot of
+    ``cg_tig`` to its lag (``[0] + lag_list``); the default reads slot ``tau`` as
+    lag ``tau``.
     """
     L = cg_tig.shape[2] - 1
     k = var_idx
+    lags = list(range(L + 1)) if lags is None else list(lags)
 
     def _parents(j):
         return [
-            (i, tau)
+            (i, lags[tau])
             for i in range(num_vars)
             for tau in range(L + 1)
             if cg_tig[i, j, tau] == 1 and not (i == j and tau == 0)
@@ -121,8 +125,9 @@ def _markov_blanket_from_tigramite(
         for tau_child in range(L + 1):
             if cg_tig[k, j, tau_child] != 1 or (j == k and tau_child == 0):
                 continue
-            blanket.add((j, tau_child))
-            blanket.update((i, tau_child - tau_parent) for i, tau_parent in _parents(j))
+            lag_child = lags[tau_child]
+            blanket.add((j, lag_child))
+            blanket.update((i, lag_child - lag_parent) for i, lag_parent in _parents(j))
 
     blanket.discard((k, 0))
     return blanket
@@ -159,8 +164,9 @@ def iterative_causal_impute(
     and re-imputing each variable using only its Markov blanket as predictors.
     Each blanket member enters at its own time offset (a parent ``X(t-1)`` is
     regressed on as ``X`` shifted by one row), the regression is fitted on rows
-    where the target is observed, and a variable with an empty blanket keeps its
-    VAR-EM values.
+    where the target is observed, and a variable with an empty blanket (or a row
+    whose regressors fall past the series ends) keeps its current values, the VAR-EM
+    warm start on the first pass.
     This restricts imputation to causally relevant variables, reducing the risk of
     injecting spurious cross-variable dependencies.
     """
@@ -177,6 +183,9 @@ def iterative_causal_impute(
     df_filled = var_em_impute(df, **(var_em_kwargs or {}))
     filled_arr = df_filled.values.copy()
     prev_imputed = filled_arr[nan_mask_arr].copy()
+
+    # cg_tig lag slots are lags only for lag_list=[1..L]
+    lags = None if lag_list is None else [0] + list(lag_list)
 
     for iteration in range(n_iter):
         if verbose:
@@ -203,9 +212,9 @@ def iterative_causal_impute(
         for k in range(num_vars):
             if not nan_mask_arr[:, k].any():
                 continue
-            mb = _markov_blanket_from_tigramite(cdnots_res.cg_tig, k, num_vars)
+            mb = _markov_blanket_from_tigramite(cdnots_res.cg_tig, k, num_vars, lags)
             if not mb:
-                # Nothing causally relevant: keep the VAR-EM values.
+                # Nothing causally relevant: keep the current values.
                 continue
             X_all = _shifted_design(filled_arr, sorted(mb))
             defined = ~np.isnan(X_all).any(axis=1)

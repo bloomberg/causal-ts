@@ -143,6 +143,35 @@ def test_markov_blanket_keeps_lags_of_parents_children_and_spouses():
     assert (1, 0) not in mb
 
 
+def test_markov_blanket_maps_lag_slots_to_lag_list():
+    # lag_list=[2, 5]: slot 1 is lag 2, slot 2 is lag 5
+    cg_tig = np.zeros((3, 3, 3), dtype=int)
+    cg_tig[0, 1, 1] = 1  # X0(t-2) -> X1(t)
+    cg_tig[1, 2, 2] = 1  # X1(t-5) -> X2(t), so X2(t+5)
+    cg_tig[0, 2, 1] = 1  # X0(t-2) -> X2(t), so X0(t+3) is a spouse
+    mb = _markov_blanket_from_tigramite(cg_tig, 1, 3, lags=[0, 2, 5])
+    assert mb == {(0, -2), (2, 5), (0, 3)}
+
+
+def test_iterative_causal_impute_stepped_lag_list():
+    from causalts.ci_tests import ParCorrGPU
+
+    rng = np.random.default_rng(7)
+    x = rng.normal(size=300)
+    y = np.r_[0.0, 0.0, 2 * x[:-2]] + rng.normal(scale=0.01, size=300)
+    clean = pd.DataFrame({"X": x, "Y": y})
+    df = clean.copy()
+    missing = np.arange(20, 280, 9)
+    df.loc[missing, "Y"] = np.nan
+
+    ci = ParCorrGPU(np.zeros((2, 2)), device="cpu")
+    out = iterative_causal_impute(
+        df, ci, lag_list=[2], include_C=False, n_iter=1, var_em_kwargs={"max_iter": 10}
+    )
+    rmse = np.sqrt(np.mean((out.loc[missing, "Y"] - clean.loc[missing, "Y"]) ** 2))
+    assert rmse < 0.05
+
+
 def test_iterative_causal_impute_uses_lagged_regressors():
     # Y(t) = 2 X(t-1): regressing Y on X(t) instead of X(t-1) wrecked the
     # VAR warm start (RMSE 0.0103 -> 2.37 on this seed).
