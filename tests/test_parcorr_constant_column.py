@@ -52,6 +52,17 @@ def test_fisherz_constant_conditioning_column_is_ignored(data):
     assert (pval, stat) == pytest.approx(test(2, 3, []))
 
 
+def test_fisherz_boolean_data():
+    # The constant-column check must not use np.ptp, which raises on bool.
+    rng = np.random.default_rng(0)
+    data = rng.random((200, 3)) > 0.5
+    data[:, 2] = True
+    test = create_ci_test("fisherz", data)
+    assert test(0, 2, []) == (1.0, 0.0)
+    pval, stat = test(0, 1, [2])
+    assert np.isfinite(pval) and np.isfinite(stat)
+
+
 def test_parcorr_run_test_raw_constant_column():
     rng = np.random.default_rng(1)
     x = rng.standard_normal((200, 1))
