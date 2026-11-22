@@ -143,7 +143,6 @@ class PeltRegimeDetector:
         signal: str = "mean",
         volatility_window: int = 48,
         columns: list | None = None,
-        **kwargs,
     ):
         self.n_regimes = n_regimes
         self.min_size = min_size
