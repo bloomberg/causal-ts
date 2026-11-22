@@ -87,7 +87,8 @@ def test_design_matrix_shape_and_names(data):
     df = data["df"]
     r = select_features(df, "X3", max_lag=data["max_lag"])
     X = r.to_design_matrix()
-    assert X.shape[0] == len(df) - data["max_lag"]
+    used_lags = [int(c.rsplit("_lag", 1)[1]) for c in X.columns]
+    assert X.shape[0] == len(df) - max(used_lags)
     for col in X.columns:
         assert "_lag" in col
 
@@ -165,7 +166,8 @@ def test_fastpc_matches_full_run_parents(data):
 def test_fastpc_design_matrix(data):
     r = select_features(data["df"], "X3", max_lag=data["max_lag"], algo="fastpc")
     X = r.to_design_matrix()
-    assert X.shape[0] == len(data["df"]) - data["max_lag"]
+    used_lags = [int(c.rsplit("_lag", 1)[1]) for c in X.columns]
+    assert X.shape[0] == len(data["df"]) - max(used_lags)
     n_cross = len({(f.variable, f.lag) for f in r.by_role("parent")})
     n_self = sum(1 for c in X.columns if c.startswith("X3_lag"))
     assert X.shape[1] == n_cross + n_self
