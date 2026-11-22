@@ -274,8 +274,7 @@ class FeatureSelectionResult:
                 if self_scores.get(lag, 0.0) >= self_threshold:
                     cols[f"{self.target}_lag{lag}"] = source[self.target].shift(lag)
                 max_used_lag = max(max_used_lag, lag)
-                
-        out = pd.DataFrame(cols, index=source.index)
+    out = pd.DataFrame(cols, index=source.index)
         if dropna:
             out = out.iloc[max_used_lag:]
         return out
