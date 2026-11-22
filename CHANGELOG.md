@@ -43,22 +43,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   read as numbers; `inspect` used to leave it out as non-numeric.
   `deconfound` stops with a usage error when the data's columns do not match the
   variables the graph was discovered on (e.g. a different `--index-col`).
+* `gcmi` no longer returns p = 1 (independent) when the conditioning set has a redundant column, such as `z` and `2*z` or any increasing function of `z`, which are exact copies after the copula transform (#142). The univariate test now takes the partial correlation from the covariance given Z with a pseudo-inverse of the Z block, as the multivariate test does, and its degrees of freedom count the rank of Z. A variable compared with itself is dependent; X or Y determined by Z still gives p = 1; a covariance that is not finite raises `ValueError`. Results cached by earlier builds are not reused.
 * `compare_graphs`: `curved_radius=0` no longer hangs when a node pair has two
   strokes, and a pair with three or more strokes no longer draws two on the same arc.
 * `CausalForecaster.forecast_horizon(targets=...)` with a subset of variables no longer
   returns NaN from the second step on.
+* `fisherz` returns p = 1 for a constant column instead of NaN, and ignores a constant
+  conditioning column, as `parcorr` does (#134).
 * `plot_time_series_graph(order=...)` lists variables top to bottom, as documented (also
   `order="auto"`); single-variable graphs plot; `plot_lagfuncs(dpi=...)` is honoured.
 * The deprecated `causalts.ci_tests.cit_base` import gives the unified `CIT_Base`; pass its
   arguments by keyword.
+* `rcot` / `RCOTGPU` with `approx="perm"` no longer emits a NumPy 2
+  `DeprecationWarning`; p-values are unchanged (#137).
 * `WrappedGraph.summary()` and `run_cdnots_gated(verbose=True)` print correctly;
   `set_up_logging` cleans up after a failed setup.
 * `import causalts.plotting` no longer loads `dcor` and numba; parallel docs builds crashed
   on numba's cache.
+* `lorenz96` no longer reseeds NumPy's global random state (it drew only from its own
+  `default_rng`); its output for a given seed is unchanged (#129).
 * `CondIndTest.run_test_raw(x, y)` with the default `z=None` runs the unconditional test
   instead of raising `TypeError` in the cache-key helper.
 * `precision_recall_3d` counts the true positives of bool graphs (it returned 0 for
   both) and accepts a graph with only lag 0 instead of raising `IndexError`.
+* The `fisherz` CI test's statistic is the partial correlation behind its p-value when
+  the conditioning variables have a nonzero mean (it regressed on `Z` without an
+  intercept, so value matrices and edge strengths could be far off).
 
 ## [0.28.1]
 

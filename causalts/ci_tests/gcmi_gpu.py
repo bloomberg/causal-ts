@@ -74,6 +74,11 @@ class GCMIGPU(CIT_Base):
             # keep slightly different directions for another ordering.
             X, Y = sorted([sorted(np.atleast_1d(X)), sorted(np.atleast_1d(Y))])
             condition_set = sorted(condition_set)
+        else:
+            # Builds before the univariate path took the pseudo-inverse of the Z
+            # block returned p = 1 for a redundant Z column (#142): a separate
+            # key keeps their cached rows out.
+            param_hash += "-zpinv"
         cached = self.pvalue_cache.get((cache_key, param_hash))
         if cached is not None:
             return cached[0], cached[1]
@@ -168,38 +173,66 @@ class GCMIGPU(CIT_Base):
         data_t = torch.tensor(raw, dtype=dtype, device=self.device)
         normed = self._copula_normalize(data_t, seed=seed)  # (T, d)
 
-        # Compute precision matrix (inverse covariance) on the normalized data
+        # Covariance of the normalized data
         cov = torch.cov(normed.T)  # (d, d)
         # Regularize for numerical stability
         cov = cov + 1e-10 * torch.eye(cov.shape[0], device=self.device, dtype=cov.dtype)
 
         if n_x > 1 or n_y > 1:
             return self._gcmi_multivariate(cov, T, n_x, n_y, n_z)
+        return self._gcmi_univariate(cov, T, n_z)
 
-        try:
-            prec = torch.linalg.inv(cov)
-        except Exception:
-            return 0.0, 1.0
+    @staticmethod
+    def _gcmi_univariate(cov, T, n_z, tol=1e-6):
+        """Gaussian CMI of scalar X and Y given Z, with its t-test p-value.
 
-        # Partial correlation of X (col 0) and Y (col 1) given Z (cols 2..)
-        p_xx = prec[0, 0]
-        p_yy = prec[1, 1]
-        p_xy = prec[0, 1]
+        The partial correlation is taken from the (X, Y) covariance given Z
+        (Schur complement, pseudo-inverse of the Z block), as in
+        ``_gcmi_multivariate`` and with the same ``tol``. An increasing function
+        of a Z column is an exact copy of it after the copula transform, so the
+        full covariance is often singular; inverting it failed and returned
+        p = 1 (#142). Here a redundant Z column only lowers the rank of Z, and
+        the degrees of freedom are ``T - rank(Z) - 2``.
 
-        denom = torch.sqrt(p_xx * p_yy)
-        if denom == 0:
-            return 0.0, 1.0
+        X or Y left with no residual variance given Z is determined by Z, and
+        gives ``(0.0, 1.0)`` as in ``_gcmi_multivariate``. Too few rows give an
+        undefined p-value (NaN), as before. A covariance that is not finite
+        although there are at least two rows raises ``ValueError`` rather than
+        returning a p-value.
+        """
+        cov = cov.cpu().double()  # MPS has no float64
+        if not torch.isfinite(cov).all():
+            if T < 2:
+                return 0.0, np.nan  # no sample covariance
+            raise ValueError(
+                "gcmi: the covariance of the copula-normalised data is not finite"
+            )
+        scale = float(torch.diagonal(cov).max())
+        resid = cov[:2, :2]
+        r_z = 0
+        if n_z > 0:
+            szz = cov[2:, 2:]
+            r_z = int((torch.linalg.eigvalsh(szz) > tol * scale).sum())
+            s_xz = cov[:2, 2:]
+            szz_pinv = torch.linalg.pinv(szz, atol=tol * scale, hermitian=True)
+            resid = resid - s_xz @ szz_pinv @ s_xz.T
+        # Before the 'determined by Z' check: when Z spans the centred sample
+        # (rank(Z) >= T - 1) the residuals vanish for any X and Y, which would
+        # reflect the sample, not X or Y being set by Z.
+        df = T - r_z - 2  # t-test degrees of freedom
+        if df < 1:
+            return 0.0, np.nan
+        s_xx, s_yy, s_xy = float(resid[0, 0]), float(resid[1, 1]), float(resid[0, 1])
+        if s_xx <= tol * scale or s_yy <= tol * scale:
+            return 0.0, 1.0  # X or Y is determined by Z: nothing left to test
 
-        r = (-p_xy / denom).item()
+        r = s_xy / np.sqrt(s_xx * s_yy)
         r = float(np.clip(r, -1 + 1e-15, 1 - 1e-15))
 
         # CMI from partial correlation (Gaussian formula)
         cmi = -0.5 * np.log(1.0 - r**2)
 
-        # Analytic p-value: t-distribution with df = T - n_z - 2
-        df = T - n_z - 2
-        if df < 1:
-            return cmi, np.nan
+        # Analytic p-value: t-distribution with df = T - rank(Z) - 2
         if abs(abs(r) - 1.0) <= sys.float_info.min:
             return cmi, 0.0
 
