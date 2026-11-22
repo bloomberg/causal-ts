@@ -186,12 +186,24 @@ class NoNumericColumnsError(ValueError):
 
 
 def numeric_frame(df):
-    """Return ``df`` with Boolean columns as 0/1 floats.
+    """Return ``df`` with Boolean columns as 0/1 floats and numeric categoricals
+    as their values.
 
     pandas keeps Booleans out of numeric selections and turns a frame that mixes
     them with floats into an object array; as 0/1 they are ordinary discrete
     columns for the checks, the discrete-aware CI tests and the lag embedding.
+    A ``category`` column whose categories are numbers (as parquet and feather
+    keep them) is likewise a discrete numeric column.
     """
+    cat_cols = [
+        c
+        for c in df.select_dtypes(include=["category"]).columns
+        if pd.api.types.is_numeric_dtype(df[c].cat.categories)
+    ]
+    if cat_cols:
+        df = df.copy()
+        for c in cat_cols:
+            df[c] = df[c].astype("float64")
     bool_cols = list(df.select_dtypes(include=["bool", "boolean"]).columns)
     # True/False read from a file with a blank cell arrive as object columns.
     for c in df.select_dtypes(include=["object"]).columns:
@@ -204,6 +216,16 @@ def numeric_frame(df):
             df[c] = df[c].map(lambda v: np.nan if pd.isna(v) else float(v))
             df[c] = df[c].astype("float64")
     return df
+
+
+def non_numeric_columns(df):
+    """Labels of the columns in ``df`` that discovery cannot read.
+
+    That is every column that is not a number: dates, labels, timedeltas. Run
+    :func:`numeric_frame` first so that Boolean columns count as numeric.
+    """
+    keep = df.select_dtypes(include=[np.number], exclude=["timedelta"]).columns
+    return [c for c in df.columns if c not in keep]
 
 
 def _data_block(df):
@@ -562,10 +584,10 @@ def inspect_df(df, max_lag=None):
     # date, a label) is left out of everything, since discrete detection fails
     # on strings and discovery cannot read it either, and named in a warning.
     df = numeric_frame(df)
-    keep = df.select_dtypes(include=[np.number], exclude=["timedelta"]).columns
-    non_numeric = [str(c) for c in df.columns if c not in keep]
-    if non_numeric:
-        df = df[keep]
+    left_out = non_numeric_columns(df)
+    non_numeric = [str(c) for c in left_out]
+    if left_out:
+        df = df.drop(columns=left_out)
     if df.shape[1] == 0:
         raise NoNumericColumnsError(
             f"inspect found no numeric columns (non-numeric, left out: "

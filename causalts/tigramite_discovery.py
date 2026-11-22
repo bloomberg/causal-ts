@@ -449,6 +449,7 @@ def run_pcmciplus(
     conflict_resolution: bool = True,
     fdr_method: str = "none",
     selected_links: dict | None = None,
+    link_assumptions: dict | None = None,
     verbosity: int = 0,
     ci_kwargs: dict | None = None,
     **kwargs,
@@ -480,7 +481,15 @@ def run_pcmciplus(
     fdr_method : str
         FDR correction method ("none", "fdr_bh", "fdr_by").
     selected_links : dict or None
-        Dict restricting which links to test (tigramite format).
+        Removed: tigramite 5.2 dropped this argument, and any non-None
+        value raises ``ValueError``. Use ``link_assumptions`` instead.
+    link_assumptions : dict or None
+        Dict restricting which links to test, in tigramite format
+        ``{j: {(i, -tau): link_type}}`` where ``link_type`` is
+        ``"-?>"`` for lagged links and ``"o?o"`` for lag-0 links.
+        A link missing from the dict is assumed absent. See the
+        tigramite documentation (https://jakobrunge.github.io/tigramite/)
+        for the full format.
     verbosity : int
         0=silent, 1=summary, 2=detailed.
     ci_kwargs : dict or None
@@ -502,6 +511,12 @@ def run_pcmciplus(
     _require_tigramite("PCMCI+")
     from tigramite.pcmci import PCMCI
 
+    if selected_links is not None:
+        raise ValueError(
+            "selected_links is deprecated and removed in tigramite 5.2; "
+            "use link_assumptions instead."
+        )
+
     ci_kwargs = ci_kwargs or {}
     cit = _make_tigramite_ci_test(ci_test, **ci_kwargs)
     tig_df = _to_tigramite_df(df)
@@ -515,7 +530,7 @@ def run_pcmciplus(
         contemp_collider_rule=contemp_collider_rule,
         conflict_resolution=conflict_resolution,
         fdr_method=fdr_method,
-        selected_links=selected_links,
+        link_assumptions=link_assumptions,
         **kwargs,
     )
 
@@ -542,6 +557,7 @@ def run_pcmci(
     tau_min: int = 0,
     fdr_method: str = "none",
     selected_links: dict | None = None,
+    link_assumptions: dict | None = None,
     verbosity: int = 0,
     ci_kwargs: dict | None = None,
     **kwargs,
@@ -571,7 +587,15 @@ def run_pcmci(
     fdr_method : str
         FDR correction ("none", "fdr_bh", "fdr_by").
     selected_links : dict or None
-        Dict restricting which links to test.
+        Removed: tigramite 5.2 dropped this argument, and any non-None
+        value raises ``ValueError``. Use ``link_assumptions`` instead.
+    link_assumptions : dict or None
+        Dict restricting which links to test, in tigramite format
+        ``{j: {(i, -tau): link_type}}`` where ``link_type`` is
+        ``"-?>"`` for lagged links and ``"o?o"`` for lag-0 links.
+        A link missing from the dict is assumed absent. See the
+        tigramite documentation (https://jakobrunge.github.io/tigramite/)
+        for the full format.
     verbosity : int
         0=silent, 1=summary, 2=detailed.
     ci_kwargs : dict or None
@@ -587,6 +611,12 @@ def run_pcmci(
     _require_tigramite("PCMCI")
     from tigramite.pcmci import PCMCI
 
+    if selected_links is not None:
+        raise ValueError(
+            "selected_links is deprecated and removed in tigramite 5.2; "
+            "use link_assumptions instead."
+        )
+
     ci_kwargs = ci_kwargs or {}
     cit = _make_tigramite_ci_test(ci_test, **ci_kwargs)
     tig_df = _to_tigramite_df(df)
@@ -599,7 +629,7 @@ def run_pcmci(
         pc_alpha=pc_alpha,
         alpha_level=alpha_level,
         fdr_method=fdr_method,
-        selected_links=selected_links,
+        link_assumptions=link_assumptions,
         **kwargs,
     )
 

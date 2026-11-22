@@ -7,6 +7,7 @@ matplotlib.use("Agg")
 
 import json  # noqa: E402
 import os  # noqa: E402
+import shlex  # noqa: E402
 import time as _time  # noqa: E402
 import warnings  # noqa: E402
 from datetime import datetime  # noqa: E402
@@ -244,7 +245,7 @@ def _check_var_names(names, n_vars):
         return
     if len(names) != n_vars:
         raise click.BadParameter(
-            f"got {len(names)} names for {n_vars} columns.",
+            f"got {len(names)} names for {n_vars} variables.",
             param_hint="--var-names",
         )
     if len(set(names)) != len(names):
@@ -278,6 +279,69 @@ def _parse_gate_threshold(ctx, param, value):
         return float(value)
     except ValueError:
         raise click.BadParameter("must be a number, 'auto' or 'li'")
+
+
+# Shared by the commands that read a data file (inspect, discover, deconfound).
+_index_col_option = click.option(
+    "--index-col",
+    metavar="NAME_OR_POSITION",
+    default=None,
+    help=(
+        "Column to read as the index (e.g. a date column) instead of a variable: "
+        "a column name or a 0-based position."
+    ),
+)
+
+
+def _read_data(path, index_col):
+    """Read a data file; an ``--index-col`` the file lacks is a usage error."""
+    from .utils.io import IndexColumnError, read_dataframe
+
+    try:
+        return read_dataframe(path, index_col=index_col)
+    except IndexColumnError as e:
+        raise click.BadParameter(str(e), param_hint="--index-col")
+
+
+def _read_numeric_data(path, index_col):
+    """Read a data file for the engines, which need every column numeric.
+
+    Booleans become 0/1 (``numeric_frame``); any other non-numeric column, such
+    as a date, is a usage error naming it, raised before any engine runs.
+    """
+    from .inspection import non_numeric_columns, numeric_frame
+
+    df = numeric_frame(_read_data(path, index_col))
+    bad = [str(c) for c in non_numeric_columns(df)]
+    if bad:
+        # --index-col takes one column; once it is set, dropping is the only fix.
+        if index_col is not None:
+            hint = "drop them"
+        elif len(bad) == 1:
+            hint = f"drop it or pass --index-col {shlex.quote(bad[0])}"
+        else:
+            hint = "drop them; one of them can be --index-col instead (e.g. a date)"
+        raise click.UsageError(f"column(s) {bad} are not numeric; {hint}")
+    return df
+
+
+def _discover_summary(graph_path):
+    """The ``summary.json`` ``discover`` wrote next to ``graph_path``.
+
+    ``None`` unless the summary names that file as its graph and lists its
+    variables.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(graph_path)), "summary.json")
+    try:
+        with open(path) as f:
+            summary = json.load(f)
+    except (OSError, ValueError):
+        return None
+    graph_file = summary.get("output_files", {}).get("graph")
+    var_names = summary.get("var_names")
+    if graph_file != os.path.basename(graph_path) or not isinstance(var_names, list):
+        return None
+    return summary
 
 
 def _log(ctx, msg):
@@ -380,10 +444,11 @@ def ci_test_info(test):
 @click.option(
     "--var-names", type=str, default=None, help="Comma-separated variable names."
 )
+@_index_col_option
 @click.option(
     "--max-lag", type=int, default=None, help="Override the suggested max lag."
 )
-def inspect(data, var_names, max_lag):
+def inspect(data, var_names, index_col, max_lag):
     """Inspect a time series (CSV/parquet/feather): data health + recommended config.
 
     Emits a JSON report {schema_version, data, facts, recommendation, cost_class,
@@ -392,9 +457,8 @@ def inspect(data, var_names, max_lag):
     import json as _json
 
     from .inspection import NoNumericColumnsError, inspect_df
-    from .utils.io import read_dataframe
 
-    df = read_dataframe(data)
+    df = _read_data(data, index_col)
     var_name_list = _parse_comma_list(var_names)
     _apply_var_names(df, var_name_list)
     try:
@@ -651,6 +715,7 @@ def inspect(data, var_names, max_lag):
 @click.option(
     "--var-names", type=str, default=None, help="Comma-separated variable names."
 )
+@_index_col_option
 @click.option(
     "--impute",
     type=click.Choice(["pairwise_complete", "var_em", "causal_iterative"]),
@@ -759,6 +824,7 @@ def discover(
     save_plot,
     plot_format,
     var_names,
+    index_col,
     impute,
     impute_kwargs,
     output_json,
@@ -966,17 +1032,15 @@ def discover(
     from matplotlib import pyplot as plt
 
     t0 = _time.time()
-    outdir = _make_output_dir(ctx.obj["output_dir"], f"discover_{algorithm}")
     device = ctx.obj["device"]
     var_name_list = _parse_comma_list(var_names)
     lag_list_parsed = _parse_comma_list(lag_list, int)
 
     _log(ctx, f"Reading data from {data}")
-    from .inspection import numeric_frame
-    from .utils.io import read_dataframe
-
-    df = numeric_frame(read_dataframe(data))
+    # Checked before the output directory exists, so a bad file leaves nothing.
+    df = _read_numeric_data(data, index_col)
     _apply_var_names(df, var_name_list)
+    outdir = _make_output_dir(ctx.obj["output_dir"], f"discover_{algorithm}")
     var_name_list = list(df.columns)
 
     _log(ctx, f"Data shape: {df.shape}, variables: {var_name_list}")
@@ -1026,6 +1090,7 @@ def discover(
         "ci_test": None if is_baseline else ci_test,
         "data_file": os.path.abspath(data),
         "data_shape": list(df.shape),
+        "index_col": index_col,
         "var_names": var_name_list,
         "max_lag": max_lag,
         "alpha": None if is_baseline else alpha,
@@ -1738,7 +1803,6 @@ def evaluate(
 
     from .utils.helpers import evaluate_graph
 
-    outdir = _make_output_dir(ctx.obj["output_dir"], "evaluate")
     var_name_list = _parse_comma_list(var_names)
 
     gt = np.load(graph_true)
@@ -1750,6 +1814,7 @@ def evaluate(
         _log(ctx, f"Shape mismatch ({shapes}), aligned to {gt.shape}")
 
     _check_var_names(var_name_list, gt.shape[0])
+    outdir = _make_output_dir(ctx.obj["output_dir"], "evaluate")
 
     _log(ctx, f"Ground truth shape: {gt.shape}, Discovered shape: {pred.shape}")
 
@@ -1852,7 +1917,6 @@ def plot(ctx, graph, plot_type, val_matrix, var_names, figsize, plot_format, sav
 
     from .plotting._core import plot_graph, plot_time_series_graph
 
-    outdir = _make_output_dir(ctx.obj["output_dir"], "plot")
     var_name_list = _parse_comma_list(var_names)
     figsize_parsed = _parse_figsize(figsize)
 
@@ -1860,6 +1924,7 @@ def plot(ctx, graph, plot_type, val_matrix, var_names, figsize, plot_format, sav
     vm = np.load(val_matrix) if val_matrix else None
 
     _check_var_names(var_name_list, g.shape[0])
+    outdir = _make_output_dir(ctx.obj["output_dir"], "plot")
 
     _log(ctx, f"Graph shape: {g.shape}")
 
@@ -1925,6 +1990,7 @@ def plot(ctx, graph, plot_type, val_matrix, var_names, figsize, plot_format, sav
 @click.option(
     "--var-names", type=str, default=None, help="Comma-separated variable names."
 )
+@_index_col_option
 @click.option(
     "--json",
     "output_json",
@@ -1934,7 +2000,15 @@ def plot(ctx, graph, plot_type, val_matrix, var_names, figsize, plot_format, sav
 )
 @click.pass_context
 def deconfound(
-    ctx, graph_path, data_path, strategy, threshold, alpha, var_names, output_json
+    ctx,
+    graph_path,
+    data_path,
+    strategy,
+    threshold,
+    alpha,
+    var_names,
+    index_col,
+    output_json,
 ):
     """Correct a discovered graph for latent confounders.
 
@@ -1950,14 +2024,35 @@ def deconfound(
     import json as _json
 
     from .inspection import edges_from_graph
-    from .utils.io import read_dataframe
-
-    outdir = _make_output_dir(ctx.obj["output_dir"], f"deconfound_{strategy}")
 
     graph = np.load(graph_path, allow_pickle=True)
-    df = read_dataframe(data_path)
+    df = _read_numeric_data(data_path, index_col)
+    # C-node rows only ever make the graph larger than the data, never smaller.
+    if graph.shape[0] < df.shape[1]:
+        raise click.UsageError(
+            f"graph has {graph.shape[0]} variables but the data has {df.shape[1]} "
+            f"columns {[str(c) for c in df.columns]}; pass the --index-col you "
+            "discovered with"
+        )
+    # A larger graph may be C-node rows or a column discovery read as a
+    # variable; the summary discover writes next to the graph tells them apart.
+    found = _discover_summary(graph_path)
+    if found is not None and len(found["var_names"]) != df.shape[1]:
+        if "index_col" not in found:
+            hint = "pass the --index-col you discovered with"
+        elif found["index_col"] is None:
+            hint = "discover used no --index-col; drop it"
+        else:
+            hint = f"discover used --index-col {shlex.quote(str(found['index_col']))}"
+        raise click.UsageError(
+            f"the graph was discovered on {len(found['var_names'])} variables but "
+            f"the data has {df.shape[1]} columns {[str(c) for c in df.columns]}; "
+            f"{hint}"
+        )
+    # After the --index-col checks, which explain a column-count mismatch better.
     var_name_list = _parse_comma_list(var_names)
     _apply_var_names(df, var_name_list)
+    outdir = _make_output_dir(ctx.obj["output_dir"], f"deconfound_{strategy}")
 
     d = df.shape[1]
     max_lag = int(graph.shape[2] - 1)

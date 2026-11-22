@@ -454,7 +454,7 @@ print(f'{"CEDAR keep=all":30s} | {t1:6.2f}s | {e:3d} | {p:.3f} {r:.3f} {f:.3f} {
 #
 # Other single-target routes in the library:
 # - `causalts.select_features(df, target, algo=...)` wraps this mode (`algo='cedar'`) and also offers `algo='fastpc'` (a local PC skeleton around the target, also O(d)) and `algo='cdnots'` (full CDNOTS sliced to the target's neighbourhood, O(d²)). See the feature-selection example.
-# - The tigramite wrappers (`run_pcmci`, `run_pcmciplus`) accept `selected_links` to restrict testing to links into the target.
+# - The tigramite wrappers (`run_pcmci`, `run_pcmciplus`) accept `link_assumptions` (tigramite format) to restrict testing to links into the target.
 
 # %%
 # Demo on the d=20 graph: discover causes of one variable
