@@ -39,6 +39,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   with a usage error that names it, before any engine runs, instead of a `TypeError`
   from deep inside the engine; `deconfound` reads Booleans as 0/1, as `discover` does
   (#130).
+  A `category` column with numeric categories (as parquet and feather keep them) is
+  read as numbers; `inspect` used to leave it out as non-numeric.
+  `deconfound` stops with a usage error when the data's columns do not match the
+  variables the graph was discovered on (e.g. a different `--index-col`).
 * `compare_graphs`: `curved_radius=0` no longer hangs when a node pair has two
   strokes, and a pair with three or more strokes no longer draws two on the same arc.
 * `CausalForecaster.forecast_horizon(targets=...)` with a subset of variables no longer

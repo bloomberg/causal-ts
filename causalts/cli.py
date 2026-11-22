@@ -7,6 +7,7 @@ matplotlib.use("Agg")
 
 import json  # noqa: E402
 import os  # noqa: E402
+import shlex  # noqa: E402
 import time as _time  # noqa: E402
 import warnings  # noqa: E402
 from datetime import datetime  # noqa: E402
@@ -289,10 +290,34 @@ def _read_numeric_data(path, index_col):
     df = numeric_frame(_read_data(path, index_col))
     bad = [str(c) for c in non_numeric_columns(df)]
     if bad:
-        raise click.UsageError(
-            f"column(s) {bad} are not numeric; drop them or pass --index-col {bad[0]}"
-        )
+        # --index-col takes one column; once it is set, dropping is the only fix.
+        if index_col is not None:
+            hint = "drop them"
+        elif len(bad) == 1:
+            hint = f"drop it or pass --index-col {shlex.quote(bad[0])}"
+        else:
+            hint = "drop them; one of them can be --index-col instead (e.g. a date)"
+        raise click.UsageError(f"column(s) {bad} are not numeric; {hint}")
     return df
+
+
+def _discover_summary(graph_path):
+    """The ``summary.json`` ``discover`` wrote next to ``graph_path``.
+
+    ``None`` unless the summary names that file as its graph and lists its
+    variables.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(graph_path)), "summary.json")
+    try:
+        with open(path) as f:
+            summary = json.load(f)
+    except (OSError, ValueError):
+        return None
+    graph_file = summary.get("output_files", {}).get("graph")
+    var_names = summary.get("var_names")
+    if graph_file != os.path.basename(graph_path) or not isinstance(var_names, list):
+        return None
+    return summary
 
 
 def _log(ctx, msg):
@@ -1043,6 +1068,7 @@ def discover(
         "ci_test": None if is_baseline else ci_test,
         "data_file": os.path.abspath(data),
         "data_shape": list(df.shape),
+        "index_col": index_col,
         "var_names": var_name_list,
         "max_lag": max_lag,
         "alpha": None if is_baseline else alpha,
@@ -1974,6 +2000,28 @@ def deconfound(
 
     graph = np.load(graph_path, allow_pickle=True)
     df = _read_numeric_data(data_path, index_col)
+    # C-node rows only ever make the graph larger than the data, never smaller.
+    if graph.shape[0] < df.shape[1]:
+        raise click.UsageError(
+            f"graph has {graph.shape[0]} variables but the data has {df.shape[1]} "
+            f"columns {[str(c) for c in df.columns]}; pass the --index-col you "
+            "discovered with"
+        )
+    # A larger graph may be C-node rows or a column discovery read as a
+    # variable; the summary discover writes next to the graph tells them apart.
+    found = _discover_summary(graph_path)
+    if found is not None and len(found["var_names"]) != df.shape[1]:
+        if "index_col" not in found:
+            hint = "pass the --index-col you discovered with"
+        elif found["index_col"] is None:
+            hint = "discover used no --index-col; drop it"
+        else:
+            hint = f"discover used --index-col {shlex.quote(str(found['index_col']))}"
+        raise click.UsageError(
+            f"the graph was discovered on {len(found['var_names'])} variables but "
+            f"the data has {df.shape[1]} columns {[str(c) for c in df.columns]}; "
+            f"{hint}"
+        )
     outdir = _make_output_dir(ctx.obj["output_dir"], f"deconfound_{strategy}")
     var_name_list = _parse_comma_list(var_names)
     if var_name_list:

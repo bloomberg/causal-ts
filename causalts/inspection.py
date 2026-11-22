@@ -186,12 +186,24 @@ class NoNumericColumnsError(ValueError):
 
 
 def numeric_frame(df):
-    """Return ``df`` with Boolean columns as 0/1 floats.
+    """Return ``df`` with Boolean columns as 0/1 floats and numeric categoricals
+    as their values.
 
     pandas keeps Booleans out of numeric selections and turns a frame that mixes
     them with floats into an object array; as 0/1 they are ordinary discrete
     columns for the checks, the discrete-aware CI tests and the lag embedding.
+    A ``category`` column whose categories are numbers (as parquet and feather
+    keep them) is likewise a discrete numeric column.
     """
+    cat_cols = [
+        c
+        for c in df.select_dtypes(include=["category"]).columns
+        if pd.api.types.is_numeric_dtype(df[c].cat.categories)
+    ]
+    if cat_cols:
+        df = df.copy()
+        for c in cat_cols:
+            df[c] = df[c].astype("float64")
     bool_cols = list(df.select_dtypes(include=["bool", "boolean"]).columns)
     # True/False read from a file with a blank cell arrive as object columns.
     for c in df.select_dtypes(include=["object"]).columns:
