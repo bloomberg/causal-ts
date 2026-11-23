@@ -156,6 +156,36 @@ def test_evaluate_graph_rejects_string_arrays():
         evaluate_graph(marks, gt)
 
 
+@pytest.mark.parametrize(
+    "value, dtype",
+    [(0.7, np.float64), (256, np.int64), (-1, np.int64)],
+    ids=["score in (0, 1)", "int8 wraparound", "negative mark"],
+)
+def test_evaluate_graph_rejects_non_binary_graphs(value, dtype):
+    # Casting these to int8 used to score 0.7 and 256 as "no edge" (#165).
+    gt = np.zeros((2, 2, 2), dtype=int)
+    gt[0, 1, 1] = 1
+    est = np.zeros((2, 2, 2), dtype=dtype)
+    est[0, 1, 1] = value
+    with pytest.raises(ValueError, match="binary graph"):
+        evaluate_graph(est, gt)
+    with pytest.raises(ValueError, match="binary graph"):
+        evaluate_graph(gt, est)
+
+
+def test_evaluate_graph_shape_mismatch_raises_value_error():
+    gt = np.zeros((2, 2, 2), dtype=int)
+    with pytest.raises(ValueError, match="Shape mismatch"):
+        evaluate_graph(np.zeros((3, 3, 2)), gt)
+
+
+def test_evaluate_graph_accepts_bool_and_float_binary_graphs():
+    gt = np.zeros((2, 2, 2), dtype=int)
+    gt[0, 1, 1] = 1
+    assert evaluate_graph(gt.astype(bool), gt)["TP"] == 1
+    assert evaluate_graph(gt.astype(float), gt)["TP"] == 1
+
+
 def test_check_linearity_on_linear_data():
     rng = np.random.default_rng(42)
     T = 300

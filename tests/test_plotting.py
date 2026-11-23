@@ -1979,3 +1979,14 @@ def test_compare_graphs_legend_best_location():
     g = _make_graph()
     _, ax = compare_graphs(g, g, var_names=["X", "Y", "Z"])
     assert ax.get_legend()._loc == 0  # matplotlib code for loc="best"
+
+
+def test_plot_metrics_summary_rejects_scores():
+    # It cast to int8 first, so 0.7 was scored as "no edge" (#165).
+    from causalts.plotting.compare import plot_metrics_summary
+
+    gt = np.zeros((2, 2, 2), dtype=int)
+    gt[0, 1, 1] = 1
+    scores = gt * 0.7
+    with pytest.raises(ValueError, match="binary graph"):
+        plot_metrics_summary(gt, scores)
