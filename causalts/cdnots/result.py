@@ -305,7 +305,8 @@ class CdnotsResult(CausalResult):
         if self.include_C:
             if exclude_C:
                 graph = graph[: -self.num_c_cols, : -self.num_c_cols, :]
-            else:
+            elif len(names) < graph.shape[0]:
+                # Label the C rows unless the caller's names already cover them.
                 if self.c_node_names is not None:
                     names = names + list(self.c_node_names)
                 elif self.num_c_cols == 1:

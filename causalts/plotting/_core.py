@@ -52,6 +52,26 @@ def _myround(x, base=5, round_mode="updown"):
     return base * round(float(x) / base)
 
 
+def _check_var_names(var_names, n):
+    """Check that var_names has one name for each graph variable."""
+    if var_names is None:
+        return
+
+    if len(var_names) != n:
+        message = (
+            f"var_names has {len(var_names)} entries "
+            f"but the graph has {n} variables"
+        )
+
+        if len(var_names) < n:
+            message += (
+                ". The graph may include time-index (C) nodes; plot "
+                f"graph[:{len(var_names)}, :{len(var_names)}] instead, or add their names"
+            )
+
+        raise ValueError(message)
+
+
 def _draw_plot_graph_loops(
     ax,
     G,
@@ -1757,6 +1777,7 @@ def plot_graph(
     if graph.ndim == 2:
         # If a non-time series (N,N)-graph is given, insert a dummy dimension
         graph = np.expand_dims(graph, axis=2)
+    _check_var_names(var_names, graph.shape[0])
 
     if val_matrix is None:
         no_coloring = True
@@ -2540,7 +2561,7 @@ def plot_time_series_graph(
         N, N, dummy = graph.shape
         tau_max = dummy - 1
         max_lag = tau_max + 1
-
+    _check_var_names(var_names, N)
     if np.count_nonzero(graph == "") == graph.size:
         if N > 1 and graph.ndim == 4:
             graph[0, 1, 0, 0] = "---"

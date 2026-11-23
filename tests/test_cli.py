@@ -739,3 +739,33 @@ def test_generate_twice_in_same_second_keeps_both_runs(tmp_path, monkeypatch):
     assert dirs == ["generate_20260102_030405", "generate_20260102_030405_1"]
     seeds = [json.loads((tmp_path / d / "meta.json").read_text())["seed"] for d in dirs]
     assert seeds == [1, 2]
+
+
+def test_discover_cdnots_default_saves_network_plot(tmp_path):
+    # With the C node (the default), the plot used to get "C" twice and fail
+    # the var_names check, so network.png was silently not written.
+    import matplotlib
+
+    matplotlib.use("Agg")
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=300)
+    path = tmp_path / "d.csv"
+    pd.DataFrame({"x": x, "y": np.r_[0, x[:-1]] + rng.normal(size=300)}).to_csv(
+        path, index=False
+    )
+    result = CliRunner().invoke(
+        main,
+        [
+            "-o",
+            str(tmp_path),
+            "discover",
+            str(path),
+            "--max-lag",
+            "1",
+            "--ci-test",
+            "parcorr-gpu",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "could not save network plot" not in result.output
+    assert list(tmp_path.glob("discover_*/network.png"))
