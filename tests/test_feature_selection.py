@@ -184,14 +184,14 @@ def test_design_matrix_dropna_keeps_lag0_rows():
         algo="cdnots",
         _df=df,
     )
-    X = result.to_design_matrix(dropna=True)
+    X = result.to_design_matrix(dropna=True, include_self=False)
     assert list(X.columns) == ["X_lag0"]
     assert X.shape == (8, 1)
     assert list(X.index) == list(range(8))
     assert X["X_lag0"].tolist() == list(range(8))
     used_lags = [int(c.rsplit("_lag", 1)[1]) for c in X.columns]
     assert X.shape[0] == len(df) - max(used_lags)
-    X_all = result.to_design_matrix(dropna=False)
+    X_all = result.to_design_matrix(dropna=False, include_self=False)
     assert X_all.shape == (8, 1)
 
 
@@ -213,21 +213,39 @@ def test_design_matrix_dropna_drops_only_largest_used_lag():
             algo="cdnots",
             _df=df,
         )
-        X = result.to_design_matrix(dropna=True)
+        X = result.to_design_matrix(dropna=True, include_self=False)
         used_lags = [int(c.rsplit("_lag", 1)[1]) for c in X.columns]
         assert X.shape[0] == len(df) - max(used_lags)
         assert X.shape[0] == expected_rows
         assert list(X.index) == list(range(8 - expected_rows, 8))
 
 
-def test_design_matrix_dropna_drops_only_largest_self_lag():
-    # AR(2): y depends on its lags 1 and 2 only.
-    rng = np.random.default_rng(0)
-    y = np.zeros(300)
-    eps = rng.normal(size=300)
-    for t in range(2, 300):
-        y[t] = 0.6 * y[t - 1] + 0.3 * y[t - 2] + eps[t]
-    df = pd.DataFrame({"X": rng.normal(size=300), "Y": y})
+def test_design_matrix_dropna_ignores_left_out_lagged_child():
+    # A lagged child never becomes a column, so its lag must not trim rows.
+    df = pd.DataFrame({"X": np.arange(8, dtype=float), "Y": np.arange(8, dtype=float)})
+    result = FeatureSelectionResult(
+        target="Y",
+        features=[Feature("X", 0, "parent"), Feature("X", 3, "child")],
+        var_names=["X", "Y"],
+        max_lag=3,
+        algo="cdnots",
+        _df=df,
+    )
+    with pytest.warns(UserWarning, match="left out"):
+        X = result.to_design_matrix(dropna=True, include_self=False)
+    assert list(X.columns) == ["X_lag0"]
+    assert X.shape == (8, 1)
+
+
+def test_design_matrix_dropna_drops_only_largest_self_lag(monkeypatch):
+    # Lags 1 and 2 pass the threshold, lag 3 does not: only 2 rows are trimmed.
+    monkeypatch.setattr(
+        "causalts.feature_selection._self_dcor_scores",
+        lambda series, max_lag: {1: 0.9, 2: 0.4, 3: 0.01},
+    )
+    df = pd.DataFrame(
+        {"X": np.arange(300, dtype=float), "Y": np.arange(300, dtype=float)}
+    )
     result = FeatureSelectionResult(
         target="Y",
         features=[],
@@ -240,8 +258,6 @@ def test_design_matrix_dropna_drops_only_largest_self_lag():
     assert list(X.columns) == ["Y_lag1", "Y_lag2"]
     assert X.shape == (298, 2)
     assert list(X.index) == list(range(2, 300))
-    used_lags = [int(c.rsplit("_lag", 1)[1]) for c in X.columns]
-    assert X.shape[0] == len(df) - max(used_lags)
 
 
 def test_real_cdnots_backend_runs(data):

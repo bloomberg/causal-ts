@@ -214,9 +214,10 @@ class FeatureSelectionResult:
             is a dcor *strength* in ``[0, 1]``, not a p-value. Set to ``0`` to
             include every self-lag up to ``max_lag``.
         dropna : bool, default True
-            Only as many leading rows are dropped as the largest lag actually
-    used by a column in the design matrix (0 if no column is shifted);
-    NaNs already present in the data are left untouched.
+            If True, drop the leading rows made NaN by shifting: only as many
+            as the largest lag actually used by a column in the design matrix
+            (0 if no column is shifted), not ``max_lag``. NaNs already present
+            in the data are left untouched.
 
         Returns
         -------
@@ -227,7 +228,7 @@ class FeatureSelectionResult:
         if source is None:
             raise ValueError("no DataFrame available; pass df=...")
         cols = {}
-         max_used_lag = 0
+        max_used_lag = 0
         future_children = []
         orphan_spouses = []
         # Cross-variable causal features (never self / nonstationarity here).
@@ -249,7 +250,7 @@ class FeatureSelectionResult:
                 orphan_spouses.append(f"{f.variable}_lag{f.lag}")
                 continue
             cols[f"{f.variable}_lag{f.lag}"] = source[f.variable].shift(f.lag)
-                 max_used_lag = max(max_used_lag, f.lag)
+            max_used_lag = max(max_used_lag, f.lag)
         dropped = []
         if future_children:
             dropped.append(
@@ -273,8 +274,8 @@ class FeatureSelectionResult:
             for lag in range(1, self.max_lag + 1):
                 if self_scores.get(lag, 0.0) >= self_threshold:
                     cols[f"{self.target}_lag{lag}"] = source[self.target].shift(lag)
-                max_used_lag = max(max_used_lag, lag)
-    out = pd.DataFrame(cols, index=source.index)
+                    max_used_lag = max(max_used_lag, lag)
+        out = pd.DataFrame(cols, index=source.index)
         if dropna:
             out = out.iloc[max_used_lag:]
         return out
