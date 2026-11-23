@@ -36,7 +36,11 @@ def _run(segment_graphs, segment_threshold=0.5, threshold_rounding="ceil"):
         {} if threshold_rounding is None else {"threshold_rounding": threshold_rounding}
     )
     config = RegimeConfig(n_regimes=1, segment_threshold=segment_threshold, **kw)
-    res = run_regime_discovery(df, discovery_fn, config=config, regime_labels=labels)
+    # Label 1 marks gap rows outside the single regime, so the run warns.
+    with pytest.warns(UserWarning, match="outside \\[0, 1\\)"):
+        res = run_regime_discovery(
+            df, discovery_fn, config=config, regime_labels=labels
+        )
     # Failed segments are dropped silently; a rejection must not pass that way.
     assert len(res.per_regime_results[0]) == n, "a stub segment failed silently"
     return res.regime_graphs[0]
@@ -283,3 +287,44 @@ def test_failed_regime_does_not_dilute_the_weighted_vote():
         res = run_regime_discovery(df, by_regime, config=config, regime_labels=labels)
     assert res.cg_tig[A, B, 1] == 1
     assert res.metadata["regime_weights"] == {0: 400.0, 1: 400.0}
+
+
+def test_out_of_range_labels_warns_with_suggested_n_regimes():
+    df = pd.DataFrame(np.zeros((400, 3)), columns=["A", "B", "C"])
+    labels = np.repeat([0, 1, 2, 3], 100)
+
+    def dummy_discovery(seg_df, max_lag, alpha, **_):
+        return types.SimpleNamespace(cg_tig=_graph())
+
+    # Default config has n_regimes=3. Label 3 is outside [0, 3).
+    with pytest.warns(UserWarning, match="n_regimes=4"):
+        run_regime_discovery(df, dummy_discovery, regime_labels=labels)
+
+
+def test_regime_labels_wrong_length_raises():
+    df = pd.DataFrame(np.zeros((100, 3)), columns=["A", "B", "C"])
+    labels = np.zeros(50, dtype=np.int32)
+
+    with pytest.raises(ValueError, match="1-D array of length 100"):
+        run_regime_discovery(df, lambda *a, **k: None, regime_labels=labels)
+
+
+def test_regime_labels_wrong_dimensions_raises():
+    df = pd.DataFrame(np.zeros((100, 3)), columns=["A", "B", "C"])
+    labels = np.zeros((100, 2), dtype=np.int32)
+
+    with pytest.raises(ValueError, match="1-D array of length 100"):
+        run_regime_discovery(df, lambda *a, **k: None, regime_labels=labels)
+
+
+def test_negative_labels_warn_without_n_regimes_hint():
+    df = pd.DataFrame(np.zeros((300, 3)), columns=["A", "B", "C"])
+    labels = np.repeat([-1, 0, 1], 100)
+    config = RegimeConfig(n_regimes=2)
+
+    def dummy_discovery(seg_df, max_lag, alpha, **_):
+        return types.SimpleNamespace(cg_tig=_graph())
+
+    with pytest.warns(UserWarning, match="100 rows") as record:
+        run_regime_discovery(df, dummy_discovery, config=config, regime_labels=labels)
+    assert "n_regimes=" not in str(record[0].message)

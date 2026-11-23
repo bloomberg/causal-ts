@@ -68,12 +68,19 @@ def run_regime_discovery(
 
     Raises
     ------
+    ValueError
+        If ``regime_labels`` (or the labels returned by ``detector``) is not
+        a 1-D array of length ``len(df)``.
     RuntimeError
         If ``discovery_fn`` raises on every segment attempted, chained from
         the first error, instead of returning an empty graph.
 
     Warns
     -----
+    UserWarning
+        If any regime labels fall outside ``[0, n_regimes)``, reporting the
+        number of ignored rows and, when some labels are ``>= n_regimes``,
+        the ``RegimeConfig(n_regimes=...)`` that would include them.
     UserWarning
         If ``discovery_fn`` raises on some segments but not all, once, with
         the number that failed and the first error.
@@ -119,9 +126,36 @@ def run_regime_discovery(
     elif regime_labels is not None:
         labels = np.asarray(regime_labels, dtype=np.int32)
     elif detector is not None:
-        labels = detector.assign(df)
+        labels = np.asarray(detector.assign(df), dtype=np.int32)
     else:
-        labels = QuantileRegimeDetector(n_regimes).assign(df)
+        labels = np.asarray(
+            QuantileRegimeDetector(n_regimes).assign(df), dtype=np.int32
+        )
+
+    if labels.ndim != 1 or len(labels) != len(df):
+        raise ValueError(
+            f"regime labels must be a 1-D array of length {len(df)}, "
+            f"got shape {labels.shape}"
+        )
+
+    out = (labels < 0) | (labels >= n_regimes)
+    if out.any():
+        n_out = int(out.sum())
+        distinct = sorted(set(labels[out].tolist()))
+        distinct_str = "{" + ", ".join(str(lbl) for lbl in distinct) + "}"
+        max_label = int(labels.max())
+        hint = (
+            f"; set RegimeConfig(n_regimes={max_label + 1}) to include the "
+            "labels above the range"
+            if max_label >= n_regimes
+            else ""
+        )
+        warnings.warn(
+            f"{n_out} rows have regime labels outside [0, {n_regimes}) "
+            f"(labels {distinct_str}) and are ignored{hint}.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     if verbose:
         for r in range(n_regimes):
