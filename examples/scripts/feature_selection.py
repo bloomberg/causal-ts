@@ -153,14 +153,14 @@ def fs_to_graph(r):
 
 
 def plot_fs_graph(r, ax=None, title=None, figsize=(4.4, 3.8), node_pos=None, node_size=0.32):
-    "Render a result's neighbourhood with the library's own plot_graph (neato)."
+    "Render a result's neighbourhood with the library's own plot_graph (auto layout)."
     if ax is None:
         _, ax = plt.subplots(figsize=figsize)
     g, names = fs_to_graph(r)
     plot_graph(g, var_names=names, target_node=r.target, fig_ax=(ax.figure, ax),
                show_colorbar=False, node_size=node_size, arrow_linewidth=2.4,
-               show_autodependency_lags=True, label_fontsize=9, node_label_size=11,
-               node_layout="neato", node_pos=node_pos,
+               show_self_loops=True, label_fontsize=9, node_label_size=11,
+               node_layout="auto", node_pos=node_pos,
                target_in_color=ROLE_COLORS["parent"],
                target_out_color=ROLE_COLORS["child"])
     if title:
@@ -212,7 +212,7 @@ df, max_lag = data["df"], data["max_lag"]
 
 r = select_features(df, "X3", max_lag=max_lag, algo="cedar")   # 1. causal features
 X = r.to_design_matrix()                                       # 2. model-ready columns
-y = df["X3"].iloc[max_lag:]
+y = df["X3"].loc[X.index]                                     # align on the index
 model = LinearRegression().fit(X, y)                           # 3. fit
 print(f"selected {X.shape[1]} features -> R^2 = {model.score(X, y):.3f}")
 features_df(r)
@@ -450,15 +450,15 @@ fig, (a1, a2) = plt.subplots(1, 2, figsize=(9.6, 4.0))
 _, _, gt_pos = plot_graph(
     data["ground_truth"], var_names=list(df.columns), target_node="X4",
     fig_ax=(fig, a1), show_colorbar=False, node_size=0.3, arrow_linewidth=2.0,
-    show_autodependency_lags=True, label_fontsize=9, node_label_size=10,
-    node_layout="neato", return_pos=True,
+    show_self_loops=True, label_fontsize=9, node_label_size=10,
+    node_layout="auto", return_pos=True,
     target_in_color=ROLE_COLORS["parent"], target_out_color=ROLE_COLORS["child"])
 a1.set_title("Ground-truth full graph (X4 highlighted)", fontsize=10)
 
 lut = positions_by_name(gt_pos, list(df.columns))
 plot_graph(mb_graph, var_names=mb_vars, target_node="X4", fig_ax=(fig, a2),
            show_colorbar=False, node_size=0.2, arrow_linewidth=2.4,
-           show_autodependency_lags=True, label_fontsize=9, node_label_size=11,
+           show_self_loops=True, label_fontsize=9, node_label_size=11,
            node_pos=node_pos_for(mb_vars, lut),
            target_in_color=ROLE_COLORS["parent"], target_out_color=ROLE_COLORS["child"])
 a2.set_title("Extracted: X4's Markov blanket", fontsize=10)
@@ -544,8 +544,8 @@ fig, (a1, a2) = plt.subplots(1, 2, figsize=(9.2, 3.8))
 _, _, conf_pos = plot_graph(
     gt_conf, var_names=gt_names, target_node="Y", fig_ax=(fig, a1),
     show_colorbar=False, node_size=0.2, arrow_linewidth=2.2,
-    show_autodependency_lags=True, label_fontsize=9, node_label_size=11,
-    node_layout="neato", return_pos=True,
+    show_self_loops=True, label_fontsize=9, node_label_size=11,
+    node_layout="auto", return_pos=True,
     target_in_color=ROLE_COLORS["parent"], target_out_color=ROLE_COLORS["child"])
 a1.set_title("Ground truth: A is a non-cause (only W->A)", fontsize=10)
 # reuse ground-truth positions for the extracted parents graph
@@ -643,11 +643,13 @@ target = "X3"
 r_pred = select_features(df, target, max_lag=max_lag, algo="cedar")
 design = r_pred.to_design_matrix(include_self=True, self_threshold=0.05)
 
-y = df[target].iloc[max_lag:].to_numpy()
-n_train = int(len(y) * 0.7)
 all_cols = pd.DataFrame(
     {f"{c}_lag{l}": df[c].shift(l) for l in range(1, max_lag + 1) for c in df.columns}
 ).iloc[max_lag:]
+# Compare all three on the same rows (the design matrix may keep a few more).
+design = design.loc[all_cols.index]
+y = df[target].loc[all_cols.index].to_numpy()
+n_train = int(len(y) * 0.7)
 
 
 def holdout_rmse(X):
