@@ -12,7 +12,7 @@ These apply to the whole repository. Human contributors should also read
 ## While you edit
 
 - Add or update tests in `tests/` for any changed behavior.
-- Code must run on Python 3.10 (CI tests 3.10 to 3.14), so avoid newer syntax
+- Code must run on Python 3.10 (CI tests 3.10 to 3.15), so avoid newer syntax
   and APIs such as `except*`, `typing.Self`, `tomllib`, `type` aliases or
   PEP 695 generics.
 - New Python files under `causalts/`, `tests/`, `docs/` or `experiments/` start

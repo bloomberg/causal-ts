@@ -86,7 +86,9 @@ uv pip install -e ".[dev,dowhy,tigramite]"
 ```
 
 PyTorch is installed automatically. CUDA and Apple MPS are auto-detected at
-runtime; CPU is the fallback.
+runtime; CPU is the fallback. The `dowhy` extra needs Python 3.13 or older
+until DoWhy supports 3.14; on newer Python leave it out (e.g.
+`.[dev,tigramite]`).
 
 To let a coding agent drive causal-ts, run `causal-ts install-skill` — see the
 [CLI reference](https://causal-ts.readthedocs.io/en/latest/cli.html#install-skill).
