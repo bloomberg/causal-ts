@@ -35,7 +35,8 @@ def aggregate_majority(
     padded = _pad_to_max_lag(graphs)
     stacked = np.stack(list(padded.values()), axis=0)
     n = len(graphs)
-    return ((stacked > 0).sum(axis=0) >= threshold * n).astype(np.int8)
+    votes = (stacked > 0).sum(axis=0)
+    return ((votes / n) >= threshold).astype(np.int8)
 
 
 def aggregate_weighted(
