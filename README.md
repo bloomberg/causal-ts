@@ -145,6 +145,9 @@ learn, inspire, and create. Any contributions you make are **greatly
 appreciated**. For detailed contributing guidelines, please see
 [CONTRIBUTING.md](https://github.com/bloomberg/causal-ts/blob/main/CONTRIBUTING.md).
 
+If causal-ts has been useful to you, consider starring the repository; it helps
+other researchers and practitioners find the project.
+
 ## License
 
 Distributed under the `GPL-3.0-or-later` License. See [LICENSE](https://github.com/bloomberg/causal-ts/blob/main/LICENSE) for
