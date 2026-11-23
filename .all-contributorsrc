@@ -4,7 +4,7 @@
   "repoType": "github",
   "repoHost": "https://github.com",
   "files": [
-    "README.md"
+    "CONTRIBUTORS.md"
   ],
   "imageSize": 100,
   "commit": false,
@@ -148,6 +148,169 @@
       "profile": "https://github.com/alibb007",
       "contributions": [
         "maintenance"
+      ]
+    },
+    {
+      "login": "ahsansheikh94",
+      "name": "Ahsan Shiekh",
+      "avatar_url": "https://avatars.githubusercontent.com/u/60807660",
+      "profile": "https://github.com/ahsansheikh94",
+      "contributions": [
+        "code",
+        "test"
+      ]
+    },
+    {
+      "login": "annastudios",
+      "name": "Ankita Gaikwad",
+      "avatar_url": "https://avatars.githubusercontent.com/u/273253706",
+      "profile": "https://github.com/annastudios",
+      "contributions": [
+        "code",
+        "test"
+      ]
+    },
+    {
+      "login": "aryankalantri",
+      "name": "aryankalantri",
+      "avatar_url": "https://avatars.githubusercontent.com/u/184456664",
+      "profile": "https://github.com/aryankalantri",
+      "contributions": [
+        "code",
+        "test",
+        "doc"
+      ]
+    },
+    {
+      "login": "bardrop",
+      "name": "bardrop",
+      "avatar_url": "https://avatars.githubusercontent.com/u/100354790",
+      "profile": "https://github.com/bardrop",
+      "contributions": [
+        "code",
+        "test"
+      ]
+    },
+    {
+      "login": "bfs2021",
+      "name": "zgy",
+      "avatar_url": "https://avatars.githubusercontent.com/u/101915083",
+      "profile": "https://github.com/bfs2021",
+      "contributions": [
+        "code",
+        "test"
+      ]
+    },
+    {
+      "login": "EddieIsNotAvailable",
+      "name": "Eddie",
+      "avatar_url": "https://avatars.githubusercontent.com/u/105336944",
+      "profile": "https://github.com/EddieIsNotAvailable",
+      "contributions": [
+        "code",
+        "test",
+        "doc"
+      ]
+    },
+    {
+      "login": "haseemajaz",
+      "name": "Haseem Ajaz",
+      "avatar_url": "https://avatars.githubusercontent.com/u/41672065",
+      "profile": "https://github.com/haseemajaz",
+      "contributions": [
+        "code",
+        "test",
+        "doc"
+      ]
+    },
+    {
+      "login": "hskl18",
+      "name": "Hanbin Tan",
+      "avatar_url": "https://avatars.githubusercontent.com/u/48960067",
+      "profile": "https://github.com/hskl18",
+      "contributions": [
+        "code",
+        "test"
+      ]
+    },
+    {
+      "login": "KhHuyy",
+      "name": "Huynh Khanh Huy",
+      "avatar_url": "https://avatars.githubusercontent.com/u/206226471",
+      "profile": "https://github.com/KhHuyy",
+      "contributions": [
+        "code",
+        "test"
+      ]
+    },
+    {
+      "login": "mamtha18",
+      "name": "mamtha18",
+      "avatar_url": "https://avatars.githubusercontent.com/u/249581865",
+      "profile": "https://github.com/mamtha18",
+      "contributions": [
+        "code",
+        "test"
+      ]
+    },
+    {
+      "login": "minilan677-netizen",
+      "name": "Shakibul Hasan Siyam",
+      "avatar_url": "https://avatars.githubusercontent.com/u/321019851",
+      "profile": "https://github.com/minilan677-netizen",
+      "contributions": [
+        "code",
+        "test"
+      ]
+    },
+    {
+      "login": "NguyenDinhKhoi213",
+      "name": "NguyenDinhKhoi",
+      "avatar_url": "https://avatars.githubusercontent.com/u/226779237",
+      "profile": "https://github.com/NguyenDinhKhoi213",
+      "contributions": [
+        "code",
+        "test"
+      ]
+    },
+    {
+      "login": "O1sumitkumar",
+      "name": "Sumeet Jha",
+      "avatar_url": "https://avatars.githubusercontent.com/u/109774891",
+      "profile": "https://github.com/O1sumitkumar",
+      "contributions": [
+        "code",
+        "test"
+      ]
+    },
+    {
+      "login": "PloneMraz",
+      "name": "Huỳnh Mai Phúc (Plone Mraz)",
+      "avatar_url": "https://avatars.githubusercontent.com/u/300829384",
+      "profile": "https://github.com/PloneMraz",
+      "contributions": [
+        "code",
+        "test"
+      ]
+    },
+    {
+      "login": "sandeshbagmare",
+      "name": "Sandesh Bagmare",
+      "avatar_url": "https://avatars.githubusercontent.com/u/130566768",
+      "profile": "https://github.com/sandeshbagmare",
+      "contributions": [
+        "code",
+        "test"
+      ]
+    },
+    {
+      "login": "techkayacodes",
+      "name": "Kemal Codes",
+      "avatar_url": "https://avatars.githubusercontent.com/u/74741855",
+      "profile": "https://github.com/techkayacodes",
+      "contributions": [
+        "code",
+        "test"
       ]
     }
   ]
