@@ -48,6 +48,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   read as numbers; `inspect` used to leave it out as non-numeric.
   `deconfound` stops with a usage error when the data's columns do not match the
   variables the graph was discovered on (e.g. a different `--index-col`).
+* `aggregate_majority` keeps an edge found in exactly the threshold fraction of regimes
+  (e.g. 7 of 25 at `threshold=0.28`) instead of dropping it to floating-point rounding (#164).
 * `causal-ts inspect`, `discover`, `deconfound`, `evaluate` and `plot` reject a
   `--var-names` list with the wrong count or a duplicate name as a usage error, before
   creating any output, instead of a pandas or plotting traceback (#133).

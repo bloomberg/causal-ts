@@ -10,12 +10,10 @@ from causalts.regime.aggregation import aggregate_majority
 
 
 @pytest.mark.parametrize(
-    ("n_regimes", "n_votes", "threshold"),
-    [(25, 7, 0.28), (6, 5, 5 / 6)],
+    ("n_regimes", "n_votes", "threshold", "kept"),
+    [(25, 7, 0.28, 1), (25, 6, 0.28, 0), (6, 5, 5 / 6, 1), (6, 4, 5 / 6, 0)],
 )
-def test_majority_keeps_edges_at_exact_share_threshold(
-    n_regimes, n_votes, threshold
-):
+def test_majority_threshold_boundary(n_regimes, n_votes, threshold, kept):
     graphs = {
         regime: np.array([[[int(regime < n_votes)]]], dtype=np.int8)
         for regime in range(n_regimes)
@@ -23,4 +21,4 @@ def test_majority_keeps_edges_at_exact_share_threshold(
 
     result = aggregate_majority(graphs, threshold=threshold)
 
-    assert result[0, 0, 0] == 1
+    assert result[0, 0, 0] == kept
