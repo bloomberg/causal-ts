@@ -79,8 +79,8 @@ def run_regime_discovery(
     -----
     UserWarning
         If any regime labels fall outside ``[0, n_regimes)``, reporting the
-        number of ignored rows and how to include them via
-        ``RegimeConfig(n_regimes=...)``.
+        number of ignored rows and, when some labels are ``>= n_regimes``,
+        the ``RegimeConfig(n_regimes=...)`` that would include them.
     UserWarning
         If ``discovery_fn`` raises on some segments but not all, once, with
         the number that failed and the first error.
@@ -144,11 +144,15 @@ def run_regime_discovery(
         distinct = sorted(set(labels[out].tolist()))
         distinct_str = "{" + ", ".join(str(lbl) for lbl in distinct) + "}"
         max_label = int(labels.max())
-        suggested_n = max(n_regimes, max_label + 1)
+        hint = (
+            f"; set RegimeConfig(n_regimes={max_label + 1}) to include the "
+            "labels above the range"
+            if max_label >= n_regimes
+            else ""
+        )
         warnings.warn(
             f"{n_out} rows have regime labels outside [0, {n_regimes}) "
-            f"(labels {distinct_str}) and are ignored; set "
-            f"RegimeConfig(n_regimes={suggested_n}) to include them.",
+            f"(labels {distinct_str}) and are ignored{hint}.",
             UserWarning,
             stacklevel=2,
         )
