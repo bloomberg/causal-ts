@@ -79,6 +79,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `DeprecationWarning`; p-values are unchanged (#137).
 * `WrappedGraph.summary()` and `run_cdnots_gated(verbose=True)` print correctly;
   `set_up_logging` cleans up after a failed setup.
+* `PeltRegimeDetector` raises `TypeError` for an unknown keyword argument (e.g. `penalty=`
+  instead of `pen=`) instead of silently ignoring it (#162).
 * `CausalForecaster` checks the graph shape and the number of `var_names`, with a hint for
   a time-index (C) node; `exclude_C=True` drops it, and `WrappedGraph.forecast()` forecasts
   the observed variables of a graph discovered with `include_C=True` (#145).
