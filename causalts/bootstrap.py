@@ -108,8 +108,11 @@ def temporal_bootstrap(
     Raises
     ------
     ValueError
-        If the window size is too small (< 10 rows) or the dataset is too
-        short to draw even one window.
+        If ``n_bootstrap`` is not a positive integer, if ``window_frac`` is
+        not a finite value in the open interval ``(0, 1)``, if the window
+        size is too small (< 10 rows), if the dataset is too short to draw
+        even one window, or if ``discovery_fn`` returns inconsistent output
+        shapes across runs.
 
     Examples
     --------
@@ -126,13 +129,32 @@ def temporal_bootstrap(
     ...                             window_frac=0.6, seed=42)
     >>> G_stable = (result["persistence"] >= 0.6).astype(int)
     """
+    if (
+        isinstance(n_bootstrap, bool)
+        or not isinstance(n_bootstrap, (int, np.integer))
+        or n_bootstrap < 1
+    ):
+        raise ValueError(
+            f"n_bootstrap must be a positive integer, got {n_bootstrap!r}."
+        )
+
+    try:
+        valid_frac = bool(np.isfinite(window_frac)) and 0.0 < window_frac < 1.0
+    except TypeError:
+        valid_frac = False
+    if not valid_frac:
+        raise ValueError(
+            "window_frac must be a finite float in the open interval (0, 1), "
+            f"got {window_frac!r}."
+        )
+
     T = len(df)
     W = int(T * window_frac)
 
     if W < 10:
         raise ValueError(
             f"window_size = int({T} * {window_frac}) = {W} is too small "
-            f"(minimum 10 rows). Reduce window_frac or use a larger dataset."
+            f"(minimum 10 rows). Increase window_frac or use a larger dataset."
         )
     if W >= T:
         raise ValueError(f"window_size {W} >= T {T}. Use window_frac < 1.0.")
@@ -148,6 +170,7 @@ def temporal_bootstrap(
 
     graphs: list[np.ndarray] = []
     errors: list[tuple[int, str]] = []
+    expected_shape: tuple | None = None
 
     iterator = range(n_bootstrap)
     if show_progress and _has_tqdm:
@@ -159,9 +182,19 @@ def temporal_bootstrap(
         try:
             result = discovery_fn(window)
             # Copy: discovery_fn may reuse one output buffer across runs.
-            graphs.append(np.array(result, copy=True))
+            arr = np.array(result, copy=True)
         except Exception:
             errors.append((i, traceback.format_exc()))
+            continue
+        if expected_shape is None:
+            expected_shape = arr.shape
+        elif arr.shape != expected_shape:
+            raise ValueError(
+                f"discovery_fn returned an inconsistent output shape on run {i}: "
+                f"got {arr.shape}, expected {expected_shape} (the shape from the "
+                "first successful run). All runs must return the same shape."
+            )
+        graphs.append(arr)
 
     if not graphs:
         raise RuntimeError(
