@@ -40,6 +40,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `temporal_bootstrap` validates `n_bootstrap` (a positive integer) and
+  `window_frac` (finite, in the open interval `(0, 1)`) up front, the "window
+  too small" message now says to increase `window_frac` instead of reducing it,
+  and a `discovery_fn` that returns inconsistent output shapes across runs raises
+  a `ValueError` naming the run index and both shapes instead of NumPy's generic
+  inhomogeneous-shape error (#180).
 * `run_regime_discovery` validates that regime labels are 1-D with length equal
   to the data and warns when labels outside `[0, n_regimes)` are ignored (#161).
 * `causal-ts discover` and `deconfound` given a non-numeric column (e.g. a date) exit
