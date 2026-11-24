@@ -151,7 +151,9 @@ _BUILTIN_ALGORITHMS = (
     "reap",
 ) + _BASELINE_ALGORITHMS
 PLOT_FORMAT_CHOICES = ["png", "pdf", "svg"]
-DATASET_CHOICES = ["ex1", "ex2", "ex3", "henon"]
+from .synthetic_data.synthetic_datasets import DATASET_FUNCS  # noqa: E402
+
+DATASET_CHOICES = sorted(DATASET_FUNCS)
 LAG_SEL_CHOICES = ["partial_dcor", "dcor", "dcor_biased", "pearson", "lasso"]
 LAG_PVALUE_CHOICES = ["t_test", "circular_shift"]
 DENSITY_CHOICES = ["sparse", "dense"]
@@ -1669,7 +1671,7 @@ def discover(
     "--dataset",
     type=click.Choice(DATASET_CHOICES),
     default=None,
-    help="Built-in dataset: ex1 (5-Node Nonlinear System), ex2 (6-Node Linear VAR), ex3 (Cascade Network 11-Node), henon (Hénon Chain).",
+    help="Built-in dataset: ex1 (5-Node Nonlinear System), ex2 (6-Node Linear VAR), ex3 (Cascade Network 11-Node), henon (Hénon Chain), lorenz96, ex1_nonstationary, confounded_trends, mixed_a/mixed_b/mixed_c and the topology presets.",
 )
 @click.option(
     "-n",
@@ -1728,9 +1730,12 @@ def generate(
             "T": samples,
             "n_vars": df.shape[1],
             "max_lag": result["max_lag"],
-            "var_names": list(df.columns),
+            "var_names": result.get("var_names", list(df.columns)),
             **extra,
         }
+        for key in ("include_C", "discrete_cols"):
+            if key in result:
+                meta[key] = result[key]
     else:
         _log(
             ctx,

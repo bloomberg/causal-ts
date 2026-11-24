@@ -572,6 +572,7 @@ def henon_chain(seed=42, T=200, Q=0.5, M=5, bounded_start=False):
 
 
 from causalts.synthetic_data.weather_datasets import ercot_weather  # noqa: E402
+from causalts.synthetic_data.mixed_datasets import MIXED_DATASETS  # noqa: E402
 
 DATASET_FUNCS = {
     "ex2": ex2,
@@ -593,7 +594,11 @@ def load_dataset(name, **kwargs):
         (:func:`~causalts.synthetic_data.weather_datasets.ercot_weather`),
         ``"scale_free"``, ``"scale_free_dense"``, ``"erdos_renyi"``,
         ``"erdos_renyi_dense"``, ``"small_world"`` or ``"small_world_dense"``
-        (:func:`topology_scp` presets).
+        (:func:`topology_scp` presets), ``"lorenz96"`` (:func:`lorenz96`),
+        ``"ex1_nonstationary"`` (:func:`ex1_nonstationary`),
+        ``"confounded_trends"`` (:func:`confounded_trends`), or
+        ``"mixed_a"``/``"mixed_b"``/``"mixed_c"``
+        (:mod:`causalts.synthetic_data.mixed_datasets`).
     **kwargs
         Forwarded to the generator, e.g. ``seed`` and ``T``.
 
@@ -612,9 +617,16 @@ def load_dataset(name, **kwargs):
     Raises
     ------
     KeyError
-        If ``name`` is not a registered dataset.
+        If ``name`` is not a registered dataset; the message lists every
+        registered name.
     """
-    return DATASET_FUNCS[name](**kwargs)
+    try:
+        func = DATASET_FUNCS[name]
+    except KeyError:
+        raise KeyError(
+            f"unknown dataset {name!r}; available: {', '.join(sorted(DATASET_FUNCS))}"
+        ) from None
+    return func(**kwargs)
 
 
 # ---- safe nonlinearities (avoid overflow/NaNs) ----
@@ -1317,6 +1329,10 @@ def small_world_dense(seed=42, n_vars=15, T=500, **kw):
 
 DATASET_FUNCS.update(
     {
+        "lorenz96": lorenz96,
+        "ex1_nonstationary": ex1_nonstationary,
+        "confounded_trends": confounded_trends,
+        **MIXED_DATASETS,
         "scale_free": scale_free,
         "scale_free_dense": scale_free_dense,
         "erdos_renyi": erdos_renyi,

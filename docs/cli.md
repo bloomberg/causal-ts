@@ -248,7 +248,7 @@ causal-ts generate [OPTIONS]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--dataset` | — | Built-in dataset: `ex1` (5-Node Nonlinear System), `ex2` (6-Node Linear VAR), `ex3` (Cascade Network 11-Node), `henon` (Hénon Chain) — see Python API for `lorenz96`, `scale_free`, `erdos_renyi`, `small_world`, `ex1_nonstationary`, weather benchmark |
+| `--dataset` | — | Built-in dataset: `ex1` (5-Node Nonlinear System), `ex2` (6-Node Linear VAR), `ex3` (Cascade Network 11-Node), `henon` (Hénon Chain), `lorenz96`, `ex1_nonstationary`, `confounded_trends`, `mixed_a`/`mixed_b`/`mixed_c`, the topology presets (`scale_free`, `erdos_renyi`, `small_world` and their `_dense` forms) and the weather benchmark — every name in `load_dataset` |
 | `-n, --n-vars INT` | `5` | Number of variables (random generation) |
 | `--n-links INT` | auto | Number of cross-variable links |
 | `--max-lag INT` | `3` | Maximum lag |

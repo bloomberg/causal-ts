@@ -609,3 +609,36 @@ def test_make_ci_test_drops_an_unsupported_seed_with_a_warning():
         warnings.simplefilter("always")
         cli._make_ci_test("parcorr-gpu", np.zeros((2, 2)), "cpu", seed=3)
     assert not any("seed" in str(x.message) for x in w)
+
+
+# ── generate with the datasets added to the registry ─────────────────────────
+def _generate_meta(tmp_path, dataset, samples=100):
+    result = CliRunner().invoke(
+        main,
+        ["-o", str(tmp_path), "-s", "0", "generate", "--dataset", dataset, "-T", str(samples)],
+    )
+    assert result.exit_code == 0, result.output
+    (meta_path,) = tmp_path.glob("*/meta.json")
+    return json.loads(meta_path.read_text())
+
+
+def test_generate_lorenz96(tmp_path):
+    meta = _generate_meta(tmp_path, "lorenz96")
+
+    assert meta["dataset"] == "lorenz96"
+    assert meta["n_vars"] == 10
+    assert len(meta["var_names"]) == 10
+
+
+def test_generate_ex1_nonstationary_keeps_the_c_node(tmp_path):
+    meta = _generate_meta(tmp_path, "ex1_nonstationary")
+
+    assert meta["var_names"][-1] == "C"
+    assert meta["include_C"] is True
+
+
+def test_generate_mixed_records_discrete_columns(tmp_path):
+    meta = _generate_meta(tmp_path, "mixed_a")
+
+    assert meta["discrete_cols"] == ["R"]
+    assert meta["var_names"] == ["R", "X0", "X1", "X2", "X3"]

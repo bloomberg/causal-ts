@@ -240,3 +240,26 @@ def test_topology_scp_raises_when_no_attempt_passes():
         sd.topology_scp(
             "erdos_renyi", seed=0, n_vars=4, T=50, max_std_ratio=1e-6, max_tries=2
         )
+
+
+# ---------------------------------------------------------------------------
+# load_dataset registry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", sorted(sd.DATASET_FUNCS))
+def test_load_dataset_covers_every_registered_name(name):
+    bundle = sd.load_dataset(name, seed=0, T=100)
+
+    assert {"df", "ground_truth", "max_lag"} <= set(bundle)
+    assert bundle["df"].shape[0] == 100
+    assert bundle["ground_truth"].ndim == 3
+
+
+def test_load_dataset_unknown_name_lists_the_registered_names():
+    with pytest.raises(KeyError) as excinfo:
+        sd.load_dataset("not-a-dataset")
+
+    message = str(excinfo.value)
+    for name in sd.DATASET_FUNCS:
+        assert name in message
