@@ -27,6 +27,23 @@ test case.
 **If you discover a security bug, please do not report it through GitHub.
 Instead, please see security procedures in [SECURITY.md](/SECURITY.md).**
 
+## Picking an Issue
+
+Issues labelled `good first issue` are kept for people making their first
+contribution here, so that several newcomers each get one.
+
+- Comment on the issue to claim it, and wait until a maintainer assigns it to
+  you before opening a pull request.
+- Work on one `good first issue` at a time. After your first pull request is
+  merged, please pick issues without that label (`help wanted` ones are a good
+  next step) and leave the rest for other newcomers.
+- If you have been assigned an issue but cannot finish it, say so on the issue
+  so it can go to someone else. Assignments with no activity for two weeks may
+  be released.
+
+Pull requests for a `good first issue` that is not assigned to their author may
+be closed.
+
 ## Sending Pull Requests
 
 Before sending a new pull request, take a look at existing pull requests and

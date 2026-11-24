@@ -64,3 +64,7 @@ Never say a check passed unless you ran it, and say which checks you skipped.
   say in the description if AI tools wrote a significant part of the change.
 - Do not take GitHub actions (push, open PRs, comment, star) the user did not
   ask for.
+- If a pull request addresses an issue, only open it once that issue is
+  assigned to the user you work for. That user may hold one `good first issue`
+  at a time, and none after their first merged pull request (see
+  [Picking an Issue](CONTRIBUTING.md#picking-an-issue)).
