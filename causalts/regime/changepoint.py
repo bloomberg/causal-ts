@@ -253,6 +253,7 @@ class LeveneRegimeDetector:
         )
 
     def assign(self, df: pd.DataFrame) -> np.ndarray:
+        """Return int32 per-row labels in ``[0, n_regimes)``."""
         signal = self._get_signal(df)
         bkps = self._find_breakpoints(signal)
         return _labels_from_cp(len(df), signal, bkps, self.n_regimes)
@@ -336,6 +337,7 @@ class KSRegimeDetector:
         )
 
     def assign(self, df: pd.DataFrame) -> np.ndarray:
+        """Return int32 per-row labels in ``[0, n_regimes)``."""
         signal = self._get_signal(df)
         bkps = self._find_breakpoints(signal)
         return _labels_from_cp(len(df), signal, bkps, self.n_regimes)
@@ -478,6 +480,7 @@ class CusumRegimeDetector:
             raise ValueError(f"Unknown target: {self.target!r}")
 
     def assign(self, df: pd.DataFrame) -> np.ndarray:
+        """Return int32 per-row labels in ``[0, n_regimes)``."""
         signal = self._get_signal(df)
         bkps = self._find_breakpoints(signal)
         return _labels_from_cp(len(df), signal, bkps, self.n_regimes)
@@ -652,6 +655,7 @@ class EnsembleRegimeDetector:
         return _merge_changepoints(all_cps, self.merge_tolerance, self.min_segment)
 
     def assign(self, df: pd.DataFrame) -> np.ndarray:
+        """Return int32 per-row labels in ``[0, n_regimes)``."""
         signal = self._get_signal(df)
         bkps = self._find_breakpoints(signal)
         return _labels_from_cp(len(df), signal, bkps, self.n_regimes)
@@ -852,6 +856,11 @@ class HMMRegimeDetector:
         return _sticky_viterbi(log_ep, log_tm, log_sp, cost)
 
     def assign(self, df: pd.DataFrame) -> np.ndarray:
+        """Return int32 per-row labels in ``[0, k)``.
+
+        ``k`` is ``n_regimes``, or the number of states BIC selects when
+        ``n_regimes="auto"``.
+        """
         data = self._get_data(df)
         if self.n_regimes == "auto":
             k = self._select_n_regimes(data)

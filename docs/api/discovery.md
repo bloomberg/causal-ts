@@ -180,11 +180,44 @@ a causal graph per regime. See the
 .. autoclass:: causalts.regime.RegimeParams
 ```
 
-Detectors (all subclass `causalts.regime.RegimeDetector`):
-`PeltRegimeDetector`, `ChangePointRegimeDetector`, `CusumRegimeDetector`,
-`HMMRegimeDetector`, `KSRegimeDetector`, `LeveneRegimeDetector`,
-`QuantileRegimeDetector`, `SeasonalRegimeDetector`, `ColumnRegimeDetector`,
-`EnsembleRegimeDetector`.
+Each detector implements the `causalts.regime.RegimeDetector` protocol: its
+`assign(df)` returns an `int32` array of length T with labels in
+`[0, n_regimes)`.
+
+```{eval-rst}
+.. autoclass:: causalts.regime.RegimeDetector
+   :members: assign
+
+.. autoclass:: causalts.regime.QuantileRegimeDetector
+   :members: assign
+
+.. autoclass:: causalts.regime.ColumnRegimeDetector
+   :members: assign
+
+.. autoclass:: causalts.regime.SeasonalRegimeDetector
+   :members: assign
+
+.. autoclass:: causalts.regime.ChangePointRegimeDetector
+   :members: assign
+
+.. autoclass:: causalts.regime.PeltRegimeDetector
+   :members: assign
+
+.. autoclass:: causalts.regime.CusumRegimeDetector
+   :members: assign
+
+.. autoclass:: causalts.regime.HMMRegimeDetector
+   :members: assign
+
+.. autoclass:: causalts.regime.KSRegimeDetector
+   :members: assign
+
+.. autoclass:: causalts.regime.LeveneRegimeDetector
+   :members: assign
+
+.. autoclass:: causalts.regime.EnsembleRegimeDetector
+   :members: assign
+```
 
 ## Tigramite wrappers
 
