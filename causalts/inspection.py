@@ -688,6 +688,15 @@ def discover_df(
     ``**kwargs`` carries their own options (``mode``, ``lambda_value``,
     ``cv_folds``, ``threshold``).
 
+    Any other name registered with
+    :func:`~causalts.algorithms.register_algorithm` (or installed as an
+    entry-point plugin) runs through :func:`~causalts.algorithms.run_algorithm`
+    with the named CI test, ``max_lag`` and ``**kwargs``, as the CLI does. It
+    takes no ``include_C`` or ``c_preset``, ``alpha`` only sizes a ``"dfcit"``
+    CI test's null, and ``device`` only places the CI test; to give a plugin
+    its own argument with one of those names, call
+    :func:`~causalts.algorithms.run_algorithm` directly.
+
     To run a recommendation from :func:`recommend_config`, call
     ``discover_df(df, algorithm=rec["algorithm"], ci_test=rec["ci_test"], ...)``
     for the CDNOTS graph, or ``algorithm=rec["refine"], **rec["refine_params"]``
@@ -720,9 +729,11 @@ def discover_df(
     Raises
     ------
     ValueError
-        If ``algorithm`` is unknown; if ``ci_test``, ``include_C=True``, a
-        ``c_preset`` or ``alpha`` is passed to a score-based
-        method; if both ``ci_test`` and ``ci_test_class``
+        If ``algorithm`` is unknown (the message lists the registered names);
+        if ``ci_test``, ``include_C=True``, a ``c_preset`` or ``alpha`` is
+        passed to a score-based method; if ``include_C=True``, a ``c_preset``
+        or ``alpha`` (other than with ``ci_test="dfcit"``) is passed to a
+        registered plugin; if both ``ci_test`` and ``ci_test_class``
         are passed; if ``ci_test`` is passed to GRACE-SS with
         ``use_ci_skeleton=False``; or if ``ci_test="cmiknn-mixed-gpu"`` is used
         with CEDAR or GRACE-SS, which do not track discrete columns.
@@ -868,4 +879,36 @@ def discover_df(
             c_preset=c_preset,
             **kwargs,
         )
-    raise ValueError(f"unknown algorithm {algorithm!r}")
+    from .algorithms import list_algorithms, run_algorithm
+
+    registered = list_algorithms()
+    if algorithm in registered:
+        bad = [
+            name
+            for name, given in (
+                ("include_C", include_C),
+                ("c_preset", c_preset != "linear"),
+                ("alpha", alpha is not None and ci_test != "dfcit"),
+            )
+            if given
+        ]
+        if bad:
+            raise ValueError(
+                f"{', '.join(bad)} {'is' if len(bad) == 1 else 'are'} not passed "
+                f"to plugin algorithm={algorithm!r}; to give the plugin its own "
+                "argument of that name, call causalts.algorithms.run_algorithm."
+            )
+        from .ci_tests import create_ci_test
+
+        return run_algorithm(
+            algorithm,
+            df,
+            create_ci_test(
+                ci_test or "parcorr-gpu", df.values, device=test_device, **ci_kw
+            ),
+            max_lag,
+            **kwargs,
+        )
+    raise ValueError(
+        f"unknown algorithm {algorithm!r}; available: {', '.join(registered)}"
+    )
