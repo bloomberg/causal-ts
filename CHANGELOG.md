@@ -37,6 +37,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 * `FeatureSelectionResult.to_design_matrix(dropna=True)` drops only as many leading
   rows as the largest lag it actually uses, not always `max_lag`, so its row count now
   depends on the selection: align the target on the index (`y = df[target].loc[X.index]`).
+* The `chisq` and `gsquared` CI tests return the plug-in conditional mutual
+  information in nats (`G² / (2n)`) as their statistic instead of always `0.0`.
+  Their p-values for each query are unchanged, and cached results from earlier
+  releases are not reused. Strength-based ordering, and graphs from searches that
+  cap the conditioning combinations tried, may change.
 * More tests: forecasting, plotting, the DoWhy bridge, GRACE, the CLI, the Tigramite
   wrappers and the data generators.
 

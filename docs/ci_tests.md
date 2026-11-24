@@ -475,6 +475,31 @@ variables.
   it is built; each test adds temporaries of the same size); lower `n_boot` for very
   long series
 
+### `chisq` and `gsquared`
+
+causal-learn's chi-squared and G-squared tests for categorical data. The p-value
+comes from causal-learn. The statistic, used as the link strength, is the plug-in
+conditional mutual information in nats,
+`Î(X;Y|Z) = (1/n) Σ_z Σ_{x,y: n_xyz > 0} n_xyz log(n_xyz n_z / (n_xz n_yz))`,
+for both tests: for `gsquared` it equals `G² / (2n)`, and `chisq` returns the same
+value rather than `χ² / (2n)`, which only approximates it near independence. The
+two tests therefore differ in their p-value, never in their strength. `gcmi` also
+reports nats, but estimates a Gaussian-copula CMI, so equal units do not mean equal
+estimates or rankings.
+
+Within each conditioning stratum, X and Y categories that do not occur are dropped.
+A stratum left with fewer than two X or Y categories (a single-row stratum, say)
+contributes 0 to the statistic and to the degrees of freedom; if every stratum
+does, the result is `(1.0, 0.0)`. `n` counts every row, including those in such
+strata.
+
+No small-sample correction is applied. Under conditional independence, with a
+fixed, finite category support and adequately populated tables, the first-order
+upward bias is `df / (2n)`, where `df = Σ_z (r_z − 1)(c_z − 1)`. That is an
+asymptotic approximation, not a finite-sample identity, and does not hold for
+sparse strata, so strengths are not unbiased across conditioning sets of
+different sizes.
+
 ## Key Tradeoffs
 
 ::::{grid} 2
