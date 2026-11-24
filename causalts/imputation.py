@@ -26,8 +26,62 @@ def var_em_impute(
 ) -> pd.DataFrame:
     """Impute missing values via EM with a VAR(p) model.
 
-    Uses the multivariate temporal structure symmetrically (no causal direction assumed).
-    Non-NaN positions are always restored exactly after each EM step.
+    Uses the multivariate temporal structure symmetrically (no causal direction
+    assumed). Missing cells are filled from a VAR(``p``) fit; observed cells are
+    never changed.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Time series with one row per time step and one column per variable.
+        Cells may be missing (``NaN``). The input frame is not modified.
+    p : int, default 1
+        VAR order. The first ``p`` rows have no fitted value, so missing cells
+        there keep the column-mean fill.
+    max_iter : int, default 50
+        Maximum number of EM iterations.
+    tol : float, default 1e-4
+        Convergence threshold: iteration stops when the largest absolute change
+        of any imputed cell between two iterations is below this value.
+    verbose : bool, default False
+        Print the largest change at each iteration.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A new frame with the same index and columns. Observed cells keep their
+        exact values. With no missing values, a copy of ``df`` is returned.
+
+    Warns
+    -----
+    UserWarning
+        If ``T - p < 2 * K`` (too few rows to fit the VAR), the column-mean fill
+        is returned instead. If the VAR fit raises
+        :class:`numpy.linalg.LinAlgError` (singular matrix), the last completed
+        iteration is returned.
+
+    Notes
+    -----
+    Missing cells start at their column mean. Each iteration fits a VAR(``p``)
+    with a constant through statsmodels and replaces every missing cell with its
+    fitted value, then restores the observed cells exactly. Iteration stops when
+    the largest change falls below ``tol`` or after ``max_iter`` iterations.
+
+    Examples
+    --------
+    Impute one missing cell and keep the observed ones untouched:
+
+    >>> import numpy as np
+    >>> import pandas as pd
+    >>> from causalts.imputation import var_em_impute
+    >>> rng = np.random.default_rng(0)
+    >>> df = pd.DataFrame(rng.normal(size=(60, 2)), columns=["x", "y"])
+    >>> df.loc[5, "x"] = np.nan
+    >>> filled = var_em_impute(df, p=1)
+    >>> bool(np.isnan(filled.loc[5, "x"]))
+    False
+    >>> filled.drop(index=5).equals(df.drop(index=5))
+    True
     """
     nan_mask = df.isna()
     if not nan_mask.any().any():
