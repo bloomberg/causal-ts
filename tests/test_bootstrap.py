@@ -160,3 +160,87 @@ def test_mismatched_output_shapes_raise_clear_error():
     assert "run 1" in msg
     assert "(3, 3, 3)" in msg
     assert "(2, 2, 2)" in msg
+
+
+def _window_fn_failing_on_run(fail_on):
+    calls = {"n": 0}
+
+    def fn(window):
+        calls["n"] += 1
+        if calls["n"] == fail_on:
+            raise RuntimeError("boom")
+        a = window["a"].to_numpy()
+        return np.stack([np.outer(a[:2], a[1:3]), np.outer(a[2:4], a[3:5])], axis=-1)
+
+    return fn
+
+
+def test_retain_graphs_false_matches_default_persistence():
+    kwargs = dict(n_bootstrap=7, window_frac=0.5, seed=5, show_progress=False)
+    full = temporal_bootstrap(_df(), _window_fn_failing_on_run(3), **kwargs)
+    lean = temporal_bootstrap(
+        _df(), _window_fn_failing_on_run(3), retain_graphs=False, **kwargs
+    )
+
+    assert lean["graphs"] is None
+    assert len(full["graphs"]) == 6
+    assert np.allclose(lean["persistence"], full["persistence"])
+    assert lean["n_success"] == full["n_success"] == 6
+    assert lean["n_errors"] == full["n_errors"] == 1
+    assert [i for i, _ in lean["errors"]] == [2]
+    assert lean["window_size"] == full["window_size"]
+
+
+def test_retain_graphs_false_does_not_alias_a_reused_buffer():
+    # Runs write 1, 10, 100 into one buffer, so the mean is 37.  A total that
+    # aliased the buffer would instead end at 2 * 100, giving 200 / 3.
+    buffer = np.zeros((1, 1, 2))
+    values = iter([1.0, 10.0, 100.0])
+
+    def reuse_output(window):
+        buffer[0, 0, 1] = next(values)
+        return buffer
+
+    r = temporal_bootstrap(
+        pd.DataFrame({"X": range(30)}),
+        reuse_output,
+        n_bootstrap=3,
+        window_frac=0.5,
+        show_progress=False,
+        retain_graphs=False,
+    )
+
+    assert float(r["persistence"][0, 0, 1]) == 37.0
+
+
+def test_retain_graphs_false_all_runs_failing_raises_runtime_error():
+    def always_fail(window):
+        raise RuntimeError("nope")
+
+    with pytest.raises(RuntimeError, match="All 2 bootstrap runs failed"):
+        temporal_bootstrap(
+            _df(),
+            always_fail,
+            n_bootstrap=2,
+            window_frac=0.5,
+            show_progress=False,
+            retain_graphs=False,
+        )
+
+
+def test_retain_graphs_false_mismatched_output_shapes_raise_clear_error():
+    calls = {"n": 0}
+
+    def growing(window):
+        calls["n"] += 1
+        return np.zeros((2, 2, 2)) if calls["n"] == 1 else np.zeros((3, 3, 3))
+
+    with pytest.raises(ValueError, match=r"run 1.*\(3, 3, 3\).*\(2, 2, 2\)"):
+        temporal_bootstrap(
+            _df(),
+            growing,
+            n_bootstrap=3,
+            window_frac=0.5,
+            show_progress=False,
+            retain_graphs=False,
+        )

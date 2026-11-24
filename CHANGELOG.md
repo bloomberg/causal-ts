@@ -11,6 +11,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+* `temporal_bootstrap(retain_graphs=False)` keeps only a running sum of the run
+  outputs instead of every graph, so memory no longer grows with `n_bootstrap`;
+  `persistence` is the same and `graphs` is `None`.
 * Python 3.15 support. CI tests 3.14 and 3.15 with every extra except `dowhy`, which
   does not support Python 3.14 yet.
 * `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` accept
