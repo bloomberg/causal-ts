@@ -868,4 +868,21 @@ def discover_df(
             c_preset=c_preset,
             **kwargs,
         )
-    raise ValueError(f"unknown algorithm {algorithm!r}")
+    from .algorithms import list_algorithms, run_algorithm
+
+    registered = list_algorithms()
+    if algorithm in registered:
+        from .ci_tests import create_ci_test
+
+        return run_algorithm(
+            algorithm,
+            df,
+            create_ci_test(
+                ci_test or "parcorr-gpu", df.values, device=test_device, **ci_kw
+            ),
+            max_lag,
+            **kwargs,
+        )
+    raise ValueError(
+        f"unknown algorithm {algorithm!r}; available: {', '.join(registered)}"
+    )

@@ -303,3 +303,29 @@ if __name__ == "__main__":
     import sys
 
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── discover_df dispatch (Python twin of the CLI) ────────────────────────────
+def test_discover_df_runs_registered_plugin(data):
+    """discover_df used to reject plugins its own CLI already ran."""
+    from causalts.inspection import discover_df
+
+    received = {}
+
+    @register_algorithm("toy_df_plugin")
+    def _toy(df, ci_test=None, max_lag=2, **kwargs):
+        received["ci_test"] = ci_test
+        received["max_lag"] = max_lag
+        received["kwargs"] = kwargs
+        return _StubResult(np.zeros((df.shape[1], df.shape[1], max_lag + 1)), df, df.columns)
+
+    try:
+        result = discover_df(data, "toy_df_plugin", max_lag=2, marker="forwarded")
+    finally:
+        algorithms._ALGO_REGISTRY.pop("toy_df_plugin", None)
+
+    assert isinstance(result, CausalResult)
+    assert result.cg_tig.shape == (data.shape[1], data.shape[1], 3)
+    assert received["ci_test"] is not None
+    assert received["max_lag"] == 2
+    assert received["kwargs"] == {"marker": "forwarded"}
