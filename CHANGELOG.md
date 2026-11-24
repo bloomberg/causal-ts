@@ -42,6 +42,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 * `run_regime_discovery` validates that regime labels are 1-D with length equal
   to the data and warns when labels outside `[0, n_regimes)` are ignored (#161).
+* `discover_df` runs algorithms registered with `register_algorithm` (or installed as
+  entry-point plugins), as `causal-ts discover` already did, instead of raising
+  "unknown algorithm"; `include_C`, `c_preset` and `alpha` raise for plugins (#181).
 * `causal-ts discover` and `deconfound` given a non-numeric column (e.g. a date) exit
   with a usage error that names it, before any engine runs, instead of a `TypeError`
   from deep inside the engine; `deconfound` reads Booleans as 0/1, as `discover` does

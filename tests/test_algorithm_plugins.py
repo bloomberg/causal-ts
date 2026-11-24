@@ -299,12 +299,6 @@ def test_cli_builtins_unaffected(algorithm, csv, tmp_path):
     assert list(out.glob("*/estimated_graph.npy"))
 
 
-if __name__ == "__main__":
-    import sys
-
-    sys.exit(pytest.main([__file__, "-v"]))
-
-
 # ── discover_df dispatch (Python twin of the CLI) ────────────────────────────
 def test_discover_df_runs_registered_plugin(data):
     """discover_df used to reject plugins its own CLI already ran."""
@@ -317,7 +311,9 @@ def test_discover_df_runs_registered_plugin(data):
         received["ci_test"] = ci_test
         received["max_lag"] = max_lag
         received["kwargs"] = kwargs
-        return _StubResult(np.zeros((df.shape[1], df.shape[1], max_lag + 1)), df, df.columns)
+        return _StubResult(
+            np.zeros((df.shape[1], df.shape[1], max_lag + 1)), df, df.columns
+        )
 
     try:
         result = discover_df(data, "toy_df_plugin", max_lag=2, marker="forwarded")
@@ -329,3 +325,26 @@ def test_discover_df_runs_registered_plugin(data):
     assert received["ci_test"] is not None
     assert received["max_lag"] == 2
     assert received["kwargs"] == {"marker": "forwarded"}
+
+
+def test_discover_df_plugin_rejects_unused_options(data):
+    """include_C / c_preset / alpha would be dropped, so they raise instead."""
+    from causalts.inspection import discover_df
+
+    @register_algorithm("toy_df_plugin_opts")
+    def _toy(df, ci_test=None, max_lag=2, **kwargs):
+        return _StubResult(
+            np.zeros((df.shape[1], df.shape[1], max_lag + 1)), df, df.columns
+        )
+
+    try:
+        with pytest.raises(ValueError, match="include_C, alpha are not passed"):
+            discover_df(data, "toy_df_plugin_opts", include_C=True, alpha=0.01)
+    finally:
+        algorithms._ALGO_REGISTRY.pop("toy_df_plugin_opts", None)
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(pytest.main([__file__, "-v"]))
