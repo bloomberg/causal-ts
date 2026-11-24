@@ -34,6 +34,7 @@ pip install -e ".[dev,dowhy,tigramite]"
 
 :::{note}
 PyTorch is installed automatically. **CUDA** and **Apple MPS** are auto-detected at runtime — CPU is the fallback.
+The `dowhy` extra needs Python 3.13 or older until DoWhy supports 3.14; on newer Python leave it out (e.g. `.[dev,tigramite]`).
 The [stable](https://causal-ts.readthedocs.io/en/stable/) docs match the latest PyPI release; the
 [latest](https://causal-ts.readthedocs.io/en/latest/) docs follow the `main` branch and can describe features not yet released.
 :::

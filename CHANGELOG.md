@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+* Python 3.15 support. CI tests 3.14 and 3.15 with every extra except `dowhy`, which
+  does not support Python 3.14 yet.
 * `compare_graphs`, `plot_lag_metrics` and `plot_pvalue_distribution` accept
   `undirected=` and `conflict=` for discovered `o-o` and `x-x` marks:
   `"drop"`, `"bidirected"` (the default, so existing results are unchanged) or

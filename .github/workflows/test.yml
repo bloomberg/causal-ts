@@ -30,9 +30,13 @@ jobs:
           - python-version: "3.13"
             install-target: ".[dev,dowhy,tigramite]"
             profile: all-extras
+          # dowhy declares Python < 3.14, so 3.14+ test every other extra.
           - python-version: "3.14"
-            install-target: ".[dev]"
-            profile: core
+            install-target: ".[dev,tigramite]"
+            profile: no-dowhy
+          - python-version: "3.15"
+            install-target: ".[dev,tigramite]"
+            profile: no-dowhy
           - python-version: "3.12"
             os: macos-latest
             install-target: ".[dev]"
