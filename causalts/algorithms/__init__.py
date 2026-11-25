@@ -68,6 +68,10 @@ _LAZY_ALGO_REGISTRY: dict[str, tuple[str, str]] = {
     "lasso-var": ("causalts.baselines", "run_lasso_var"),
     "granger": ("causalts.baselines", "run_granger"),
     "varlingam": ("causalts.baselines", "run_varlingam"),
+    # Tigramite (optional extra); ci_test=None is tigramite's own parcorr.
+    "pcmci": ("causalts.tigramite_result", "run_pcmci_result"),
+    "pcmciplus": ("causalts.tigramite_result", "run_pcmciplus_result"),
+    "lpcmci": ("causalts.tigramite_result", "run_lpcmci_result"),
 }
 
 

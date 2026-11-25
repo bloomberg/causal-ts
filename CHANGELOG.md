@@ -11,6 +11,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+* `TigramiteResult` (`causalts.tigramite_result`), a `CausalResult` for tigramite runs:
+  `run_pcmci`, `run_pcmciplus` and `run_lpcmci` return it with `return_result=True`
+  (the `(G_hat, info)` tuple stays the default). It has `.plot()`, `.to_marks()` with
+  tigramite's own marks, and the DoWhy bridge (see `bridge_policy`).
+* `pcmci`, `pcmciplus` and `lpcmci` for `causal-ts discover --algorithm`, `discover_df`
+  and `run_algorithm` (optional `tigramite` extra). `--alpha`, `--ci-test` and the
+  edge marks in `summary.json` are covered under "Tigramite methods" in the CLI docs.
+  These names are now built in: an entry-point plugin registered as `pcmci`,
+  `pcmciplus` or `lpcmci` is ignored (with a warning) and should be renamed.
 * `temporal_bootstrap(retain_graphs=False)` keeps only a running sum of the run
   outputs instead of every graph, so memory no longer grows with `n_bootstrap`;
   `persistence` is the same and `graphs` is `None`.
