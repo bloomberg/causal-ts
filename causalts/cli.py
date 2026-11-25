@@ -150,8 +150,10 @@ _BUILTIN_ALGORITHMS = (
     "grace-ss",
     "reap",
 ) + _BASELINE_ALGORITHMS
+from .synthetic_data.synthetic_datasets import DATASET_FUNCS  # noqa: E402
+
 PLOT_FORMAT_CHOICES = ["png", "pdf", "svg"]
-DATASET_CHOICES = ["ex1", "ex2", "ex3", "henon"]
+DATASET_CHOICES = sorted(DATASET_FUNCS)
 LAG_SEL_CHOICES = ["partial_dcor", "dcor", "dcor_biased", "pearson", "lasso"]
 LAG_PVALUE_CHOICES = ["t_test", "circular_shift"]
 DENSITY_CHOICES = ["sparse", "dense"]
@@ -1669,7 +1671,7 @@ def discover(
     "--dataset",
     type=click.Choice(DATASET_CHOICES),
     default=None,
-    help="Built-in dataset: ex1 (5-Node Nonlinear System), ex2 (6-Node Linear VAR), ex3 (Cascade Network 11-Node), henon (Hénon Chain).",
+    help="Built-in dataset (omit for a random SCP network).",
 )
 @click.option(
     "-n",
@@ -1722,15 +1724,26 @@ def generate(
         result = load_dataset(dataset, seed=seed, T=samples, **extra)
         df = result["df"]
         gt = result["ground_truth"]
+        var_names = list(result.get("var_names") or df.columns)
         meta = {
             "dataset": dataset,
             "seed": seed,
             "T": samples,
             "n_vars": df.shape[1],
-            "max_lag": result["max_lag"],
-            "var_names": list(df.columns),
+            "max_lag": int(result["max_lag"]),
+            "var_names": var_names,
             **extra,
         }
+        if result.get("name") is not None:
+            meta["name"] = result["name"]
+        if "include_C" in result:
+            meta["include_C"] = bool(result["include_C"])
+        if "discrete_cols" in result:
+            meta["discrete_cols"] = list(result["discrete_cols"])
+        if "stations" in result:
+            meta["stations"] = list(result["stations"])
+        if isinstance(result.get("meta"), dict):
+            meta["generator_meta"] = result["meta"]
     else:
         _log(
             ctx,

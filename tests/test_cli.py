@@ -769,3 +769,119 @@ def test_discover_cdnots_default_saves_network_plot(tmp_path):
     assert result.exit_code == 0, result.output
     assert "could not save network plot" not in result.output
     assert list(tmp_path.glob("discover_*/network.png"))
+
+
+def test_generate_help_lists_all_registered_datasets():
+    from causalts.synthetic_data.synthetic_datasets import DATASET_FUNCS
+
+    result = CliRunner().invoke(main, ["generate", "--help"])
+    assert result.exit_code == 0, result.output
+    normalized = " ".join(result.output.split())
+    for name in sorted(DATASET_FUNCS):
+        assert name in normalized
+
+
+def test_generate_lorenz96(tmp_path):
+    result = CliRunner().invoke(
+        main,
+        [
+            "-o",
+            str(tmp_path),
+            "-s",
+            "0",
+            "generate",
+            "--dataset",
+            "lorenz96",
+            "-T",
+            "100",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    (out,) = tmp_path.glob("generate_*")
+    df = pd.read_csv(out / "data.csv")
+    gt = np.load(out / "ground_truth.npy")
+    meta = json.loads((out / "meta.json").read_text())
+    assert df.shape == (100, 10)
+    assert np.isfinite(df.to_numpy(dtype=float)).all()
+    assert gt.shape == (10, 10, 2)
+    assert meta["dataset"] == "lorenz96"
+    assert meta["seed"] == 0
+    assert meta["T"] == 100
+    assert meta["n_vars"] == 10
+    assert meta["max_lag"] == 1
+    assert meta["name"] == "Lorenz-96"
+
+
+def test_generate_ex1_nonstationary_preserves_c_node_metadata(tmp_path):
+    result = CliRunner().invoke(
+        main,
+        [
+            "-o",
+            str(tmp_path),
+            "-s",
+            "0",
+            "generate",
+            "--dataset",
+            "ex1_nonstationary",
+            "-T",
+            "100",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    (out,) = tmp_path.glob("generate_*")
+    df = pd.read_csv(out / "data.csv")
+    gt = np.load(out / "ground_truth.npy")
+    meta = json.loads((out / "meta.json").read_text())
+    assert df.shape == (100, 5)
+    assert gt.shape == (6, 6, 3)
+    assert meta["dataset"] == "ex1_nonstationary"
+    assert meta["n_vars"] == 5
+    assert meta["max_lag"] == 2
+    assert meta["include_C"] is True
+    assert meta["var_names"] == ["X0", "X1", "X2", "X3", "X4", "C"]
+    assert meta["name"] == "5-Node Nonstationary System"
+
+
+@pytest.mark.parametrize(
+    "name, expected_discrete",
+    [
+        ("mixed_a", ["R"]),
+        ("mixed_b", ["C"]),
+        ("mixed_c", ["B1", "B2"]),
+    ],
+)
+def test_generate_mixed_datasets_without_name_or_weights(
+    tmp_path, name, expected_discrete
+):
+    result = CliRunner().invoke(
+        main,
+        ["-o", str(tmp_path), "-s", "0", "generate", "--dataset", name, "-T", "100"],
+    )
+    assert result.exit_code == 0, result.output
+    (out,) = tmp_path.glob("generate_*")
+    df = pd.read_csv(out / "data.csv")
+    gt = np.load(out / "ground_truth.npy")
+    meta = json.loads((out / "meta.json").read_text())
+    assert df.shape[0] == 100
+    assert gt.shape[0] == gt.shape[1] == df.shape[1]
+    assert meta["dataset"] == name
+    assert meta["discrete_cols"] == expected_discrete
+    assert meta["var_names"] == list(df.columns)
+    assert "name" not in meta
+
+
+def test_generate_other_registered_datasets(tmp_path):
+    for name in ("confounded_trends", "ercot_weather", "scale_free"):
+        sub = tmp_path / name
+        result = CliRunner().invoke(
+            main,
+            ["-o", str(sub), "-s", "0", "generate", "--dataset", name, "-T", "100"],
+        )
+        assert result.exit_code == 0, (name, result.output)
+        (out,) = sub.glob("generate_*")
+        df = pd.read_csv(out / "data.csv")
+        gt = np.load(out / "ground_truth.npy")
+        meta = json.loads((out / "meta.json").read_text())
+        assert df.shape[0] == 100
+        assert gt.shape == (df.shape[1], df.shape[1], meta["max_lag"] + 1)
+        assert meta["dataset"] == name
