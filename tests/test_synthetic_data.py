@@ -5,8 +5,10 @@
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from causalts.synthetic_data.synthetic_datasets import (
+    DATASET_FUNCS,
     SCPGraphGenerator,
     ex1_nl,
     ex2,
@@ -221,9 +223,89 @@ def test_topology_scp_fixed_pools_accept_descending_ranges(monkeypatch):
 
 
 def test_topology_scp_rejects_unknown_coef_pools():
-    import pytest
-
     from causalts.synthetic_data.synthetic_datasets import topology_scp
 
     with pytest.raises(ValueError, match="coef_pools"):
         topology_scp("erdos_renyi", seed=0, n_vars=5, T=50, coef_pools="new")
+
+
+_EXPECTED_REGISTERED_DATASETS = [
+    "confounded_trends",
+    "ercot_weather",
+    "erdos_renyi",
+    "erdos_renyi_dense",
+    "ex1",
+    "ex1_nonstationary",
+    "ex2",
+    "ex3",
+    "henon",
+    "lorenz96",
+    "mixed_a",
+    "mixed_b",
+    "mixed_c",
+    "scale_free",
+    "scale_free_dense",
+    "small_world",
+    "small_world_dense",
+]
+
+
+def test_dataset_funcs_registers_all_expected_datasets():
+    assert sorted(DATASET_FUNCS) == _EXPECTED_REGISTERED_DATASETS
+
+
+@pytest.mark.parametrize("name", _EXPECTED_REGISTERED_DATASETS)
+def test_load_dataset_smoke_all_registered(name):
+    r = load_dataset(name, seed=0, T=100)
+    assert isinstance(r, dict)
+    assert isinstance(r["df"], pd.DataFrame)
+    assert len(r["df"]) == 100
+    assert isinstance(r["max_lag"], int)
+    assert r["max_lag"] >= 1
+    gt = r["ground_truth"]
+    assert isinstance(gt, np.ndarray)
+    assert gt.ndim == 3
+    assert gt.shape[0] == gt.shape[1]
+    assert gt.shape[2] == r["max_lag"] + 1
+    expected_nodes = (
+        r["df"].shape[1] + 1 if name == "ex1_nonstationary" else r["df"].shape[1]
+    )
+    assert gt.shape[0] == expected_nodes
+
+    r2 = load_dataset(name, seed=0, T=100)
+    pd.testing.assert_frame_equal(r["df"], r2["df"])
+    np.testing.assert_array_equal(gt, r2["ground_truth"])
+
+
+def test_load_dataset_newly_registered_match_direct_generators():
+    from causalts.synthetic_data.mixed_datasets import mixed_a, mixed_b, mixed_c
+    from causalts.synthetic_data.synthetic_datasets import (
+        confounded_trends,
+        ex1_nonstationary,
+        lorenz96,
+    )
+
+    for name, fn in (
+        ("lorenz96", lorenz96),
+        ("ex1_nonstationary", ex1_nonstationary),
+        ("confounded_trends", confounded_trends),
+        ("mixed_a", mixed_a),
+        ("mixed_b", mixed_b),
+        ("mixed_c", mixed_c),
+    ):
+        via_loader = load_dataset(name, seed=7, T=80)
+        direct = fn(seed=7, T=80)
+        assert via_loader.keys() == direct.keys()
+        pd.testing.assert_frame_equal(via_loader["df"], direct["df"])
+        np.testing.assert_array_equal(
+            via_loader["ground_truth"], direct["ground_truth"]
+        )
+        assert via_loader["max_lag"] == direct["max_lag"]
+
+
+def test_load_dataset_unknown_name_lists_valid_datasets():
+    with pytest.raises(ValueError) as exc_info:
+        load_dataset("nonexistent_dataset")
+    msg = str(exc_info.value)
+    for name in sorted(DATASET_FUNCS):
+        assert name in msg

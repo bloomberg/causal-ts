@@ -571,14 +571,24 @@ def henon_chain(seed=42, T=200, Q=0.5, M=5, bounded_start=False):
     }
 
 
+from causalts.synthetic_data.mixed_datasets import (  # noqa: E402
+    mixed_a,
+    mixed_b,
+    mixed_c,
+)
 from causalts.synthetic_data.weather_datasets import ercot_weather  # noqa: E402
 
 DATASET_FUNCS = {
     "ex2": ex2,
     "ex3": ex3,
     "ex1": ex1_nl,
+    "ex1_nonstationary": ex1_nonstationary,
+    "confounded_trends": confounded_trends,
     "henon": henon_chain,
     "ercot_weather": ercot_weather,
+    "mixed_a": mixed_a,
+    "mixed_b": mixed_b,
+    "mixed_c": mixed_c,
 }
 
 
@@ -589,10 +599,14 @@ def load_dataset(name, **kwargs):
     ----------
     name : str
         One of ``"ex1"`` (:func:`ex1_nl`), ``"ex2"`` (:func:`ex2`), ``"ex3"``
-        (:func:`ex3`), ``"henon"`` (:func:`henon_chain`), ``"ercot_weather"``
+        (:func:`ex3`), ``"henon"`` (:func:`henon_chain`), ``"lorenz96"``
+        (:func:`lorenz96`), ``"ex1_nonstationary"`` (:func:`ex1_nonstationary`),
+        ``"confounded_trends"`` (:func:`confounded_trends`), ``"ercot_weather"``
         (:func:`~causalts.synthetic_data.weather_datasets.ercot_weather`),
+        ``"mixed_a"``, ``"mixed_b"``, ``"mixed_c"``
+        (:mod:`~causalts.synthetic_data.mixed_datasets`), or
         ``"scale_free"``, ``"scale_free_dense"``, ``"erdos_renyi"``,
-        ``"erdos_renyi_dense"``, ``"small_world"`` or ``"small_world_dense"``
+        ``"erdos_renyi_dense"``, ``"small_world"``, ``"small_world_dense"``
         (:func:`topology_scp` presets).
     **kwargs
         Forwarded to the generator, e.g. ``seed`` and ``T``.
@@ -602,18 +616,26 @@ def load_dataset(name, **kwargs):
     dict
         The generator's bundle. Every bundle has ``"df"``, ``"max_lag"`` and
         ``"ground_truth"`` (``[cause, effect, lag]``). Coefficients are in
-        ``"weights"`` (``None`` for ``henon`` and the topology presets), except
-        ``ex1``, which has ``"weights_lin"`` and ``"weights_sq"`` instead.
-        ``"name"`` is present for ``ex1``/``ex2``/``ex3``/``henon``/
-        ``ercot_weather``; ``"var_names"`` only for ``ercot_weather`` and the
-        topology presets (which also add ``"meta"``), so use
-        ``bundle["df"].columns`` for variable names in general.
+        ``"weights"`` (``None`` for ``henon``, ``lorenz96`` and the topology
+        presets), except ``ex1`` (which has ``"weights_lin"`` and
+        ``"weights_sq"``) and ``ex1_nonstationary``, ``confounded_trends`` and
+        ``mixed_*`` (which omit ``"weights"``). ``"name"`` is omitted on
+        ``mixed_*`` and the topology presets. ``"var_names"`` is present for
+        ``ex1_nonstationary`` (which includes ``"C"`` to match its ``(d+1)``
+        ground truth and sets ``"include_C": True``), ``confounded_trends``
+        (also ``"include_C": True``), ``ercot_weather`` and the topology presets
+        (which also add ``"meta"``); ``mixed_*`` include ``"discrete_cols"``.
+        Use ``bundle["df"].columns`` for data-frame column names in general.
 
     Raises
     ------
-    KeyError
+    ValueError
         If ``name`` is not a registered dataset.
     """
+    if name not in DATASET_FUNCS:
+        raise ValueError(
+            f"Unknown dataset {name!r}. Available: {sorted(DATASET_FUNCS)}"
+        )
     return DATASET_FUNCS[name](**kwargs)
 
 
@@ -1317,6 +1339,7 @@ def small_world_dense(seed=42, n_vars=15, T=500, **kw):
 
 DATASET_FUNCS.update(
     {
+        "lorenz96": lorenz96,
         "scale_free": scale_free,
         "scale_free_dense": scale_free_dense,
         "erdos_renyi": erdos_renyi,

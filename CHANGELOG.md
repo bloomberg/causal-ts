@@ -50,6 +50,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `load_dataset` now registers `lorenz96`, `ex1_nonstationary`, `confounded_trends`,
+  `mixed_a`, `mixed_b` and `mixed_c`, raises `ValueError` listing
+  `sorted(DATASET_FUNCS)` for unknown names instead of a bare `KeyError`, and
+  `causal-ts generate --dataset` dynamically offers every registered dataset and
+  handles optional bundle keys (`var_names`, `include_C`, `discrete_cols`, `name`,
+  `stations`, `meta`) consistently (#179).
 * `temporal_bootstrap` validates `n_bootstrap` (a positive integer) and
   `window_frac` (finite, in the open interval `(0, 1)`) up front, the "window
   too small" message now says to increase `window_frac` instead of reducing it,
