@@ -329,3 +329,14 @@ def test_categorical_statistic_cache(method, cl_method, tmp_path, monkeypatch):
     reloaded = cls(data, cache_dir=str(tmp_path))
     monkeypatch.setattr(reloaded, "_ensure_test", fail)
     assert reloaded(0, 1, [2]) == pytest.approx((pval, stat), rel=1e-12, abs=1e-300)
+
+
+def test_plugin_cmi_puts_repeated_nans_in_one_category():
+    # causal-learn encodes every NaN as one category; the statistic must too,
+    # or gsquared's statistic stops matching its p-value.
+    from causalts.ci_tests.causallearn_tests import _plugin_cmi
+
+    d = np.array([[0, 0], [0, 0], [1, 1], [1, 1], [np.nan, 0], [np.nan, 1]], float)
+    stat, df = _plugin_cmi(d, 0, 1, [])
+    assert stat == pytest.approx(2 / 3 * np.log(2))
+    assert df == 2

@@ -13,10 +13,39 @@ import numpy as np
 from .cit_test import CIT_Base
 
 
-def _codes(*cols):
-    """Integer codes of the distinct rows of ``cols`` (one category per row)."""
-    stacked = np.column_stack(cols)
-    return np.unique(stacked, axis=0, return_inverse=True)[1].ravel()
+def _compact(key):
+    """Codes ``0..k-1`` of the distinct values of a non-negative int64 array:
+    O(n) through ``bincount`` when the values are small, else a 1-D sort."""
+    if key.size and int(key.max()) < 4 * key.size + 1024:
+        present = np.bincount(key) > 0
+        return (np.cumsum(present) - 1)[key]
+    return np.unique(key, return_inverse=True)[1].ravel()
+
+
+def _codes(col):
+    """Integer codes ``0..k-1`` of a column's categories. Small non-negative
+    integer labels (the usual case) are compacted in O(n); anything else goes
+    through a 1-D ``np.unique``, which keeps the original dtype (so 3.1 and
+    3.5, or integers above 2**53, stay apart) and puts every NaN in one
+    category, as causal-learn does."""
+    col = np.asarray(col)
+    if col.dtype.kind in "iu" or (
+        col.dtype.kind == "f"
+        and np.isfinite(col).all()
+        and (col == np.round(col)).all()
+    ):
+        if col.size and col.min() >= 0 and col.max() < 4 * col.size + 1024:
+            return _compact(col.astype(np.int64))
+    return np.unique(col, return_inverse=True)[1].ravel().astype(np.int64)
+
+
+def _combine(*codes):
+    """Codes ``0..k-1`` of the distinct tuples of the given code arrays."""
+    key = codes[0]
+    for c in codes[1:]:
+        # Re-compact after each step so the mixed-radix key cannot overflow.
+        key = _compact(key * (int(c.max()) + 1) + c)
+    return key
 
 
 def _plugin_cmi(data, X, Y, condition_set):
@@ -32,32 +61,40 @@ def _plugin_cmi(data, X, Y, condition_set):
     ``c_z - 1 = 0`` and each of its terms is ``log 1 = 0``, so degenerate
     strata contribute nothing to either value, as in causal-learn.
     Categories absent from a stratum have no positive cells, so they are
-    dropped from its table.
+    dropped from its table. Counting uses 1-D integer keys and ``bincount``,
+    so a query costs a few 1-D sorts, not sorts of whole rows.
     """
     n = data.shape[0]
-    # Recode in the original dtype: casting labels to int or float64 first
-    # can merge distinct categories (3.1 and 3.5; integers above 2**53).
+    if n == 0:
+        return 0.0, 0
     x = _codes(data[:, X])
     y = _codes(data[:, Y])
     if condition_set is not None and len(condition_set) > 0:
-        z = _codes(*(_codes(data[:, c]) for c in condition_set))
+        z = _combine(*(_codes(data[:, c]) for c in condition_set))
     else:
-        z = np.zeros(n, dtype=np.intp)
+        z = np.zeros(n, dtype=np.int64)
 
     def per_row_count(*codes):
-        _, inv, counts = np.unique(
-            np.column_stack(codes), axis=0, return_inverse=True, return_counts=True
-        )
-        return counts[inv.ravel()].astype(np.float64)
+        key = codes[0] if len(codes) == 1 else _combine(*codes)
+        return np.bincount(key)[key].astype(np.float64)
 
     # Summing over rows weights each cell's term by its count n_xyz.
     ratio = per_row_count(z, x, y) * per_row_count(z)
     ratio /= per_row_count(z, x) * per_row_count(z, y)
-    stat = float(np.log(ratio).sum() / n) if n > 0 else 0.0
+    stat = float(np.log(ratio).sum() / n)
 
-    n_strata = int(z.max()) + 1 if n > 0 else 0
-    r = np.bincount(np.unique(np.c_[z, x], axis=0)[:, 0], minlength=n_strata)
-    c = np.bincount(np.unique(np.c_[z, y], axis=0)[:, 0], minlength=n_strata)
+    n_strata = int(z.max()) + 1
+    kx, ky = int(x.max()) + 1, int(y.max()) + 1
+
+    def categories_per_stratum(codes, k):
+        size = n_strata * k
+        if size <= 4 * n + 1024:
+            present = np.bincount(z * k + codes, minlength=size) > 0
+            return present.reshape(n_strata, k).sum(axis=1)
+        return np.bincount(np.unique(z * k + codes) // k, minlength=n_strata)
+
+    r = categories_per_stratum(x, kx)
+    c = categories_per_stratum(y, ky)
     df = int(((r - 1) * (c - 1)).sum())
     return stat, df
 
