@@ -93,7 +93,9 @@ class AncestralKnowledge:
         An existing directed path from any ancestor copy, including lag 0,
         satisfies the constraint. Otherwise, orientation tries to complete a
         semi-directed path, then looks for a bridge through a neighbor of the
-        highest-ranked ancestor copy. The bridge counts as found once the edge
+        highest-ranked ancestor copy (lags are ranked by absolute correlation
+        with the descendant, AR(1)-residualized when enough data is available;
+        without data, in ascending order). The bridge counts as found once the edge
         from that copy to the neighbor is oriented or is already directed
         that way, even if the neighbor's onward path is still semi-directed.
         A found bridge skips the direct force-add and can leave the constraint
@@ -395,7 +397,8 @@ def apply_ancestral_constraints(
     Required ancestors
     ------------------
     See :meth:`AncestralKnowledge.add_required_ancestor` for how existing
-    paths, path orientation, and direct edge addition satisfy a constraint.
+    paths, path orientation, bridge orientation, and direct edge addition
+    handle a constraint.
     After any required-ancestor edge changes, Meek is re-run.
 
     Forbidden ancestors
