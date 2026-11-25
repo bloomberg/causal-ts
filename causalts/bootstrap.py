@@ -29,6 +29,7 @@ def temporal_bootstrap(
     window_frac: float = 0.6,
     seed: int = 42,
     show_progress: bool = True,
+    retain_graphs: bool = True,
 ) -> dict:
     """Contiguous-window temporal bootstrap for causal discovery.
 
@@ -77,6 +78,10 @@ def temporal_bootstrap(
         closure for full reproducibility of GRACE runs.
     show_progress : bool, default True
         Show a tqdm progress bar.
+    retain_graphs : bool, default True
+        Keep every run's output and return them as ``graphs``.  Set to
+        ``False`` to keep only a float64 running sum instead, so memory no
+        longer grows with ``n_bootstrap``; ``graphs`` is then ``None``.
 
     Returns
     -------
@@ -90,8 +95,9 @@ def temporal_bootstrap(
 
             G = (result["persistence"] >= 0.6).astype(int)
 
-    ``graphs`` : list of ndarray
+    ``graphs`` : list of ndarray or None
         Raw output of ``discovery_fn`` for each successful run, in order.
+        ``None`` when ``retain_graphs=False``.
 
     ``n_success`` : int
         Number of runs that completed without error.
@@ -169,6 +175,8 @@ def temporal_bootstrap(
         _has_tqdm = False
 
     graphs: list[np.ndarray] = []
+    total: np.ndarray | None = None
+    n_success = 0
     errors: list[tuple[int, str]] = []
     expected_shape: tuple | None = None
 
@@ -181,8 +189,11 @@ def temporal_bootstrap(
         window = df.iloc[start : start + W].reset_index(drop=True)
         try:
             result = discovery_fn(window)
-            # Copy: discovery_fn may reuse one output buffer across runs.
-            arr = np.array(result, copy=True)
+            if retain_graphs:
+                # Copy: discovery_fn may reuse one output buffer across runs.
+                arr = np.array(result, copy=True)
+            else:
+                arr = np.asarray(result, dtype=np.float64)
         except Exception:
             errors.append((i, traceback.format_exc()))
             continue
@@ -194,20 +205,29 @@ def temporal_bootstrap(
                 f"got {arr.shape}, expected {expected_shape} (the shape from the "
                 "first successful run). All runs must return the same shape."
             )
-        graphs.append(arr)
+        n_success += 1
+        if retain_graphs:
+            graphs.append(arr)
+        elif total is None:
+            total = arr.copy()
+        else:
+            total += arr
 
-    if not graphs:
+    if n_success == 0:
         raise RuntimeError(
             f"All {n_bootstrap} bootstrap runs failed. "
             f"First error:\n{errors[0][1] if errors else 'unknown'}"
         )
 
-    persistence = np.mean(graphs, axis=0)
+    if retain_graphs:
+        persistence = np.mean(graphs, axis=0)
+    else:
+        persistence = total / n_success
 
     return {
         "persistence": persistence,
-        "graphs": graphs,
-        "n_success": len(graphs),
+        "graphs": graphs if retain_graphs else None,
+        "n_success": n_success,
         "n_errors": len(errors),
         "window_size": W,
         "errors": errors,
