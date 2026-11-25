@@ -88,17 +88,29 @@ class AncestralKnowledge:
         ancestor: str,
         descendant: str,
     ) -> "AncestralKnowledge":
-        """Require a directed path ancestor → … → descendant (any lags).
+        """Require a directed path from any lag of *ancestor* to *descendant* at lag 0.
 
-        During orientation, lag copies of *ancestor* at lag >= 1 are ranked by
-        AR(1)-residualized absolute Pearson r and tried in that order.  Lag-0
-        (contemporaneous) is never used — contemporaneous correlations in time
-        series are often due to common causes, not direct causation.  Use
-        ``add_required_edge(ancestor, descendant, cause_lag=0)`` to explicitly
+        An existing directed path from any ancestor copy, including lag 0,
+        satisfies the constraint. Otherwise, orientation tries to complete a
+        semi-directed path, then looks for a bridge through a neighbor of the
+        highest-ranked ancestor copy. The bridge counts as found once the edge
+        from that copy to the neighbor is oriented or is already directed
+        that way, even if the neighbor's onward path is still semi-directed.
+        A found bridge skips the direct force-add and can leave the constraint
+        unsatisfied. If no semi-directed path is found from any candidate copy
+        and no bridge is found, orientation force-adds a direct edge from the
+        highest-ranked copy to the descendant, provided that copy exists.
+
+        The lag-0 ancestor copy is eligible as the origin of the semi-directed
+        path search or as the source of a bridge edge or force-added edge only
+        when ``num_lags == 0``. With positive lags, the search can still pass
+        through the lag-0 ancestor copy as an intermediate node.
+        Use ``add_required_edge(ancestor, descendant, cause_lag=0)`` to explicitly
         require a contemporaneous edge.
 
-        If no lagged semi-directed path exists the constraint is recorded as a
-        violation — no edges are force-added.
+        A constraint on known variables is reported as a violation if it is
+        still unsatisfied in the final graph. Constraints on unknown variables
+        are reported as ignored.
         """
         self._required_ancestors.append((ancestor, descendant))
         return self
@@ -382,11 +394,9 @@ def apply_ancestral_constraints(
 
     Required ancestors
     ------------------
-    For each ``required_ancestor(A, D)`` the lag copy of A with the highest
-    absolute Pearson r to D is used as the BFS start point.  If a semi-directed path
-    from that lag copy exists, undirected edges along it are oriented toward D
-    and Meek is re-run.  Remaining lag copies are tried as fallback.  If no
-    path exists from any lag copy a violation is recorded.
+    See :meth:`AncestralKnowledge.add_required_ancestor` for how existing
+    paths, path orientation, and direct edge addition satisfy a constraint.
+    After any required-ancestor edge changes, Meek is re-run.
 
     Forbidden ancestors
     -------------------
@@ -438,12 +448,12 @@ def apply_ancestral_constraints(
         return f"{name}(t-{lag})" if lag else name
 
     def _best_lag_order(anc_name: str, desc_name: str) -> list[int]:
-        """Return lag search order for required_ancestor BFS.
+        """Return ancestor lag candidates for path search, bridge, and force-add.
 
-        Lagged copies (lag >= 1) are ranked by absolute Pearson r with the
-        AR(1)-residualized descendant — this isolates the ancestor's direct
-        causal signal after removing the descendant's own autoregressive
-        component.  Lag-0 is appended last as a fallback.
+        With data for both variables, rank positive lags by absolute Pearson r
+        with the descendant, using AR(1) residuals when enough observations
+        are available. Without those data, use ascending positive lag order.
+        Return only lag 0 when ``num_lags == 0``.
         """
         if num_lags == 0:
             return [0]

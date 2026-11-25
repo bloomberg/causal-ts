@@ -45,6 +45,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* Corrected ancestral knowledge docstrings about lag-0 paths, force-added
+  edges, and when required-ancestor violations are reported (#198).
 * `temporal_bootstrap` validates `n_bootstrap` (a positive integer) and
   `window_frac` (finite, in the open interval `(0, 1)`) up front, the "window
   too small" message now says to increase `window_frac` instead of reducing it,
