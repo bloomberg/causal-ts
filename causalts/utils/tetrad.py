@@ -123,9 +123,11 @@ def detect_confounded_clusters(
 
     for quartet in combinations(range(d), 4):
         q0, q1, q2, q3 = quartet
+        # The three distinct tetrads of the quartet:
+        #   s01*s23 - s02*s13,  s01*s23 - s03*s12,  s02*s13 - s03*s12.
         _, _, p1 = wishart_tetrad_test(S, n, q0, q1, q2, q3)
-        _, _, p2 = wishart_tetrad_test(S, n, q0, q2, q1, q3)
-        _, _, p3 = wishart_tetrad_test(S, n, q0, q3, q1, q2)
+        _, _, p2 = wishart_tetrad_test(S, n, q0, q1, q3, q2)
+        _, _, p3 = wishart_tetrad_test(S, n, q0, q2, q3, q1)
 
         if all(p > alpha for p in [p1, p2, p3]):
             vanishing_quartets.append(quartet)

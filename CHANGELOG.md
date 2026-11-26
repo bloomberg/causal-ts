@@ -50,6 +50,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `detect_confounded_clusters` (and so `check_tetrads`) tested the same tetrad
+  twice and never tested `s02*s13 - s03*s12`, so a quartet could be reported as
+  vanishing when that tetrad was significant, and the result depended on column
+  order. It now tests all three tetrads of each quartet.
 * Corrected ancestral knowledge docstrings about lag-0 paths, force-added
   edges, and when required-ancestor violations are reported (#198).
 * `load_dataset` now registers `lorenz96`, `ex1_nonstationary`, `confounded_trends`,
