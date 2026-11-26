@@ -105,6 +105,37 @@ def test_detect_confounded_clusters_two_factor_rejects():
     assert res["flagged_pairs"] == set()
 
 
+def test_detect_confounded_clusters_tests_all_three_tetrads():
+    # Data whose sample covariance is exactly S. Of the three tetrads,
+    # s01*s23 - s02*s13 and s01*s23 - s03*s12 are small (p > 0.01 at n = 500),
+    # but s02*s13 - s03*s12 is twice as large and significant. The quartet
+    # must not count as vanishing, whatever the column order.
+    e = 0.03
+    S = np.eye(4)
+    for (a, b), v in {
+        (0, 1): 0.5,
+        (2, 3): 0.5,
+        (0, 2): 0.5 - e,
+        (1, 3): 0.5 - e,
+        (0, 3): 0.5 + e,
+        (1, 2): 0.5 + e,
+    }.items():
+        S[a, b] = S[b, a] = v
+    rng = np.random.default_rng(0)
+    Z = rng.standard_normal((500, 4))
+    Z -= Z.mean(axis=0)
+    Z = Z @ np.linalg.inv(np.linalg.cholesky(np.cov(Z.T))).T
+    X = Z @ np.linalg.cholesky(S).T
+    np.testing.assert_allclose(np.cov(X.T), S, atol=1e-12)
+
+    _, _, p3 = wishart_tetrad_test(S, 500, 0, 2, 3, 1)
+    assert p3 < 0.01
+
+    for perm in [(0, 1, 2, 3), (0, 2, 1, 3), (0, 3, 1, 2), (1, 2, 0, 3)]:
+        res = detect_confounded_clusters(X[:, perm], alpha=0.01)
+        assert res["n_vanishing"] == 0, perm
+
+
 def test_detect_confounded_clusters_counts_quartets_and_default_names():
     X = _one_factor(2000, [1.0, 1.2, 1.4, 1.6, 1.8], seed=2)
     res = detect_confounded_clusters(X, alpha=0.01)
