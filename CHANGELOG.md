@@ -50,6 +50,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* Corrected ancestral knowledge docstrings about lag-0 paths, force-added
+  edges, and when required-ancestor violations are reported (#198).
 * `load_dataset` now registers `lorenz96`, `ex1_nonstationary`, `confounded_trends`,
   `mixed_a`, `mixed_b` and `mixed_c`, raises `ValueError` listing
   `sorted(DATASET_FUNCS)` for unknown names instead of a bare `KeyError`, and
