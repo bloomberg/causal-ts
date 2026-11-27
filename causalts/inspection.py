@@ -688,6 +688,18 @@ def discover_df(
     ``**kwargs`` carries their own options (``mode``, ``lambda_value``,
     ``cv_folds``, ``threshold``).
 
+    The tigramite algorithms ``"pcmci"``, ``"pcmciplus"`` and ``"lpcmci"``
+    (optional extra ``tigramite``) run through
+    :func:`~causalts.tigramite_result.run_tigramite_algorithm` and return a
+    :class:`~causalts.tigramite_result.TigramiteResult`. ``ci_test=None``
+    means tigramite's own ``"parcorr"``, and ``"parcorr"``, ``"cmiknn"`` and
+    ``"gsquared"`` also run **tigramite's** test of that name, not the
+    causal-ts one (a ``UserWarning`` says so); other names are causal-ts
+    tests run through an adapter. ``alpha`` sets PCMCI's ``alpha_level`` and
+    PCMCI+/LPCMCI's ``pc_alpha``; they take no ``include_C`` or ``c_preset``.
+    They need complete data; ``impute="var_em"`` (with optional
+    ``impute_kwargs``) fills it first.
+
     Any other name registered with
     :func:`~causalts.algorithms.register_algorithm` (or installed as an
     entry-point plugin) runs through :func:`~causalts.algorithms.run_algorithm`
@@ -709,7 +721,8 @@ def discover_df(
     ci_test : str, optional
         Registered CI-test name (see :func:`~causalts.ci_tests.list_ci_tests`).
         ``None`` (default) means ``"parcorr-gpu"`` for CDNOTS/Cedar, and each
-        refinement's own default (partial correlation) for GRACE/REAP.
+        refinement's own default (partial correlation) for GRACE/REAP. For
+        PCMCI/PCMCI+/LPCMCI see above: some names mean tigramite's own test.
     alpha : float, optional
         Significance level. ``None`` (default) means "use the algorithm's own
         default" — 0.05 for CDNOTS and GRACE's skeleton, 0.01 for CDNOTS+ and
@@ -770,6 +783,41 @@ def discover_df(
 
             df = var_em_impute(df, **impute_kwargs)
         return run_baseline(algorithm, df, max_lag, **kwargs)
+    from .tigramite_result import TIGRAMITE_ALGORITHMS, run_tigramite_algorithm
+
+    if algorithm in TIGRAMITE_ALGORITHMS:
+        if include_C or c_preset != "linear":
+            raise ValueError(
+                f"include_C and c_preset do not apply to algorithm={algorithm!r}."
+            )
+        # impute / impute_kwargs stay in kwargs: run_tigramite_algorithm
+        # applies var_em before the run.
+        from .ci_tests import list_ci_tests
+        from .tigramite_result import is_tigramite_ci_test
+
+        if (
+            isinstance(ci_test, str)
+            and ci_test in list_ci_tests()
+            and is_tigramite_ci_test(ci_test)
+        ):
+            import warnings
+
+            warnings.warn(
+                f"ci_test={ci_test!r} with algorithm={algorithm!r} runs "
+                f"tigramite's own {ci_test}, not causal-ts's (as with "
+                "ci_test=None); other algorithms use the causal-ts test.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return run_tigramite_algorithm(
+            algorithm,
+            df,
+            max_lag,
+            ci_test=ci_test,
+            alpha=alpha,
+            device=device or "cpu",
+            **kwargs,
+        )
     test_device = device or "cpu"
     # dfcit sizes its block-shuffle null from alpha (so p < alpha is reachable).
     # Mirror how each engine resolves its thresholds below (unset: engine default).

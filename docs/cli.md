@@ -80,10 +80,10 @@ causal-ts discover DATA.csv [OPTIONS]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-a, --algorithm` | `cdnots` | `cdnots`, `cdnots+`, `cedar`, `grace`, `grace-ss`, `reap`, and the score-based `lges`, `tges`, `ges`, `lasso-var`, `granger`, `varlingam` |
+| `-a, --algorithm` | `cdnots` | `cdnots`, `cdnots+`, `cedar`, `grace`, `grace-ss`, `reap`, the score-based `lges`, `tges`, `ges`, `lasso-var`, `granger`, `varlingam`, and tigramite's `pcmci`, `pcmciplus`, `lpcmci` |
 | `--ci-test` | `parcorr-gpu` | CI test — see `ci-test-info`. For `grace`, `grace-ss` and `reap` it builds the candidate graph; unset, they pick `parcorr-gpu` on CUDA, else CPU `parcorr` |
 | `--max-lag INT` | `3` | Maximum time lag |
-| `--alpha FLOAT` | `0.01` for `cdnots+`, else `0.05` | Significance level for `cdnots`, `cdnots+`, `grace`, `grace-ss`, `reap`; Cedar uses `--alpha-cond1`/`--alpha-cond2` |
+| `--alpha FLOAT` | `0.01` for `cdnots+`, else `0.05` | Significance level for `cdnots`, `cdnots+`, `grace`, `grace-ss`, `reap`; Cedar uses `--alpha-cond1`/`--alpha-cond2`; for `pcmci`, `pcmciplus`, `lpcmci` see [Tigramite methods](#tigramite-methods) |
 | `--lag-list TEXT` | — | Comma-separated explicit lags, e.g. `1,3,12` (`cdnots` and `cdnots+` only; other algorithms use `--max-lag`) |
 | `--var-names TEXT` | from CSV | Comma-separated variable names |
 | `--index-col NAME_OR_POSITION` | — | Column to read as the index (e.g. a date column) instead of a variable: a name or a 0-based position |
@@ -178,6 +178,48 @@ write `coefficients.npy`.
 
 These four flags are an error with any other algorithm.
 
+### Tigramite methods
+
+`pcmci`, `pcmciplus` and `lpcmci` run tigramite's PCMCI, PCMCI+ and LPCMCI
+through {func}`causalts.tigramite_result.run_tigramite_algorithm`. They need
+the optional extra: `pip install "causal-ts[tigramite]"` (without it the run
+stops with an error saying so). They take no C node or lag list
+(`--include-c`, `--c-preset` and `--lag-list` are an error). They need
+complete data: with missing values pass `--impute var_em` (see
+[Missing data](#missing-data)).
+
+- **`--alpha`** sets PCMCI's `alpha_level` (default `0.05`; its PC stage keeps
+  `pc_alpha=0.2`) and the `pc_alpha` of PCMCI+ (default `0.01`) and LPCMCI
+  (default `0.05`). Unset, each method keeps its default; `summary.json`
+  records the value as `alpha` and the parameter it set as `alpha_parameter`.
+- **`--ci-test`**: left at its default, tigramite's own ParCorr runs; an explicit
+  `--ci-test parcorr-gpu` runs causal-ts ParCorrGPU through an adapter (a note is
+  logged).
+  `gpdc`, `gpdc_torch`, `robust_parcorr` and `parcorr_mult` are tigramite's
+  own tests, valid only with these three methods. `parcorr`, `cmiknn` and
+  `gsquared` are names both tigramite and causal-ts use; with these methods
+  they run **tigramite's** test (a note is logged), seeded by `-s`. `--device`
+  does not apply to tigramite's tests. Any other `--ci-test` is a causal-ts
+  test, run through an adapter. Tests that track discrete columns
+  (`cmiknn-mixed-gpu`) are an error here; use them with `cdnots`, `cdnots+`,
+  `grace` or `reap`.
+- **`dfcit`** sizes its block-shuffle null from its own significance level, so
+  it is built at the smallest level the method tests at (`--alpha` if given,
+  else the method's defaults: `0.01` for PCMCI+, `0.05` for PCMCI and LPCMCI).
+- **Edge marks.** `estimated_graph.npy` is binary: it keeps `-->` and
+  LPCMCI's `o->` (a *possible* cause) as directed edges, keeps lagged `o-o`
+  and `x-x` links, and drops lag-0 `o-o` and `x-x`, `<->` and endpoint
+  conflicts (e.g. `x->`). `edge_marks.npy` holds tigramite's marks. In
+  `summary.json` each entry of `edges` has its `mark` (e.g. `-->`, `o->`, or a
+  lagged `o-o`), and `unresolved_links` lists the links the binary graph
+  leaves out (lag-0 pairs once). `diagnostics` counts the binary graph, plus
+  `n_unresolved`; `empty` is true only when both are zero. `--pvalues` writes
+  tigramite's p-value matrix. For a lag-0 link the `pvalue` is that of the
+  adjacency test, not evidence for its orientation.
+- **`--validate`** builds a fresh CI test per window and computes persistence on
+  the binary graph: `o->` counts as directed, and lag-0 `o-o` / `x-x`, `<->`
+  and conflict links are not covered.
+
 ### Missing data
 
 | Flag | Default | Description |
@@ -193,6 +235,7 @@ Not every strategy works with every algorithm:
 | `cedar` | yes | yes | not supported |
 | `grace`, `reap` | not supported when values are missing | yes | replaced by `var_em` (with a warning) |
 | `lges`, `tges`, `ges`, `lasso-var`, `granger`, `varlingam` | error if values are missing; `pairwise_complete` is an error | yes (imputed once; `--validate` windows reuse the filled data) | error |
+| `pcmci`, `pcmciplus`, `lpcmci` | error if values are missing; `pairwise_complete` is an error | yes | error |
 
 ### Output & evaluation
 

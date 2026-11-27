@@ -201,6 +201,35 @@ objects. Requires `pip install causalts[tigramite]`.
 .. autofunction:: causalts.tigramite_discovery.run_tigramite
 ```
 
+`run_pcmci`, `run_pcmciplus` and `run_lpcmci` return a `(G_hat, info)` tuple
+by default. With `return_result=True` they return a `TigramiteResult`
+instead: a {class}`~causalts.result.CausalResult` with `.cg_tig`,
+`.p_matrix`, `.val_matrix`, `.plot()` and `.to_marks()` (tigramite's own
+marks, `o-o`, `x-x`, `o->` and `<->` included). It also has the DoWhy bridge
+(`estimate_effect`, `fit_scm`, ...). Because `cg_tig` drops lag-0
+`o-o`/`x-x` and `<->` links and renders `o->` as directed, `bridge_policy` defaults to `"refuse"`:
+the bridge raises while unresolved marks remain. Set
+`res.bridge_policy = "drop_unresolved"` to bridge without them.
+`tetrad_filter()`, `pds_filter()` and `deconfound()` work on `cg_tig`; they
+leave a lag-0 `o-o` (PCMCI+'s unorientable pair) untested and in the marks,
+with a warning. PAG-specific marks (`o->`, `<-o`, `<->`, `x-x`, endpoint
+conflicts such as `x->`) make them raise.
+
+`run_tigramite_algorithm` runs them by name (`"pcmci"`, `"pcmciplus"`,
+`"lpcmci"`) and returns a `TigramiteResult`. It is what
+`discover_df(df, algorithm="pcmciplus")`, `run_algorithm` and
+`causal-ts discover --algorithm` call (see the [CLI reference](../cli)). The
+data must be complete, or pass `impute="var_em"` to fill it first (the result
+then holds the filled data).
+
+```{eval-rst}
+.. autoclass:: causalts.tigramite_result.TigramiteResult
+   :members: graph_raw
+   :show-inheritance:
+
+.. autofunction:: causalts.tigramite_result.run_tigramite_algorithm
+```
+
 ## Algorithm registry
 
 Register your own algorithm so `run_algorithm` (and, through the

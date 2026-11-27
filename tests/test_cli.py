@@ -771,6 +771,356 @@ def test_discover_cdnots_default_saves_network_plot(tmp_path):
     assert list(tmp_path.glob("discover_*/network.png"))
 
 
+def _tigramite_csv(tmp_path):
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal((300, 3))
+    for t in range(1, 300):
+        x[t, 1] += 0.8 * x[t - 1, 0]
+        x[t, 2] += 0.8 * x[t - 1, 1]
+    path = tmp_path / "chain.csv"
+    pd.DataFrame(x, columns=["X0", "X1", "X2"]).to_csv(path, index=False)
+    return path
+
+
+def _discover_json(tmp_path, *args):
+    return CliRunner().invoke(
+        main,
+        ["-q", "-o", str(tmp_path), "discover", *args, "--no-plot", "--json"],
+    )
+
+
+def test_discover_pcmciplus_json_edges(tmp_path):
+    pytest.importorskip("tigramite")
+    path = _tigramite_csv(tmp_path)
+    res = _discover_json(tmp_path, str(path), "--algorithm", "pcmciplus")
+    assert res.exit_code == 0, res.output
+    s = json.loads(res.output)
+    assert s["algorithm"] == "pcmciplus"
+    assert s["ci_test"] == "parcorr (tigramite)"
+    assert s["alpha"] == 0.01 and s["alpha_parameter"] == "pc_alpha"
+    edges = {(e["source"], e["target"], e["lag"]) for e in s["edges"]}
+    assert {("X0", "X1", 1), ("X1", "X2", 1)} <= edges
+    assert s["n_edges"] == len(s["edges"])
+    (outdir,) = tmp_path.glob("discover_pcmciplus_*")
+    assert np.load(outdir / "edge_marks.npy").dtype.kind == "U"
+
+
+@pytest.mark.parametrize("algo", ["pcmci", "lpcmci"])
+def test_discover_tigramite_alpha_and_pvalues(tmp_path, algo):
+    pytest.importorskip("tigramite")
+    path = _tigramite_csv(tmp_path)
+    res = _discover_json(
+        tmp_path,
+        str(path),
+        "-a",
+        algo,
+        "--max-lag",
+        "1",
+        "--alpha",
+        "0.02",
+        "--pvalues",
+    )
+    assert res.exit_code == 0, res.output
+    s = json.loads(res.output)
+    assert s["alpha"] == 0.02
+    assert s["edges"] and all(e["pvalue"] is not None for e in s["edges"])
+    (outdir,) = tmp_path.glob(f"discover_{algo}_*")
+    assert np.load(outdir / "pvalues.npy").shape == (3, 3, 2)
+
+
+def test_discover_tigramite_rejects_c_node_flags(tmp_path):
+    path = _tigramite_csv(tmp_path)
+    res = _discover_json(tmp_path, str(path), "-a", "pcmci", "--include-c")
+    assert res.exit_code == 2
+    assert "--include-c does not apply to --algorithm pcmci" in res.output
+
+
+def test_discover_tigramite_without_tigramite_errors(tmp_path, monkeypatch):
+    import causalts.tigramite_discovery as td
+
+    monkeypatch.setattr(td, "tigramite_available", lambda: False)
+    path = _tigramite_csv(tmp_path)
+    res = _discover_json(tmp_path, str(path), "-a", "pcmciplus")
+    assert res.exit_code == 1
+    assert "requires tigramite" in res.output
+
+
+def test_discover_tigramite_rejects_discrete_column_ci_test(tmp_path):
+    pytest.importorskip("tigramite")
+    path = _tigramite_csv(tmp_path)
+    df = pd.read_csv(path)
+    df["D"] = np.random.default_rng(1).integers(0, 3, len(df))
+    df.to_csv(path, index=False)
+    res = _discover_json(
+        tmp_path, str(path), "-a", "pcmciplus", "--ci-test", "cmiknn-mixed-gpu"
+    )
+    assert res.exit_code == 1
+    assert "cmiknn-mixed-gpu with cdnots" in res.output
+
+
+def test_discover_tigramite_native_ci_test_choice(tmp_path):
+    pytest.importorskip("tigramite")
+    path = _tigramite_csv(tmp_path)
+    res = _discover_json(
+        tmp_path, str(path), "-a", "pcmciplus", "--ci-test", "robust_parcorr"
+    )
+    assert res.exit_code == 0, res.output
+    edges = {
+        (e["source"], e["target"], e["lag"]) for e in json.loads(res.output)["edges"]
+    }
+    assert {("X0", "X1", 1), ("X1", "X2", 1)} <= edges
+    res = _discover_json(tmp_path, str(path), "-a", "cdnots", "--ci-test", "gpdc")
+    assert res.exit_code == 2
+    assert "gpdc is a tigramite CI test" in res.output
+
+
+def test_discover_tigramite_overlapping_ci_test_is_noted_and_seeded(
+    tmp_path, monkeypatch
+):
+    pytest.importorskip("tigramite")
+    import causalts.tigramite_result as tr
+
+    seen = {}
+    real = tr.run_tigramite_algorithm
+
+    def spy(*args, **kw):
+        seen.update(kw)
+        return real(*args, **kw)
+
+    monkeypatch.setattr(tr, "run_tigramite_algorithm", spy)
+    path = _tigramite_csv(tmp_path)
+    res = CliRunner().invoke(
+        main,
+        ["-s", "7", "-d", "cpu", "-o", str(tmp_path), "discover", str(path)]
+        + ["-a", "pcmciplus", "--ci-test", "parcorr", "--max-lag", "1", "--no-plot"],
+    )
+    assert res.exit_code == 0, res.output
+    assert "runs tigramite's own parcorr, not causal-ts's" in res.output
+    assert "--device cpu does not apply" in res.output
+    assert seen["ci_test"] == "parcorr" and seen["ci_kwargs"] == {"seed": 7}
+
+
+@pytest.mark.parametrize(
+    "algo, extra, expected",
+    [
+        ("pcmciplus", [], 0.01),  # wrapper's pc_alpha, not the generic 0.05
+        ("pcmciplus", ["--alpha", "0.002"], 0.002),
+        ("pcmci", [], 0.05),  # min(pc_alpha 0.2, alpha_level 0.05)
+    ],
+)
+def test_discover_tigramite_sizes_dfcit_for_the_wrappers_alpha(
+    tmp_path, monkeypatch, algo, extra, expected
+):
+    pytest.importorskip("tigramite")
+    import causalts.cli as cli_mod
+
+    seen = []
+    real = cli_mod._make_ci_test
+
+    def spy(name, data, device, **kw):
+        seen.append((name, kw.get("alpha")))
+        # A fast stand-in: only the alpha dfcit would be built with matters.
+        return real("parcorr-gpu", data, device, seed=kw.get("seed"))
+
+    monkeypatch.setattr(cli_mod, "_make_ci_test", spy)
+    path = _tigramite_csv(tmp_path)
+    res = _discover_json(
+        tmp_path, str(path), "-a", algo, "--ci-test", "dfcit", "--max-lag", "1", *extra
+    )
+    assert res.exit_code == 0, res.output
+    assert seen and all(n == "dfcit" for n, _ in seen)
+    assert all(a == pytest.approx(expected) for _, a in seen)
+
+
+def test_discover_tigramite_summary_carries_marks(tmp_path):
+    # Two copies of one noise series: PCMCI+ leaves the lag-0 link o-o, which
+    # cg_tig (and so `edges`) leaves out; summary lists it as unresolved.
+    pytest.importorskip("tigramite")
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal(300)
+    path = tmp_path / "pair.csv"
+    pd.DataFrame({"a": x, "b": x + 0.1 * rng.standard_normal(300)}).to_csv(
+        path, index=False
+    )
+    res = _discover_json(tmp_path, str(path), "-a", "pcmciplus", "--max-lag", "1")
+    assert res.exit_code == 0, res.output
+    s = json.loads(res.output)
+    assert all(e["mark"] == "-->" for e in s["edges"])
+    assert {"source": "a", "target": "b", "lag": 0, "mark": "o-o"} in s[
+        "unresolved_links"
+    ]
+    assert not any(e["lag"] == 0 for e in s["edges"])
+
+
+def test_discover_tigramite_validate_builds_a_ci_test_per_window(tmp_path, monkeypatch):
+    pytest.importorskip("tigramite")
+    import causalts.cli as cli_mod
+
+    built = []
+    real = cli_mod._make_ci_test
+
+    def spy(name, data, device, **kw):
+        obj = real("parcorr-gpu", data, device, seed=kw.get("seed"))
+        built.append((obj, len(data), kw.get("alpha")))
+        return obj
+
+    monkeypatch.setattr(cli_mod, "_make_ci_test", spy)
+    path = _tigramite_csv(tmp_path)
+    res = _discover_json(
+        tmp_path,
+        str(path),
+        "-a",
+        "pcmciplus",
+        "--ci-test",
+        "dfcit",
+        "--max-lag",
+        "1",
+        "--validate",
+        "--n-bootstrap",
+        "3",
+        "--window-frac",
+        "0.5",
+    )
+    assert res.exit_code == 0, res.output
+    # Main-run test (built on a placeholder), then one per window on its rows.
+    windows = built[1:]
+    assert len(windows) == 3
+    assert len({id(obj) for obj, _, _ in built}) == len(built)
+    assert all(n == 150 for _, n, _ in windows)
+    assert all(a == pytest.approx(0.01) for _, _, a in built)  # PCMCI+ pc_alpha
+    s = json.loads(res.output)
+    assert "binary graph" in s["stability"]["note"]
+
+
+def _synthetic_tigramite_result(marks):
+    import causalts.tigramite_discovery as td
+    from causalts.tigramite_result import TigramiteResult
+
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame(rng.standard_normal((100, 3)), columns=["X0", "X1", "X2"])
+    g = np.full((3, 3, 2), "", dtype="<U3")
+    for (i, j, k), m in marks.items():
+        g[i, j, k] = m
+    info = {"method": "lpcmci", "graph_raw": g, "p_matrix": np.full(g.shape, 0.5)}
+    return TigramiteResult(td.tigramite_graph_to_binary(g), df, info)
+
+
+@pytest.mark.parametrize(
+    "marks, n_edges, n_unresolved",
+    [
+        # lag-0 o-o (stored both ways), lagged o->, lagged <->
+        (
+            {(0, 1, 0): "o-o", (1, 0, 0): "o-o", (1, 2, 1): "o->", (2, 0, 1): "<->"},
+            1,
+            2,
+        ),
+        ({(0, 1, 0): "o-o", (1, 0, 0): "o-o"}, 0, 1),  # only unresolved links
+    ],
+)
+def test_discover_tigramite_diagnostics_count_unresolved_links(
+    tmp_path, monkeypatch, marks, n_edges, n_unresolved
+):
+    pytest.importorskip("tigramite")
+    import causalts.tigramite_result as tr
+
+    res_obj = _synthetic_tigramite_result(marks)
+    monkeypatch.setattr(tr, "run_tigramite_algorithm", lambda *a, **k: res_obj)
+    path = _tigramite_csv(tmp_path)
+    res = _discover_json(tmp_path, str(path), "-a", "lpcmci", "--max-lag", "1")
+    assert res.exit_code == 0, res.output
+    s = json.loads(res.output)
+    d = s["diagnostics"]
+    assert d["n_edges"] == n_edges and d["n_unresolved"] == n_unresolved
+    assert d["empty"] is False
+    assert len(s["unresolved_links"]) == n_unresolved
+    if n_edges:
+        assert s["edges"][0]["mark"] == "o->"
+        assert {e["mark"] for e in s["unresolved_links"]} == {"o-o", "<->"}
+
+
+def test_discover_gpdc_torch_without_gpytorch_names_it(tmp_path, monkeypatch):
+    pytest.importorskip("tigramite")
+    import importlib.util
+
+    real = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *a: None if name == "gpytorch" else real(name, *a),
+    )
+    path = _tigramite_csv(tmp_path)
+    res = _discover_json(
+        tmp_path, str(path), "-a", "pcmciplus", "--ci-test", "gpdc_torch"
+    )
+    assert res.exit_code == 1
+    assert "pip install gpytorch" in res.output
+    assert "causal-ts[tigramite]" not in res.output
+
+
+def test_discover_tigramite_lists_a_dropped_lag0_partial_arrow(tmp_path, monkeypatch):
+    # A lag-0 X1 o-> X0 that cg_tig does not hold (e.g. thresholded away) is
+    # in neither `edges` nor the binary graph: unresolved_links must list it.
+    pytest.importorskip("tigramite")
+    import causalts.tigramite_result as tr
+
+    res_obj = _synthetic_tigramite_result({(1, 0, 0): "o->", (0, 1, 0): "<-o"})
+    res_obj.cg_tig = np.zeros_like(res_obj.cg_tig)
+    monkeypatch.setattr(tr, "run_tigramite_algorithm", lambda *a, **k: res_obj)
+    path = _tigramite_csv(tmp_path)
+    res = _discover_json(tmp_path, str(path), "-a", "lpcmci", "--max-lag", "1")
+    assert res.exit_code == 0, res.output
+    s = json.loads(res.output)
+    assert s["edges"] == []
+    assert len(s["unresolved_links"]) == 1
+    assert s["unresolved_links"][0]["lag"] == 0
+    assert s["diagnostics"]["empty"] is False
+
+
+@pytest.mark.parametrize("algo", ["pcmciplus", "lpcmci"])
+def test_discover_tigramite_impute_var_em_and_refusals(tmp_path, algo):
+    pytest.importorskip("tigramite")
+    path = _tigramite_csv(tmp_path)
+    df = pd.read_csv(path)
+    mask = np.random.default_rng(3).random(df.shape) < 0.05
+    mask[:5] = False
+    df.mask(mask).to_csv(path, index=False)
+    res = _discover_json(
+        tmp_path, str(path), "-a", algo, "--max-lag", "1", "--impute", "var_em"
+    )
+    assert res.exit_code == 0, res.output
+    s = json.loads(res.output)
+    assert s["impute"] == "var_em"
+    edges = {(e["source"], e["target"], e["lag"]) for e in s["edges"]}
+    assert {("X0", "X1", 1), ("X1", "X2", 1)} <= edges
+    # pairwise_complete does not apply; no --impute on gaps is a clean error.
+    res = _discover_json(
+        tmp_path, str(path), "-a", algo, "--impute", "pairwise_complete"
+    )
+    assert res.exit_code == 2
+    assert f"--impute pairwise_complete does not apply to --algorithm {algo}" in (
+        res.output
+    )
+    res = _discover_json(tmp_path, str(path), "-a", algo, "--max-lag", "1")
+    assert res.exit_code == 1
+    assert "Traceback" not in res.output and "--impute var_em" in res.output
+
+
+def test_discover_tigramite_explicit_parcorr_gpu_is_noted(tmp_path):
+    pytest.importorskip("tigramite")
+    path = _tigramite_csv(tmp_path)
+    args = ["-o", str(tmp_path), "discover", str(path), "-a", "pcmciplus"]
+    args += ["--max-lag", "1", "--no-plot"]
+    res = CliRunner().invoke(main, args + ["--ci-test", "parcorr-gpu"])
+    assert res.exit_code == 0, res.output
+    assert "runs causal-ts ParCorrGPU through an adapter" in res.output
+    assert '"ci_test": "parcorr-gpu"' in "".join(
+        p.read_text() for p in tmp_path.glob("discover_pcmciplus_*/summary.json")
+    )
+    res = CliRunner().invoke(main, args)  # default: tigramite's ParCorr, no note
+    assert res.exit_code == 0, res.output
+    assert "through an adapter" not in res.output
+
+
 def test_generate_help_lists_all_registered_datasets():
     from causalts.synthetic_data.synthetic_datasets import DATASET_FUNCS
 

@@ -12,8 +12,13 @@ Requires tigramite: pip install tigramite
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+    from .tigramite_result import TigramiteResult
 
 
 def tigramite_available() -> bool:
@@ -452,8 +457,9 @@ def run_pcmciplus(
     link_assumptions: dict | None = None,
     verbosity: int = 0,
     ci_kwargs: dict | None = None,
+    return_result: bool = False,
     **kwargs,
-) -> tuple[np.ndarray, dict]:
+) -> tuple[np.ndarray, dict] | TigramiteResult:
     """Run PCMCI+ and return a binary causal graph.
 
     PCMCI+ (Runge 2020) discovers contemporaneous and lagged causal links
@@ -495,6 +501,9 @@ def run_pcmciplus(
     ci_kwargs : dict or None
         Extra kwargs for the CI test constructor (only if ci_test is a
         string).
+    return_result : bool
+        Return a :class:`~causalts.tigramite_result.TigramiteResult` instead
+        of the ``(G_hat, info)`` tuple (default False).
     **kwargs : dict
         Extra kwargs passed to pcmci.run_pcmciplus().
 
@@ -545,6 +554,10 @@ def run_pcmciplus(
         "ambiguous_triples": result.get("ambiguous_triples", []),
     }
 
+    if return_result:
+        from .tigramite_result import TigramiteResult
+
+        return TigramiteResult(G_hat, df, info)
     return G_hat, info
 
 
@@ -560,8 +573,9 @@ def run_pcmci(
     link_assumptions: dict | None = None,
     verbosity: int = 0,
     ci_kwargs: dict | None = None,
+    return_result: bool = False,
     **kwargs,
-) -> tuple[np.ndarray, dict]:
+) -> tuple[np.ndarray, dict] | TigramiteResult:
     """Run PCMCI and return a binary causal graph.
 
     PCMCI (Runge et al. 2019) discovers lagged causal links via
@@ -600,6 +614,9 @@ def run_pcmci(
         0=silent, 1=summary, 2=detailed.
     ci_kwargs : dict or None
         Extra kwargs for CI test constructor.
+    return_result : bool
+        Return a :class:`~causalts.tigramite_result.TigramiteResult` instead
+        of the ``(G_hat, info)`` tuple (default False).
     **kwargs : dict
         Extra kwargs passed to pcmci.run_pcmci().
 
@@ -646,6 +663,10 @@ def run_pcmci(
         "alpha_level": alpha_level,
     }
 
+    if return_result:
+        from .tigramite_result import TigramiteResult
+
+        return TigramiteResult(G_hat, df, info)
     return G_hat, info
 
 
@@ -658,8 +679,9 @@ def run_lpcmci(
     n_preliminary_iterations: int = 1,
     verbosity: int = 0,
     ci_kwargs: dict | None = None,
+    return_result: bool = False,
     **kwargs,
-) -> tuple[np.ndarray, dict]:
+) -> tuple[np.ndarray, dict] | TigramiteResult:
     """Run LPCMCI and return a binary causal graph.
 
     LPCMCI (Gerhardus & Runge 2020) extends PCMCI+ to handle latent
@@ -691,6 +713,9 @@ def run_lpcmci(
         0=silent, 1=summary, 2=detailed.
     ci_kwargs : dict or None
         Extra kwargs for CI test constructor.
+    return_result : bool
+        Return a :class:`~causalts.tigramite_result.TigramiteResult` instead
+        of the ``(G_hat, info)`` tuple (default False).
     **kwargs : dict
         Extra kwargs passed to lpcmci.run_lpcmci().
 
@@ -736,6 +761,10 @@ def run_lpcmci(
         "edge_types": edge_types,
     }
 
+    if return_result:
+        from .tigramite_result import TigramiteResult
+
+        return TigramiteResult(G_hat, df, info)
     return G_hat, info
 
 

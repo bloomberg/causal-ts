@@ -37,6 +37,13 @@ from causalts.synthetic_data.synthetic_datasets import ex2, ex3
 from causalts.utils import evaluate_graph
 import causalts.plotting as tp
 
+# dowhy.gcm.fit() passes `disable=not config.show_progress_bars` explicitly,
+# so TQDM_DISABLE and friends do not reach it -- this is the only switch that
+# keeps the stored outputs free of progress-bar spam on re-execution.
+from dowhy.gcm.config import disable_progress_bars
+
+disable_progress_bars()
+
 # %% [markdown]
 # ## 1. PCMCI+ with Tigramite's ParCorr
 #
@@ -193,6 +200,39 @@ for method in methods_to_test:
     results[method] = {'G': G, 'info': info, 'metrics': m}
     print(f'{method:12s}: F1={m["F1"]:.3f}, Prec={m["Precision"]:.3f}, '
           f'Rec={m["TPR"]:.3f}, edges={int(G.sum())}')
+
+# %% [markdown]
+# ## 4b. Result objects and `discover_df`
+#
+# With `return_result=True`, `run_pcmciplus`, `run_pcmci` and `run_lpcmci` return a `TigramiteResult` instead of the `(G_hat, info)` tuple (the tuple stays the default). It is a causal-ts result object: `.cg_tig` is the same binary graph, `.to_marks()` keeps tigramite's own edge marks (`o-o`, `x-x`, `o->`, `<->`), and `.plot()` draws them.
+
+# %%
+res = run_pcmciplus(df, tau_max=3, ci_test='parcorr', pc_alpha=0.01, return_result=True)
+print(type(res).__name__, res.cg_tig.shape)
+print('cg_tig equals the tuple graph:', np.array_equal(res.cg_tig, G_pcmci))
+
+marks = res.to_marks()
+print('Edge marks:')
+for i, j, lag in zip(*np.nonzero(marks != '')):
+    if lag > 0 or i < j:  # lag-0 marks are stored in both directions
+        print(f'  {var_names[i]}(t-{lag}) {marks[i, j, lag]} {var_names[j]}(t)')
+
+# %%
+res.plot()
+plt.show()
+
+# %% [markdown]
+# `discover_df` runs the same methods by name (`'pcmci'`, `'pcmciplus'`, `'lpcmci'`); `alpha` sets PCMCI+'s `pc_alpha` (PCMCI's `alpha_level`). Left unset, `ci_test` is tigramite's own ParCorr. On the command line this is `causal-ts discover data.csv --algorithm pcmciplus`.
+#
+# The result has the DoWhy bridge (`estimate_effect`, `fit_scm`, ...), but `bridge_policy` defaults to `"refuse"`: since `cg_tig` drops lag-0 `o-o`/`x-x` and `<->` links and draws LPCMCI's `o->` as directed, the bridge raises while such marks remain. Set `res.bridge_policy = "drop_unresolved"` to bridge without them.
+
+# %%
+from causalts.inspection import discover_df
+
+res_df = discover_df(df, algorithm='pcmciplus', max_lag=3, alpha=0.01)
+print(type(res_df).__name__)
+print('Same graph as run_pcmciplus:', np.array_equal(res_df.cg_tig, res.cg_tig))
+print('bridge_policy:', res_df.bridge_policy)
 
 # %% [markdown]
 # ## 5. Head-to-Head: CDNOTS vs PCMCI
@@ -390,20 +430,45 @@ plt.tight_layout(); plt.show()
 # %% [markdown]
 # ## 6. Downstream Integration
 #
-# Tigramite outputs are plain binary arrays, not causal-ts result objects. `wrap_graph()` turns such a third-party array into a `WrappedGraph` that exposes the effects, query and forecasting methods.
+# With `return_result=True`, `run_pcmciplus` returns a `TigramiteResult`, a causal-ts result object, so effect estimation and the SCM methods are available on it directly. The run below is the same PCMCI+ configuration as `G_pcmci3` in section 5 (ex3, `tau_max=3`, `pc_alpha=0.01`), so the numbers are comparable.
+#
+# PCMCI+ leaves one contemporaneous pair unoriented (`o-o`). The DoWhy bridge will not pick a direction for it (`bridge_policy="refuse"`, the default), so the first call fails with an explanation. With `bridge_policy="drop_unresolved"` it bridges without that pair, which is the same graph as `G_pcmci3` (its binary rendering leaves the pair out too).
+
+# %%
+res3 = run_pcmciplus(df3, tau_max=3, ci_test='parcorr', pc_alpha=0.01, return_result=True)
+print(type(res3).__name__, '| same graph as G_pcmci3:', np.array_equal(res3.cg_tig, G_pcmci3))
+
+try:
+    res3.estimate_effect('PKC', 'Mek', treatment_lag=1, confidence_intervals=False)
+except ValueError as e:
+    print(f'\nRefused: {e}')
+
+res3.bridge_policy = 'drop_unresolved'
+est = res3.estimate_effect('PKC', 'Mek', treatment_lag=1, confidence_intervals=False)
+print(f'\nATE PKC(t-1) -> Mek: {est.value:.4f}')
+
+# %% [markdown]
+# `summary()` lists the edges, tests the fitted transition structure against the data and ranks the parents of one target by arrow strength. `counterfactual()` answers "what would `Erk` have been, row by row, had `Mek(t-2)` been 3?" on the observed data.
+
+# %%
+_ = res3.summary(top_k=5)
+
+# %%
+np.random.seed(0)
+cf = res3.counterfactual({'Mek_lag2': 3.0}, target='Erk')
+print(f'Counterfactual Erk with Mek(t-2) set to 3: mean={cf.mean():.3f} '
+      f'over {len(cf)} rows (observed mean {df3["Erk"].mean():.3f})')
+
+# %% [markdown]
+# `wrap_graph()` is the route for binary arrays from third-party tools, and for the probabilistic query and forecasting API (`interventional_query`, `observational_query`, `forecast`), which lives on `WrappedGraph` rather than on result objects. `wrap_graph` takes an array, not a result object, so pass `res3.cg_tig` together with the data.
 #
 # The interventional query below sets **lagged** nodes. The SCM is fitted on the lag-embedded transition DAG, where every edge points from a lagged node (`Mek_lag2`) into a current-time node (`Erk`); current-time nodes have no children, so intervening on one would leave every other variable unchanged. See the [Probabilistic Queries notebook](probabilistic_queries.ipynb) for details.
 
 # %%
 from causalts.effects import wrap_graph
 
-# Wrap PCMCI+ output
-cg = wrap_graph(G_pcmci3, df3)
+cg = wrap_graph(res3.cg_tig, df3)
 print(cg)
-
-# Effect estimation
-est = cg.estimate_effect('PKC', 'Mek', treatment_lag=1, confidence_intervals=False)
-print(f'\nATE PKC(t-1) -> Mek: {est.value:.4f}')
 
 # The query samplers use NumPy's global random state
 np.random.seed(0)
@@ -411,7 +476,7 @@ np.random.seed(0)
 print(f'\nObserved Erk: mean={df3["Erk"].mean():.3f}, std={df3["Erk"].std():.3f}')
 
 print('Parents of Erk in the PCMCI+ graph:',
-      [f'{var3[i]}_lag{lag}' for i, lag in zip(*np.nonzero(G_pcmci3[:, var3.index('Erk'), :]))])
+      [f'{var3[i]}_lag{lag}' for i, lag in zip(*np.nonzero(res3.cg_tig[:, var3.index('Erk'), :]))])
 
 # Interventional query on a lagged node
 intv = cg.interventional_query({'Mek_lag2': 3.0}, targets='Erk', n_samples=3000)
@@ -426,7 +491,7 @@ print(f'\nObservational: P(Erk | Mek~3, PKA~2)  (ESS={1 / (obs["_weight"]**2).su
 print(summary_obs.round(3))
 
 # %% [markdown]
-# In the PCMCI+ graph `Erk` has two parents, `Mek_lag2` and `Erk_lag1` (PCMCI+ misses the true edge `PKA(t-1) → Erk(t)`). Setting `Mek_lag2=3` moves the mean of `Erk` from 0.07 to about -0.8. `Erk(t)` shares no parent with `Mek(t)` or `PKA(t)` in this graph, so conditioning on Mek≈3 and PKA≈2 carries no information about `Erk`: its observational mean differs from the observed mean only by sampling noise, since the estimate rests on fewer than 300 effective samples.
+# In the PCMCI+ graph `Erk` has two parents, `Mek_lag2` and `Erk_lag1` (PCMCI+ misses the true edge `PKA(t-1) → Erk(t)`; the local Markov violation at `Erk` that `summary()` reports above is consistent with that). Setting `Mek_lag2=3` moves the mean of `Erk` from 0.07 to about -0.8. The row-by-row counterfactual above lands at the same place (mean about -0.83). `Erk(t)` shares no parent with `Mek(t)` or `PKA(t)` in this graph, so conditioning on Mek≈3 and PKA≈2 carries no information about `Erk`. Its observational mean (-0.12) stays near the observed mean (0.07); the gap is about two standard errors of an importance-weighted estimate that rests on only 276 effective samples, so it does not indicate an effect.
 
 # %% [markdown]
 # `cg.forecast()` fits a `CausalForecaster` on the graph. The MAE below is **in-sample**: the forecaster is fitted on `df3` and its one-step predictions are scored on the same `df3`. See the [Causal Forecasting notebook](forecasting.ipynb) for a train/test evaluation.
@@ -481,10 +546,12 @@ print('  PCM(data)           — Projected covariance measure (conditional mean)
 # | `run_lpcmci()` | LPCMCI | Yes | `-->`, `o->`, `<->`, `o-o`, `x-x` |
 # | `run_tigramite(method=...)` | Any of the above + pcalg, pc_stable, fullci, bivci | Depends | Varies |
 #
-# All return `(G_hat, info)` where `G_hat` is a standard binary `(d, d, max_lag+1)` graph compatible with:
+# All return `(G_hat, info)` by default, where `G_hat` is a standard binary `(d, d, max_lag+1)` graph compatible with:
 # - `evaluate_graph()` for benchmarking
 # - `wrap_graph()` for effects, queries, forecasting
 # - `compare_graphs()` for visualization
+#
+# With `return_result=True`, `run_pcmci()`, `run_pcmciplus()` and `run_lpcmci()` return a `TigramiteResult` instead: a causal-ts result object with `.cg_tig`, `.plot()`, `.to_marks()` (tigramite's own marks) and the DoWhy bridge methods. See section 4b for the result object and `discover_df`, and section 6 for effect estimation on it.
 #
 # The binary conversion keeps `-->` and `o->` as directed edges, never writes `<->`, and by default drops lag-0 `o-o` and `x-x` marks, because a binary array cannot express "adjacent but unoriented". The raw graph is always in `info["graph_raw"]`; to keep lag-0 adjacencies as symmetric 1s, re-render it with `causalts.tigramite_discovery.tigramite_graph_to_binary(info["graph_raw"], undirected="bidirected", conflict="bidirected")`.
 #

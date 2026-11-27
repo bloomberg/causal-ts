@@ -141,6 +141,7 @@ from .algorithms import list_algorithms as _list_algorithms  # noqa: E402
 ALGORITHM_CHOICES = _list_algorithms()
 # Everything else in ALGORITHM_CHOICES is a third-party plugin (see .algorithms).
 from .baselines import BASELINE_ALGORITHMS as _BASELINE_ALGORITHMS  # noqa: E402
+from .tigramite_result import TIGRAMITE_ALGORITHMS as _TIGRAMITE_ALGORITHMS  # noqa
 
 _BUILTIN_ALGORITHMS = (
     "cdnots",
@@ -150,6 +151,15 @@ _BUILTIN_ALGORITHMS = (
     "grace-ss",
     "reap",
 ) + _BASELINE_ALGORITHMS
+_BUILTIN_ALGORITHMS += _TIGRAMITE_ALGORITHMS
+# Tigramite-native CI tests causal-ts does not register (discover only, with
+# --algorithm pcmci/pcmciplus/lpcmci).
+from .tigramite_result import TIGRAMITE_CI_TESTS as _TIG_CI  # noqa: E402
+
+# cmiknn_mixed is left out: it needs a data-type mask the wrappers do not pass.
+_TIGRAMITE_ONLY_CI_TESTS = [
+    t for t in _TIG_CI if t not in CI_TEST_CHOICES and t != "cmiknn_mixed"
+]
 from .synthetic_data.synthetic_datasets import DATASET_FUNCS  # noqa: E402
 
 PLOT_FORMAT_CHOICES = ["png", "pdf", "svg"]
@@ -499,9 +509,12 @@ def inspect(data, var_names, index_col, max_lag):
 )
 @click.option(
     "--ci-test",
-    type=click.Choice(CI_TEST_CHOICES),
+    type=click.Choice(CI_TEST_CHOICES + _TIGRAMITE_ONLY_CI_TESTS),
     default="parcorr-gpu",
-    help="Conditional independence test. Run 'ci-test-info' for selection guidance.",
+    help="Conditional independence test. Run 'ci-test-info' for selection guidance. "
+    f"{', '.join(_TIGRAMITE_ONLY_CI_TESTS)}: tigramite's own, "
+    "--algorithm pcmci/pcmciplus/lpcmci only. With those algorithms parcorr, "
+    "cmiknn and gsquared also run tigramite's own test.",
 )
 @click.option("--max-lag", type=int, default=3, help="Maximum time lag.")
 @click.option(
@@ -739,8 +752,9 @@ def inspect(data, var_names, index_col, max_lag):
     default=None,
     help=(
         "Missing-value strategy. Works with cdnots, cdnots+, cedar, grace, grace-ss "
-        "and reap; lges, tges, ges, lasso-var, granger and varlingam take var_em "
-        "only. 'pairwise_complete': CI tests drop NaN rows per test. "
+        "and reap; pcmci, pcmciplus, lpcmci, lges, tges, ges, lasso-var, granger "
+        "and varlingam take var_em only. 'pairwise_complete': CI tests drop NaN "
+        "rows per test. "
         "'var_em': fill via VAR-EM before discovery. "
         "'causal_iterative': VAR-EM + Markov-blanket Ridge (cdnots only)."
     ),
@@ -870,6 +884,18 @@ def discover(
     # dfcit sizes its shuffle null for the threshold its unconditional tests
     # face; in Cedar those are Cond1 only (Cond2 accepts on p >= alpha_cond2).
     ci_alpha = alpha_cond1 if algorithm == "cedar" else alpha
+    if algorithm in _TIGRAMITE_ALGORITHMS:
+        # Tigramite tests at its wrapper's levels (PCMCI+: pc_alpha=0.01 unless
+        # --alpha), not the generic 0.05 above: size dfcit for the smallest.
+        from . import tigramite_discovery as _tdm
+        from .tigramite_result import _TIGRAMITE_METHODS as _TM
+        from .tigramite_result import _min_threshold
+
+        _given = ctx.get_parameter_source("alpha") != click.core.ParameterSource.DEFAULT
+        _fn, _key = _TM[algorithm]
+        ci_alpha = _min_threshold(
+            _tdm, _fn, algorithm, _key, alpha if _given else None, {}
+        )
     if do_validate and algorithm in ("grace", "grace-ss", "reap"):
         raise click.BadParameter(
             "--validate is not supported for GRACE or REAP (re-running the "
@@ -1041,6 +1067,40 @@ def discover(
                 param_hint="--max-lag",
             )
         include_c = False
+    is_tigramite = algorithm in _TIGRAMITE_ALGORITHMS
+    if ci_test in _TIGRAMITE_ONLY_CI_TESTS and not is_tigramite:
+        raise click.BadParameter(
+            f"{ci_test} is a tigramite CI test; it runs only with --algorithm "
+            f"{'/'.join(_TIGRAMITE_ALGORITHMS)}.",
+            param_hint="--ci-test",
+        )
+    tigramite_kw = {}
+    if is_tigramite:
+        # Tigramite: no C node or lag list; complete data only.
+        explicit = [
+            flag
+            for flag, param in (("--c-preset", "c_preset"), ("--lag-list", "lag_list"))
+            if ctx.get_parameter_source(param) != click.core.ParameterSource.DEFAULT
+        ]
+        if (
+            include_c
+            and ctx.get_parameter_source("include_c")
+            != click.core.ParameterSource.DEFAULT
+        ):
+            explicit.append("--include-c")
+        # The wrappers take complete data: var_em is applied before the run.
+        if impute in ("pairwise_complete", "causal_iterative"):
+            explicit.append(f"--impute {impute}")
+        if explicit:
+            raise click.BadParameter(
+                f"{', '.join(explicit)} {'does' if len(explicit) == 1 else 'do'} not "
+                f"apply to --algorithm {algorithm} (no C node or lag list; "
+                "missing values: --impute var_em).",
+                param_hint=explicit[0],
+            )
+        if ctx.get_parameter_source("alpha") != click.core.ParameterSource.DEFAULT:
+            tigramite_kw["alpha"] = alpha
+        include_c = False
     if is_grace and refine == "shrink" and impute == "pairwise_complete":
         raise click.BadParameter(
             "REAP needs complete data; use --impute var_em.",
@@ -1067,7 +1127,35 @@ def discover(
         f"max_lag: {max_lag}",
     )
 
-    if is_baseline:
+    from .tigramite_result import is_tigramite_ci_test
+
+    tigramite_native_ci = is_tigramite and (
+        ctx.get_parameter_source("ci_test") == click.core.ParameterSource.DEFAULT
+        or is_tigramite_ci_test(ci_test)
+    )
+    if (
+        tigramite_native_ci
+        and ctx.get_parameter_source("ci_test") != click.core.ParameterSource.DEFAULT
+        and ci_test in CI_TEST_CHOICES
+    ):
+        # parcorr / cmiknn / gsquared: tigramite implements them, so its own
+        # test runs (as run_tigramite_algorithm does), not causal-ts's.
+        _log(
+            ctx,
+            f"Note: with --algorithm {algorithm}, --ci-test {ci_test} runs "
+            f"tigramite's own {ci_test}, not causal-ts's.",
+        )
+    if is_tigramite and not tigramite_native_ci and ci_test == "parcorr-gpu":
+        # Same value as the default, different engine: say which one runs.
+        _log(
+            ctx,
+            f"Note: --ci-test parcorr-gpu with --algorithm {algorithm} runs "
+            "causal-ts ParCorrGPU through an adapter; leave --ci-test unset for "
+            "tigramite's own ParCorr.",
+        )
+    if tigramite_native_ci and device is not None:
+        _log(ctx, f"Note: --device {device} does not apply to tigramite's CI tests.")
+    if is_baseline or tigramite_native_ci:
         ci = None
     elif ci_test == "cmiknn-mixed-gpu":
         if algorithm in ("cedar", "grace-ss"):
@@ -1136,6 +1224,7 @@ def discover(
         "grace-ss",
         "reap",
         *_BASELINE_ALGORITHMS,
+        *_TIGRAMITE_ALGORITHMS,
     ):
         _log(
             ctx,
@@ -1507,6 +1596,86 @@ def discover(
             f"{n_edges} edges, {elapsed:.1f}s",
         )
 
+    elif is_tigramite:
+        _log(ctx, f"Running {algorithm} (tigramite)...")
+        import inspect as _inspect
+
+        from . import tigramite_discovery as _td
+        from .tigramite_result import _TIGRAMITE_METHODS, run_tigramite_algorithm
+
+        if impute == "var_em":
+            if df.isna().any().any():
+                from .imputation import var_em_impute
+
+                _log(ctx, "Imputation strategy: var_em")
+                df = var_em_impute(df, **_impute_kwargs)
+            else:
+                _log(ctx, "Warning: --impute var_em set but no NaN values; skipping.")
+        summary["impute"] = impute
+        summary["impute_kwargs"] = _impute_kwargs
+        # Default --ci-test, or a name tigramite implements: tigramite's own test.
+        if tigramite_native_ci:
+            tigramite_kw["ci_test"] = None if ci_test == "parcorr-gpu" else ci_test
+            if ctx.obj["seed"] is not None:
+                # Every tigramite CI test takes seed= (its shuffle tests).
+                tigramite_kw["ci_kwargs"] = {"seed": ctx.obj["seed"]}
+        else:
+            tigramite_kw["ci_test"] = ci
+        summary["ci_test"] = (
+            f"{tigramite_kw['ci_test'] or 'parcorr'} (tigramite)"
+            if tigramite_native_ci
+            else ci_test
+        )
+        fn_name, alpha_key = _TIGRAMITE_METHODS[algorithm]
+        summary["alpha"] = tigramite_kw.get(
+            "alpha",
+            _inspect.signature(getattr(_td, fn_name)).parameters[alpha_key].default,
+        )
+        summary["alpha_parameter"] = alpha_key
+        try:
+            tig_res = run_tigramite_algorithm(algorithm, df, max_lag, **tigramite_kw)
+        except ImportError as e:
+            # gpdc_torch's gpytorch is not in the tigramite extra.
+            hint = (
+                ""
+                if getattr(e, "name", None) == "gpytorch"
+                else " (or pip install 'causal-ts[tigramite]')"
+            )
+            raise click.ClickException(f"{e}{hint}")
+        except ValueError as e:
+            raise click.ClickException(str(e))
+        np.save(os.path.join(outdir, "estimated_graph.npy"), tig_res.cg_tig)
+        summary["output_files"]["graph"] = "estimated_graph.npy"
+        # Tigramite's own marks (o-o, x-x, o->, <->): cg_tig leaves out lag-0
+        # o-o / x-x links.
+        np.save(os.path.join(outdir, "edge_marks.npy"), tig_res.to_marks())
+        summary["output_files"]["edge_marks"] = "edge_marks.npy"
+        if want_pvalues:
+            np.save(os.path.join(outdir, "pvalues.npy"), tig_res.p_matrix)
+            summary["output_files"]["pvalues"] = "pvalues.npy"
+        summary["include_C"] = False
+
+        if save_plot:
+            try:
+                result = tig_res.plot()
+                fig = result[0] if isinstance(result, tuple) else result
+                fname = f"network.{plot_format}"
+                fig.savefig(os.path.join(outdir, fname), dpi=150, bbox_inches="tight")
+                plt.close(fig)
+                summary["output_files"]["network_plot"] = fname
+            except Exception as e:
+                _log(ctx, f"Warning: could not save network plot: {e}")
+
+        n_edges = int(tig_res.cg_tig.astype(bool).sum())
+        elapsed = _time.time() - t0
+        summary["elapsed_seconds"] = round(elapsed, 1)
+        summary["n_edges"] = n_edges
+        _log(
+            ctx,
+            f"{algorithm} complete. Graph shape: {tig_res.cg_tig.shape}, "
+            f"{n_edges} edges, {elapsed:.1f}s",
+        )
+
     else:
         # Third-party algorithm from the plugin registry. The built-ins get
         # bespoke branches above because each saves extra artifacts (gate values,
@@ -1540,6 +1709,31 @@ def discover(
         _pv = np.load(_pv_path) if os.path.exists(_pv_path) else None
         summary["edges"] = edges_from_graph(_g, var_name_list, _pv)
         summary["diagnostics"] = diagnostics_from_graph(_g, var_name_list)
+        if is_tigramite:
+            # cg_tig renders LPCMCI's o-> (a possible cause) as directed, keeps
+            # lagged o-o / x-x, and leaves out lag-0 o-o / x-x, <-> and conflict
+            # marks: give each edge tigramite's mark and list the links cg_tig
+            # does not hold.
+            _marks = tig_res.to_marks()
+            _idx = {str(v): k for k, v in enumerate(var_name_list)}
+            for e in summary["edges"]:
+                e["mark"] = str(_marks[_idx[e["source"]], _idx[e["target"]], e["lag"]])
+            from .tigramite_result import unresolved_marks
+
+            # Keys renamed to match the edge records.
+            summary["unresolved_links"] = [
+                {"source": u["a"], "target": u["b"], "lag": u["lag"], "mark": u["mark"]}
+                for u in unresolved_marks(
+                    _marks, [str(v) for v in var_name_list], present=_g
+                )
+            ]
+            # `empty` counts the binary graph only: links tigramite left
+            # unresolved still mean it found adjacencies.
+            _n_unres = len(summary["unresolved_links"])
+            summary["diagnostics"]["n_unresolved"] = _n_unres
+            summary["diagnostics"]["empty"] = bool(
+                summary["diagnostics"]["empty"] and _n_unres == 0
+            )
 
         if do_validate:
             _log(ctx, f"Validating: bootstrap stability over {n_bootstrap} windows...")
@@ -1550,6 +1744,23 @@ def discover(
                     from .baselines import run_baseline
 
                     return run_baseline(algorithm, sub, max_lag, **baseline_kw).cg_tig
+                if is_tigramite:
+                    from .tigramite_result import run_tigramite_algorithm
+
+                    _kw = dict(tigramite_kw)
+                    if not tigramite_native_ci:
+                        # Fresh causal-ts test per window (no full-sample state
+                        # or caches), at the main run's alpha.
+                        _kw["ci_test"] = _make_ci_test(
+                            ci_test,
+                            sub.values,
+                            device,
+                            seed=ctx.obj["seed"],
+                            alpha=ci_alpha,
+                        )
+                    return run_tigramite_algorithm(
+                        algorithm, sub, max_lag, **_kw
+                    ).cg_tig
                 # Fresh CI test per window; mirror the main run's exact config
                 # by closing over this command's parameters.
                 _ci = _make_ci_test(
@@ -1630,6 +1841,12 @@ def discover(
                     "artifact can be stable yet wrong)."
                 ),
             }
+            if is_tigramite:
+                summary["stability"]["note"] += (
+                    " Computed on the binary graph (estimated_graph.npy): o-> "
+                    "counts as directed; lag-0 o-o / x-x, <-> and conflict "
+                    "links are not covered."
+                )
 
     _save_json(summary, os.path.join(outdir, "summary.json"))
     _log(ctx, f"Results saved to {outdir}")
