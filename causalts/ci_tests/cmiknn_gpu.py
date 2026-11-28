@@ -4,7 +4,7 @@
 import numpy as np
 import torch
 
-from .cit_test import CIT_Base
+from .cit_test import CIT_Base, is_constant
 
 
 class CMIknnGPU(CIT_Base):
@@ -122,6 +122,9 @@ class CMIknnGPU(CIT_Base):
             y = y.reshape(-1, 1)
         if z is not None and z.ndim == 1:
             z = z.reshape(-1, 1)
+        if is_constant(x) or is_constant(y):
+            self.pvalue_cache[(cache_key, param_hash)] = [1.0, 0.0]
+            return 1.0, 0.0
 
         if z is not None:
             array = np.hstack([x, y, z]).T  # (dim, T)
