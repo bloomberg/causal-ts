@@ -22,6 +22,11 @@ from .result import CedarResult
 
 logger = logging.getLogger(__name__)
 
+_LAG_PVALUE_METHODS = {"t_test", "circular_shift", "permutation"}
+_NORMALIZE_CHOICES = {"minmax", "zscore", None}
+_MULTI_LAG_KEEP_CHOICES = {"first", "all"}
+_DIRECTION_METHODS = {"dcor", "cross_lag"}
+
 
 def _normalize(data: np.ndarray, method: str = "minmax") -> np.ndarray:
     if method == "minmax":
@@ -170,6 +175,14 @@ class Cedar:
         never used a path length. Passing a value warns.
     include_lag0 : bool
         Include contemporaneous effects (lag 0).
+    multi_lag : bool, default True
+        Test every significant lag of a pair, not only the strongest one.
+    multi_lag_keep : str, default ``"first"``
+        With ``multi_lag``: ``"first"`` keeps the first accepted lag per pair,
+        ``"all"`` keeps every accepted lag.
+    target_var : str or None, default None
+        Column of ``df`` to discover the causes and effects of. Only the pairs
+        involving it are tested (O(d)). ``None`` runs full discovery.
     n_jobs : int
         Parallelism for lag importance computation.
     verbose : bool
@@ -222,6 +235,19 @@ class Cedar:
         _IMPUTE_CHOICES = {None, "pairwise_complete", "var_em"}
         if impute not in _IMPUTE_CHOICES:
             raise ValueError(f"impute must be one of {_IMPUTE_CHOICES}, got {impute!r}")
+        for name, value, choices in (
+            ("lag_pvalue_method", lag_pvalue_method, _LAG_PVALUE_METHODS),
+            ("normalize", normalize, _NORMALIZE_CHOICES),
+            ("multi_lag_keep", multi_lag_keep, _MULTI_LAG_KEEP_CHOICES),
+            ("direction_method", direction_method, _DIRECTION_METHODS),
+        ):
+            if value not in choices:
+                raise ValueError(f"{name} must be one of {choices}, got {value!r}")
+        if target_var is not None and target_var not in df.columns:
+            raise ValueError(
+                f"target_var {target_var!r} is not a column of df; "
+                f"columns: {list(df.columns)}"
+            )
         self.impute = impute
         self.impute_kwargs = impute_kwargs or {}
 
@@ -1117,12 +1143,15 @@ def run_cedar(
     lag_method : str
         Lag importance method: ``"partial_dcor"`` (default), ``"dcor"``,
         ``"pearson"``, or ``"lasso"``.  See :class:`Cedar` for details.
+    lag_pvalue_method : str, default ``"t_test"``
+        Lag significance testing: ``"t_test"``, ``"circular_shift"`` or
+        ``"permutation"`` (legacy). See :class:`Cedar` for details.
     lag_alpha : float
         P-value threshold for lag significance.
     n_permutations : int
         Permutations for lag significance.
     normalize : str or None
-        Normalization method.
+        Normalization method: ``"minmax"`` (default), ``"zscore"`` or ``None``.
     filter_children : bool
         Apply direction strength filter.
     direction_threshold : float
@@ -1139,6 +1168,13 @@ def run_cedar(
         Deprecated, has no effect (see :class:`Cedar`). Passing a value warns.
     include_lag0 : bool
         Include contemporaneous effects.
+    multi_lag : bool, default True
+        Test every significant lag of a pair, not only the strongest one.
+    multi_lag_keep : str, default ``"first"``
+        With ``multi_lag``: ``"first"`` or ``"all"`` accepted lags per pair.
+    target_var : str or None, default None
+        Column of ``df`` to discover the causes and effects of (O(d)).
+        ``None`` runs full discovery.
     n_jobs : int
         Parallelism for lag computation.
     verbose : bool

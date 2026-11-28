@@ -373,7 +373,7 @@ def compute_lag_pvalues(
             include_lag0,
             target_col,
         )
-    else:
+    elif method == "permutation":
         return _pvalues_random_permutation(
             data,
             lag_importance,
@@ -383,6 +383,10 @@ def compute_lag_pvalues(
             include_lag0,
             target_col,
         )
+    raise ValueError(
+        "method must be one of {'t_test', 'circular_shift', 'permutation'}, "
+        f"got {method!r}"
+    )
 
 
 def _pvalues_t_test(
