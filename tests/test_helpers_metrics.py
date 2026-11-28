@@ -107,6 +107,33 @@ def test_precision_recall_3d_lag0_only_graph():
     assert r == pytest.approx(1 / 2)
 
 
+@pytest.mark.filterwarnings("error")
+def test_precision_recall_3d_empty_truth_empty_estimate():
+    gt = np.zeros((3, 3, 2), dtype=int)
+    est = np.zeros_like(gt)
+    p, r = precision_recall_3d(gt, est)
+    assert (p, r) == (0.0, 0.0)
+
+
+@pytest.mark.filterwarnings("error")
+def test_precision_recall_3d_empty_truth_nonempty_estimate():
+    gt = np.zeros((3, 3, 2), dtype=int)
+    est = np.zeros_like(gt)
+    est[0, 1, 1] = 1  # FP: truth has no links
+    p, r = precision_recall_3d(gt, est)
+    assert (p, r) == (0.0, 0.0)
+
+
+@pytest.mark.filterwarnings("error")
+def test_precision_recall_3d_only_lag1_self_loops_in_truth():
+    gt = np.zeros((3, 3, 2), dtype=int)
+    gt[0, 0, 1] = gt[1, 1, 1] = 1  # AR self-loops: dropped, so truth is empty
+    est = np.zeros_like(gt)
+    est[0, 1, 1] = 1
+    p, r = precision_recall_3d(gt, est)
+    assert (p, r) == (0.0, 0.0)
+
+
 # --------------------------------------------------------------------------
 # LogFormatter / set_up_logging
 # --------------------------------------------------------------------------

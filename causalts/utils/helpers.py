@@ -427,7 +427,10 @@ def precision_recall_3d(g_true_3d, g_est_3d):
     is the total number of links in the estimated graph. Recall is
     calculated as ``nTP / L``, where ``L`` is the total number of links
     in the ground truth graph. A small value (1e-12) is added to ``nDisc``
-    to avoid division by zero.
+    to avoid division by zero, so precision is 0.0 for an empty estimate.
+    If the ground truth has no links once lag-1 self-loops are removed,
+    recall is defined as 0.0 with no warning, matching ``evaluate_graph``.
+    This differs from ``recall``, which returns ``np.nan`` for an empty set.
     """
     # Exclude lag-1 self-loops (autoregression) from ground truth so CEDAR,
     # which never discovers Xi(t-1)→Xi(t) by design, is not penalised for them.
@@ -441,7 +444,8 @@ def precision_recall_3d(g_true_3d, g_est_3d):
     L = g_true_3d.sum()  # number of links
     nDisc = g_est_3d.sum()
     nDisc = nDisc + 1e-12 if nDisc == 0 else nDisc
-    return nTP / nDisc, nTP / L  # precision, recall
+    recall = nTP / L if L > 0 else 0.0
+    return nTP / nDisc, recall  # precision, recall
 
 
 # Logging formatter supporting colorized output
