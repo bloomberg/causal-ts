@@ -46,6 +46,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+* The DoWhy bridge methods on `CausalResult` (`estimate_effect`, `fit_scm`, `summary`, ...)
+  have docstrings, so they show up in the API reference and `help()`.
 * `FeatureSelectionResult.to_design_matrix(dropna=True)` drops only as many leading
   rows as the largest lag it actually uses, not always `max_lag`, so its row count now
   depends on the selection: align the target on the index (`y = df[target].loc[X.index]`).
