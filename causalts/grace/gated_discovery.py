@@ -1497,6 +1497,8 @@ class StabilitySelector:
         """
         import matplotlib.pyplot as plt
 
+        from ..result import _resolve_var_names
+
         assert self._selections, "Must call run() first"
 
         # Group selections by lambda
@@ -1525,7 +1527,7 @@ class StabilitySelector:
         # Flatten to [cause*lag, effect] for visualization
         scores_flat = scores.reshape(d, -1).T  # [effect*lag, cause]
 
-        labels = var_names or [f"X{i}" for i in range(d)]
+        labels = _resolve_var_names(var_names, [f"X{i}" for i in range(d)])
         lag_labels = []
         for e in range(d):
             for lag in range(L):

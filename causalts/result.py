@@ -6,6 +6,22 @@ from __future__ import annotations
 import numpy as np
 
 
+def _resolve_var_names(var_names, fallback):
+    """Return ``var_names`` as a list, falling back without truthiness checks.
+
+    ``pd.Index`` and ``np.ndarray`` raise ``ValueError`` on ``bool(...)``, so
+    ``var_names or fallback`` fails whenever a caller passes ``df.columns`` or
+    an array.
+    """
+    if var_names is not None:
+        names = list(var_names)
+        if len(names) > 0:
+            return names
+    if fallback is None:
+        return None
+    return list(fallback)
+
+
 class CausalResult:
     """Base result object for all causal discovery algorithms.
 
@@ -63,7 +79,7 @@ class CausalResult:
 
         return plot_graph(
             graph=graph,
-            var_names=list(var_names or self.var_names),
+            var_names=_resolve_var_names(var_names, getattr(self, "var_names", None)),
             **kwargs,
         )
 

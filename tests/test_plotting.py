@@ -1990,3 +1990,267 @@ def test_plot_metrics_summary_rejects_scores():
     scores = gt * 0.7
     with pytest.raises(ValueError, match="binary graph"):
         plot_metrics_summary(gt, scores)
+
+
+def _node_label_texts(ax):
+    """Return node label strings drawn at node Ellipse centers."""
+    from matplotlib.patches import Ellipse
+
+    centers = {
+        (round(float(p.center[0]), 6), round(float(p.center[1]), 6))
+        for p in ax.patches
+        if isinstance(p, Ellipse)
+    }
+    return {
+        t.get_text()
+        for t in ax.texts
+        if (round(float(t.get_position()[0]), 6), round(float(t.get_position()[1]), 6))
+        in centers
+    }
+
+
+def _make_sample_results(include_C=False):
+    """Build lightweight CdnotsResult and CedarResult instances for plot tests."""
+    import pandas as pd
+
+    from causalts.cdnots.result import CdnotsResult
+    from causalts.cedar.result import CedarResult
+
+    df = pd.DataFrame(np.zeros((10, 3)), columns=["X0", "X1", "X2"])
+    d_graph = 4 if include_C else 3
+    g = np.zeros((d_graph, d_graph, 2), dtype=np.int8)
+    g[0, 1, 1] = 1
+    g[1, 2, 1] = 1
+    if include_C:
+        g[3, 0, 1] = 1
+
+    cdnots_res = CdnotsResult(
+        graph=None,
+        cg_tig=g,
+        pvalue_matrix=np.ones_like(g, dtype=float),
+        pvals=[],
+        var_names=list(df.columns),
+        num_lags=1,
+        lag_list=None,
+        include_C=include_C,
+        alpha=0.05,
+        priority=1,
+        stable=False,
+        lag_verify_stats=None,
+        df=df,
+    )
+    g_cedar = g[:3, :3, :]
+    cedar_res = CedarResult(
+        graph=g_cedar,
+        val_matrix=g_cedar.astype(float),
+        pvalue_matrix=np.ones_like(g_cedar, dtype=float),
+        lag_importance=g_cedar.astype(float),
+        lag_pvalues=np.ones_like(g_cedar, dtype=float),
+        selected_lags=np.ones((3, 3)),
+        var_names=list(df.columns),
+        max_lag=1,
+        alpha_cond1=0.05,
+        alpha_cond2=0.05,
+        n_tests=0,
+        pruned=True,
+        df=df,
+    )
+    return cdnots_res, cedar_res
+
+
+@pytest.mark.parametrize("kind", ["cdnots", "cdnots_with_c", "cedar"])
+@pytest.mark.parametrize("names_kind", ["index", "ndarray"])
+def test_result_plot_accepts_index_and_ndarray_var_names(kind, names_kind):
+    # Regression test for https://github.com/bloomberg/causal-ts/issues/207.
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    from matplotlib.figure import Figure
+
+    include_C = kind == "cdnots_with_c"
+    cdnots_res, cedar_res = _make_sample_results(include_C=include_C)
+    res = cedar_res if kind == "cedar" else cdnots_res
+
+    override = ["A", "B", "D"]
+    var_names = (
+        pd.DataFrame(columns=override).columns
+        if names_kind == "index"
+        else np.array(override)
+    )
+
+    fig, ax = res.plot(var_names=var_names)
+    try:
+        assert isinstance(fig, Figure)
+        expected = set(override) | ({"C"} if include_C else set())
+        assert _node_label_texts(ax) == expected
+    finally:
+        plt.close(fig)
+
+
+@pytest.mark.parametrize("kind", ["cdnots", "cdnots_with_c", "cedar"])
+@pytest.mark.parametrize("empty_kind", ["none", "list", "index", "ndarray"])
+def test_result_plot_empty_and_none_var_names_fall_back(kind, empty_kind):
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    from matplotlib.figure import Figure
+
+    include_C = kind == "cdnots_with_c"
+    cdnots_res, cedar_res = _make_sample_results(include_C=include_C)
+    res = cedar_res if kind == "cedar" else cdnots_res
+
+    if empty_kind == "none":
+        fig, ax = res.plot()
+    else:
+        empty = (
+            []
+            if empty_kind == "list"
+            else (pd.Index([]) if empty_kind == "index" else np.array([]))
+        )
+        fig, ax = res.plot(var_names=empty)
+
+    try:
+        assert isinstance(fig, Figure)
+        expected = set(res.var_names) | ({"C"} if include_C else set())
+        assert _node_label_texts(ax) == expected
+    finally:
+        plt.close(fig)
+
+
+def test_causal_result_plot_handles_none_and_index_self_var_names():
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    from matplotlib.figure import Figure
+
+    from causalts.result import CausalResult
+
+    res = CausalResult.__new__(CausalResult)
+    res.cg_tig = _make_graph()
+    res.var_names = None
+
+    fig, ax = res.plot()
+    try:
+        assert isinstance(fig, Figure)
+        assert _node_label_texts(ax) == {"0", "1", "2"}
+    finally:
+        plt.close(fig)
+
+    res.var_names = pd.Index(["P", "Q", "R"])
+    fig, ax = res.plot()
+    try:
+        assert isinstance(fig, Figure)
+        assert _node_label_texts(ax) == {"P", "Q", "R"}
+    finally:
+        plt.close(fig)
+
+
+@pytest.mark.parametrize(
+    "names_kind",
+    ["index", "ndarray", "none", "empty_list", "empty_index", "empty_ndarray"],
+)
+def test_tigramite_result_plot_marks_accepts_array_like_var_names(names_kind):
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    from matplotlib.figure import Figure
+
+    from causalts.tigramite_result import TigramiteResult
+
+    df = pd.DataFrame(np.zeros((10, 3)), columns=["X0", "X1", "X2"])
+    g = _make_graph()
+    marks = np.full((3, 3, 2), "", dtype="<U3")
+    marks[0, 1, 1] = "-->"
+    marks[1, 2, 0] = "o-o"
+    marks[2, 1, 0] = "o-o"
+    res = TigramiteResult(g, df, {"method": "pcmciplus", "graph_raw": marks})
+
+    override = ["A", "B", "D"]
+    if names_kind == "index":
+        arg, expected = pd.Index(override), set(override)
+    elif names_kind == "ndarray":
+        arg, expected = np.array(override), set(override)
+    elif names_kind == "none":
+        arg, expected = None, {"X0", "X1", "X2"}
+    elif names_kind == "empty_list":
+        arg, expected = [], {"X0", "X1", "X2"}
+    elif names_kind == "empty_index":
+        arg, expected = pd.Index([]), {"X0", "X1", "X2"}
+    else:
+        arg, expected = np.array([]), {"X0", "X1", "X2"}
+
+    fig, ax = res.plot(var_names=arg)
+    try:
+        assert isinstance(fig, Figure)
+        assert _node_label_texts(ax) == expected
+    finally:
+        plt.close(fig)
+
+
+@pytest.mark.parametrize(
+    "names_kind, expected_x",
+    [
+        ("index", ["a", "b"]),
+        ("ndarray", ["a", "b"]),
+        ("none", ["X0", "X1"]),
+        ("empty_list", ["X0", "X1"]),
+        ("empty_index", ["X0", "X1"]),
+        ("empty_ndarray", ["X0", "X1"]),
+    ],
+)
+def test_stability_selector_plot_stability_path_var_names(names_kind, expected_x):
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    from matplotlib.figure import Figure
+
+    from causalts.grace.gated_discovery import StabilitySelector
+
+    sel = StabilitySelector(num_vars=2, max_lag=1)
+    a = np.zeros((2, 2, 2), dtype=np.int8)
+    a[0, 0, 1] = 1
+    sel._selections = [a, a, np.zeros_like(a)]
+    sel._lambda_values = [0.01, 0.01, 1.0]
+    sel._stability_scores = np.mean(sel._selections[:2], axis=0)
+
+    if names_kind == "index":
+        arg = pd.Index(["a", "b"])
+    elif names_kind == "ndarray":
+        arg = np.array(["a", "b"])
+    elif names_kind == "none":
+        arg = None
+    elif names_kind == "empty_list":
+        arg = []
+    elif names_kind == "empty_index":
+        arg = pd.Index([])
+    else:
+        arg = np.array([])
+
+    fig = sel.plot_stability_path(var_names=arg)
+    try:
+        assert isinstance(fig, Figure)
+        right = fig.axes[1]
+        assert [t.get_text() for t in right.get_xticklabels()] == expected_x
+        assert [t.get_text() for t in right.get_yticklabels()] == [
+            f"{expected_x[1]}_L1"
+        ]
+    finally:
+        plt.close(fig)
+
+
+@pytest.mark.parametrize("names_kind", ["index", "ndarray"])
+@pytest.mark.parametrize("target_node", [0, [0, 2]])
+def test_plot_graph_target_node_with_index_or_ndarray_var_names(
+    names_kind, target_node
+):
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    from matplotlib.figure import Figure
+
+    from causalts.plotting import plot_graph
+
+    g = _make_graph()
+    names = ["X", "Y", "Z"]
+    var_names = pd.Index(names) if names_kind == "index" else np.array(names)
+
+    fig, ax = plot_graph(g, var_names=var_names, target_node=target_node)
+    try:
+        assert isinstance(fig, Figure)
+        assert _node_label_texts(ax) == set(names)
+    finally:
+        plt.close(fig)

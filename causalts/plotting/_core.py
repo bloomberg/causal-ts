@@ -1834,7 +1834,7 @@ def plot_graph(
             target_key = (
                 t
                 if isinstance(t, str)
-                else (_var_names_lookup[idx] if var_names else idx)
+                else (_var_names_lookup[idx] if var_names is not None else idx)
             )
             special_nodes[(target_key, 0)] = nc
 

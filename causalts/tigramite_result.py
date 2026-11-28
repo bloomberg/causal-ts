@@ -24,7 +24,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from .result import CausalResult
+from .result import CausalResult, _resolve_var_names
 
 #: Algorithm name -> (wrapper in causalts.tigramite_discovery, the wrapper
 #: parameter a generic ``alpha`` sets).
@@ -190,7 +190,9 @@ class TigramiteResult(CausalResult):
 
             return plot_graph(
                 graph=self.to_marks(),
-                var_names=list(var_names or self.var_names),
+                var_names=_resolve_var_names(
+                    var_names, getattr(self, "var_names", None)
+                ),
                 **kwargs,
             )
         return super().plot(var_names=var_names, undirected=undirected, **kwargs)

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..result import CausalResult
+from ..result import CausalResult, _resolve_var_names
 
 
 class CdnotsResult(CausalResult):
@@ -300,12 +300,12 @@ class CdnotsResult(CausalResult):
             graph = self.to_marks()
         else:
             graph = self.to_binary(undirected=undirected)
-        names = list(var_names or self.var_names)
+        names = _resolve_var_names(var_names, getattr(self, "var_names", None))
 
         if self.include_C:
             if exclude_C:
                 graph = graph[: -self.num_c_cols, : -self.num_c_cols, :]
-            elif len(names) < graph.shape[0]:
+            elif names is not None and len(names) < graph.shape[0]:
                 # Label the C rows unless the caller's names already cover them.
                 if self.c_node_names is not None:
                     names = names + list(self.c_node_names)

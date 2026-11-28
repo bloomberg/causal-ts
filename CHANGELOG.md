@@ -61,6 +61,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `CausalResult.plot()`, `CdnotsResult.plot()`, `TigramiteResult.plot()`,
+  `StabilitySelector.plot_stability_path()`, and `plot_graph(..., target_node=...)`
+  now accept `pandas.Index` and NumPy arrays for `var_names` (such as
+  `df.columns`) and fall back on empty sequences without raising `ValueError` on
+  truthiness checks (#207).
 * `detect_confounded_clusters` (and so `check_tetrads`) tested the same tetrad
   twice and never tested `s02*s13 - s03*s12`, so a quartet could be reported as
   vanishing when that tetrad was significant, and the result depended on column
