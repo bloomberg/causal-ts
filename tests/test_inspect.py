@@ -392,3 +392,111 @@ def test_check_linearity_max_lag_beyond_series_length():
     res = check_linearity(data, max_lag=30)
     assert res["n_tested"] == len(res["results"]) > 0
     assert all(r["lag"] <= 10 for r in res["results"])
+
+
+# --- edges_from_graph / diagnostics_from_graph with appended C nodes ---------
+
+
+def _repro_graph():
+    # [A, C2, C]: A(t-1) -> C2(t), and the C node points to A and C2 at lag 0.
+    g = np.zeros((3, 3, 2), dtype=int)
+    g[0, 1, 1] = 1
+    g[2, 0, 0] = 1
+    g[2, 1, 0] = 1
+    return g
+
+
+def test_edges_from_graph_without_c_names_is_unchanged():
+    from causalts.inspection import diagnostics_from_graph, edges_from_graph
+
+    g = _repro_graph()
+    pv = np.full(g.shape, np.nan)
+    pv[0, 1, 1] = 0.01
+    assert edges_from_graph(g, ["A", "C2"], pv) == [
+        {"source": "A", "target": "C2", "lag": 1, "pvalue": 0.01},
+        {"source": "C2", "target": "A", "lag": 0, "pvalue": None},
+        {"source": "C2", "target": "C2", "lag": 0, "pvalue": None},
+    ]
+    d = diagnostics_from_graph(g, ["A", "C2"], 0.1)
+    assert d["n_edges"] == 3 and d["contemporaneous"] == 2 and d["saturated"]
+    assert "nonstationary_vars" not in d
+
+
+def test_c_node_edges_are_named_and_flagged():
+    from causalts.inspection import edges_from_graph
+
+    g = _repro_graph()
+    pv = np.arange(g.size, dtype=float).reshape(g.shape) / 100
+    edges = edges_from_graph(g, ["A", "C2"], pv, c_names=["C_lin"])
+    assert edges == [
+        {"source": "A", "target": "C2", "lag": 1, "pvalue": pv[0, 1, 1]},
+        {
+            "source": "C_lin",
+            "target": "A",
+            "lag": 0,
+            "pvalue": pv[2, 0, 0],
+            "c_node": True,
+        },
+        {
+            "source": "C_lin",
+            "target": "C2",
+            "lag": 0,
+            "pvalue": pv[2, 1, 0],
+            "c_node": True,
+        },
+    ]
+    # No recorded names: the plot's fallback label.
+    assert edges_from_graph(g, ["A", "C2"], c_names=[])[1]["source"] == "C"
+
+
+def test_diagnostics_cover_observed_block_with_c_names():
+    from causalts.inspection import diagnostics_from_graph
+
+    d = diagnostics_from_graph(_repro_graph(), ["A", "C2"], c_names=["C_lin"])
+    assert d == {
+        "n_edges": 1,
+        "density": 0.125,
+        "self_loops": 0,
+        "contemporaneous": 0,
+        "lagged": 1,
+        "max_in_degree": 1,
+        "hub": "C2",
+        "empty": False,
+        "saturated": False,
+        "nonstationary_vars": ["A", "C2"],
+    }
+
+
+def test_c_only_links_give_empty_diagnostics():
+    from causalts.inspection import diagnostics_from_graph, edges_from_graph
+
+    g = _repro_graph()
+    g[0, 1, 1] = 0
+    d = diagnostics_from_graph(g, ["x", "y"], c_names=["C_lin"])
+    assert d["empty"] is True and d["n_edges"] == 0 and d["hub"] is None
+    assert d["nonstationary_vars"] == ["x", "y"]
+    edges = edges_from_graph(g, ["x", "y"], c_names=["C_lin"])
+    assert len(edges) == 2 and all(e["c_node"] for e in edges)
+
+
+def test_c_node_names_never_clash_with_columns():
+    from causalts.inspection import c_node_labels, edges_from_graph
+
+    assert c_node_labels(["A", "C_lin"], 1, ["C_lin"]) == ["C_lin_1"]
+    assert c_node_labels(["C_lin", "C_lin_1"], 2, ["C_lin", "C_sin"]) == [
+        "C_lin_2",
+        "C_sin",
+    ]
+    # Fallback labels for unnamed C columns, also made unique.
+    assert c_node_labels(["C1"], 2) == ["C1_1", "C2"]
+    assert c_node_labels(["C"], 1) == ["C_1"]
+    # Multi-column preset: each C column keeps its own name.
+    g = np.zeros((4, 4, 2), dtype=int)
+    g[2, 0, 0] = g[3, 1, 0] = g[1, 3, 1] = 1
+    edges = edges_from_graph(g, ["C_lin", "C_sin"], c_names=["C_lin", "C_sin"])
+    assert [(e["source"], e["target"]) for e in edges] == [
+        ("C_sin", "C_sin_1"),
+        ("C_lin_1", "C_lin"),
+        ("C_sin_1", "C_sin"),
+    ]
+    assert all(e["c_node"] for e in edges)

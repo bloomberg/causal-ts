@@ -252,6 +252,16 @@ With `--json`, the `edges` list gives `{source, target, lag, pvalue}` per edge
 `n_edges`, `density`, `self_loops`, `contemporaneous`/`lagged`,
 `max_in_degree` + `hub`, and the `empty` / `saturated` flags.
 
+When the exported graph holds C (nonstationarity) nodes (CDNOTS, CDNOTS+ and
+CEDAR with the C node on), each edge to or from a C node is named after the
+result's `c_node_names` (e.g. `C_lin`; `C`, or `C1`, `C2`, ... when unnamed),
+with a `_1`, `_2`, ... suffix if that name is already a data column, and carries
+`"c_node": true`. Those edges stay in `edges` and in the top-level `n_edges`,
+but every count in `diagnostics` covers the edges between data variables only;
+`diagnostics.nonstationary_vars` lists the variables linked to a C node. GRACE,
+GRACE-SS and REAP export the observed variables only, so their output has no
+C-node entries.
+
 ### Stability check
 
 | Flag | Default | Description |

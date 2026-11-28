@@ -86,18 +86,53 @@ def _suggested_max_lag(arr, cap=5, default=3):
     return best if best >= 1 else default
 
 
-def edges_from_graph(graph, var_names, pvalue_matrix=None):
+def c_node_labels(var_names, n_c, c_names=None):
+    """Display names for ``n_c`` C-node columns appended after ``var_names``.
+
+    Uses ``c_names`` (a result's ``c_node_names``) where given, else ``"C"`` for
+    a single C column and ``"C1"``, ``"C2"``, ... for several, as
+    :meth:`CdnotsResult.plot` does. A name that is already a data column (or an
+    earlier C name) gets a ``_1``, ``_2``, ... suffix, so labels are unique.
+    """
+    given = [str(v) for v in (c_names or [])]
+    taken = {str(v) for v in var_names}
+    labels = []
+    for k in range(n_c):
+        if k < len(given):
+            base = given[k]
+        else:
+            base = "C" if n_c == 1 else f"C{k + 1}"
+        name, n = base, 0
+        while name in taken:
+            n += 1
+            name = f"{base}_{n}"
+        taken.add(name)
+        labels.append(name)
+    return labels
+
+
+def edges_from_graph(graph, var_names, pvalue_matrix=None, *, c_names=None):
     """Convert a ``(d, d, L+1)`` graph array to a list of named edge dicts.
 
     Convention matches ``cg_tig``: ``graph[cause, effect, lag] != 0`` means
     ``cause(t-lag) -> effect(t)``.  Returns
     ``[{"source", "target", "lag", "pvalue"}]`` (pvalue is ``None`` when no
     matrix is supplied or the edge has no finite p-value, e.g. it was not tested).
+
+    With ``c_names`` (the result's ``c_node_names``, possibly empty), rows and
+    columns past ``var_names`` are C nodes: they are labelled by
+    :func:`c_node_labels` and their edges carry ``"c_node": True``.
     """
+    n_obs = len(var_names)
+    labels = None
+    if c_names is not None:
+        labels = c_node_labels(var_names, max(np.shape(graph)[0] - n_obs, 0), c_names)
 
     def _name(idx):
         # Graphs may include appended C-node columns beyond the data variables.
-        return str(var_names[idx]) if idx < len(var_names) else f"C{idx}"
+        if idx < n_obs:
+            return str(var_names[idx])
+        return labels[idx - n_obs] if labels is not None else f"C{idx}"
 
     edges = []
     for i, j, lag in zip(*np.where(graph)):
@@ -109,18 +144,19 @@ def edges_from_graph(graph, var_names, pvalue_matrix=None):
                 pval = None
             if pval is not None and not np.isfinite(pval):
                 pval = None  # JSON has no NaN
-        edges.append(
-            {
-                "source": _name(i),
-                "target": _name(j),
-                "lag": int(lag),
-                "pvalue": pval,
-            }
-        )
+        edge = {
+            "source": _name(i),
+            "target": _name(j),
+            "lag": int(lag),
+            "pvalue": pval,
+        }
+        if labels is not None and (i >= n_obs or j >= n_obs):
+            edge["c_node"] = True
+        edges.append(edge)
     return edges
 
 
-def diagnostics_from_graph(graph, var_names, saturated_frac=0.5):
+def diagnostics_from_graph(graph, var_names, saturated_frac=0.5, *, c_names=None):
     """Compute deterministic red-flag diagnostics from a ``(d, d, L+1)`` graph.
 
     Returns a dict the interpretation playbook keys off (so the agent never
@@ -129,8 +165,21 @@ def diagnostics_from_graph(graph, var_names, saturated_frac=0.5):
     ``contemporaneous`` (lag 0) / ``lagged`` (lag >= 1) counts, ``max_in_degree``
     + ``hub`` (the target variable with the most incoming edges), and boolean
     ``empty`` / ``saturated`` flags.
+
+    With ``c_names`` (see :func:`edges_from_graph`), rows and columns past
+    ``var_names`` are C nodes: every count above covers the edges between data
+    variables only, and ``nonstationary_vars`` lists the variables linked to a
+    C node.
     """
     g = np.asarray(graph)
+    nonstationary = None
+    if c_names is not None:
+        n_obs = min(len(var_names), g.shape[0])
+        c_to_x = np.moveaxis(g[n_obs:, :n_obs], 1, 0).reshape(n_obs, -1)
+        x_to_c = g[:n_obs, n_obs:].reshape(n_obs, -1)
+        linked = (c_to_x != 0).any(axis=1) | (x_to_c != 0).any(axis=1)
+        nonstationary = [str(var_names[k]) for k in np.flatnonzero(linked)]
+        g = g[:n_obs, :n_obs]
     d = g.shape[0]
     L1 = g.shape[2] if g.ndim == 3 else 1
     n_edges = int(g.astype(bool).sum())
@@ -152,7 +201,7 @@ def diagnostics_from_graph(graph, var_names, saturated_frac=0.5):
         hub = str(var_names[j]) if j < len(var_names) else f"C{j}"
 
     density = (n_edges / total_slots) if total_slots else 0.0
-    return {
+    diag = {
         "n_edges": n_edges,
         "density": round(density, 4),
         "self_loops": self_loops,
@@ -163,6 +212,9 @@ def diagnostics_from_graph(graph, var_names, saturated_frac=0.5):
         "empty": n_edges == 0,
         "saturated": density > saturated_frac,
     }
+    if nonstationary is not None:
+        diag["nonstationary_vars"] = nonstationary
+    return diag
 
 
 def merge_lag0(refined, candidate):
