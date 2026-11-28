@@ -59,6 +59,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* Frames with pandas nullable numeric columns (`Float64`, `Int64`, `UInt32`, ...,
+  with `pd.NA` for missing values) no longer crash `inspect_df`, `discover_df`,
+  `run_cdnots`, `run_cdnots_plus`, `run_cedar` and `run_baseline`: those columns
+  are read as `float64` with `pd.NA` as `NaN`, and a low-cardinality `Int64`
+  column is detected as discrete like an `int64` one.
 * `detect_confounded_clusters` (and so `check_tetrads`) tested the same tetrad
   twice and never tested `s02*s13 - s03*s12`, so a quartet could be reported as
   vanishing when that tetrad was significant, and the result depended on column

@@ -5,6 +5,42 @@ import logging
 import sys
 
 import numpy as np
+import pandas as pd
+
+_NULLABLE_NUMERIC = (
+    pd.Float32Dtype,
+    pd.Float64Dtype,
+    pd.Int8Dtype,
+    pd.Int16Dtype,
+    pd.Int32Dtype,
+    pd.Int64Dtype,
+    pd.UInt8Dtype,
+    pd.UInt16Dtype,
+    pd.UInt32Dtype,
+    pd.UInt64Dtype,
+)
+
+
+def normalize_nullable_numeric(df):
+    """Return ``df`` with pandas nullable numeric columns as ``float64``.
+
+    ``Float64``, ``Int64``, ``UInt32`` and the other nullable numeric dtypes
+    turn a frame into an ``object`` array holding ``pd.NA``, which NumPy cannot
+    read. As ``float64`` with ``pd.NA`` as ``NaN`` they are ordinary numeric
+    columns. Only these dtypes are converted: other extension dtypes (sparse,
+    pyarrow-backed, ...) and all other columns, the index and the labels are
+    kept. ``df`` itself is not modified, and anything that is not a DataFrame
+    is returned unchanged.
+    """
+    if not isinstance(df, pd.DataFrame):
+        return df
+    cols = [i for i, dt in enumerate(df.dtypes) if isinstance(dt, _NULLABLE_NUMERIC)]
+    if not cols:
+        return df
+    df = df.copy()
+    for i in cols:
+        df.isetitem(i, df.iloc[:, i].astype("float64"))
+    return df
 
 
 def evaluate_graph(
