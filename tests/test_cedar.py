@@ -433,3 +433,45 @@ def test_autoreg_self_loops_have_no_pvalue(ar_df, ci_test):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+@pytest.mark.parametrize(
+    ("kw", "name"),
+    [
+        ({"lag_pvalue_method": "circular-shift"}, "lag_pvalue_method"),
+        ({"normalize": "z-score"}, "normalize"),
+        ({"multi_lag_keep": "middle"}, "multi_lag_keep"),
+        ({"direction_method": "crosslag"}, "direction_method"),
+        ({"target_var": "w"}, "target_var"),
+    ],
+)
+def test_run_cedar_rejects_unknown_option(small_df, ci_test, kw, name):
+    with pytest.raises(ValueError, match=name):
+        run_cedar(small_df, ci_test, max_lag=2, **kw)
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"lag_pvalue_method": "t_test"},
+        {"lag_pvalue_method": "circular_shift", "n_permutations": 20},
+        {"lag_pvalue_method": "permutation", "n_permutations": 20},
+        {"normalize": "minmax"},
+        {"normalize": "zscore"},
+        {"normalize": None},
+        {"multi_lag_keep": "first"},
+        {"multi_lag_keep": "all"},
+        {"direction_method": "dcor", "filter_children": True},
+        {"direction_method": "cross_lag", "filter_children": True},
+        {"target_var": "X1"},
+    ],
+)
+def test_run_cedar_accepts_documented_options(small_df, ci_test, kw):
+    assert isinstance(run_cedar(small_df, ci_test, max_lag=2, **kw), CedarResult)
+
+
+def test_compute_lag_pvalues_rejects_unknown_method(small_df):
+    data = small_df.values
+    importance = compute_lag_importance(data, max_lag=2)
+    with pytest.raises(ValueError, match="circular-shift"):
+        compute_lag_pvalues(data, importance, max_lag=2, method="circular-shift")
