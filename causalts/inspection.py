@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 
 from .cdnots.phase3_utils import _detect_discrete_cols
+from .utils.helpers import normalize_nullable_numeric
 from .utils.heteroskedasticity import check_variance_dependence
 from .utils.linearity import check_linearity
 from .utils.stationarity import check_stationarity_observed, detect_trend_form
@@ -193,8 +194,11 @@ def numeric_frame(df):
     them with floats into an object array; as 0/1 they are ordinary discrete
     columns for the checks, the discrete-aware CI tests and the lag embedding.
     A ``category`` column whose categories are numbers (as parquet and feather
-    keep them) is likewise a discrete numeric column.
+    keep them) is likewise a discrete numeric column, and nullable numeric
+    columns (``Float64``, ``Int64``, ...) become ``float64`` with ``pd.NA`` as
+    ``NaN``.
     """
+    df = normalize_nullable_numeric(df)
     cat_cols = [
         c
         for c in df.select_dtypes(include=["category"]).columns

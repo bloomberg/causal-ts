@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from .result import CausalResult
+from .utils.helpers import normalize_nullable_numeric
 
 
 def varlingam_discovery(df, max_lag=1, threshold=0.05):
@@ -494,6 +495,7 @@ def run_baseline(algorithm, df, max_lag=1, **kwargs):
         )
     if not isinstance(df, pd.DataFrame):
         df = pd.DataFrame(np.asarray(df))
+    df = normalize_nullable_numeric(df)
     values = df.to_numpy(dtype=float)
     if not np.isfinite(values).all():
         raise ValueError(

@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from .._warnings import external_stacklevel
+from ..utils.helpers import normalize_nullable_numeric
 from .lag_selection import (
     compute_lag_importance,
     compute_lag_pvalues,
@@ -1188,6 +1189,7 @@ def run_cedar(
         Includes ``ar_order`` (col index → detected AR order) and
         ``ar_violations`` (variable names with AR order ≥ 2).
     """
+    df = normalize_nullable_numeric(df)
     algo = Cedar(
         df=df,
         ci_test=ci_test,

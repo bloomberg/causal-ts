@@ -16,6 +16,7 @@ import torch
 
 from .._warnings import external_stacklevel
 from ..ci_tests.kci_gpu import apply_H, rbf_kernel_gpu
+from ..utils.helpers import normalize_nullable_numeric
 from .ancestral import count_c_cols
 from .meek import completes_forbidden_path, meek, reaches
 from .result import CdnotsResult
@@ -1341,6 +1342,7 @@ def run_cdnots(
     fact with ``result.to_binary(undirected=...)``, or losslessly with
     ``result.to_marks()``.
     """
+    df = normalize_nullable_numeric(df)
     disc_out = cdnots_discovery(
         df=df,
         indep_test=indep_test,
@@ -1555,6 +1557,7 @@ def run_cdnots_plus(
     ``result.to_binary(undirected="bidirected")``, or losslessly with
     ``result.to_marks()``.
     """
+    df = normalize_nullable_numeric(df)
     validate_priority(priority)
     validate_majority_gamma(majority_gamma)
     if lag0_orient not in (None, "lingam"):
