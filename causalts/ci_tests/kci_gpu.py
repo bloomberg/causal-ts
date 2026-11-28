@@ -8,6 +8,13 @@ from scipy.stats import gamma
 from .cit_test import CIT_Base
 
 
+def _is_constant_t(x):
+    """Torch twin of ``cit_test.is_constant``: compares on the device, so a
+    query moves one boolean to the host instead of the tested columns."""
+    x = x.reshape(x.shape[0], -1)
+    return x.numel() > 0 and bool((x.amax(dim=0) == x.amin(dim=0)).all())
+
+
 def normalize_gpu(a):
     """
     Normalize a tensor by subtracting the mean and dividing by the standard deviation.
@@ -279,6 +286,10 @@ def kci_cind(
             uu.T, uu
         )  # torch.einsum("ij,ji->i", uu.T, uu)  # diagonal(uu.T @ uu)
     eig_uu = torch.linalg.eigvalsh(uu_prod)
+    if eig_uu.numel() == 0:
+        # Kxz or Kyz kept no eigenvalue (a constant variable): there is no
+        # dependence to detect.
+        return 1.0, 0.0
     eig_uu = eig_uu[torch.argwhere(eig_uu > torch.max(eig_uu) * thresh).ravel()]
 
     if approx == "bootstrap":
@@ -448,6 +459,10 @@ class KCIGPU(CIT_Base):
                 self.pvalue_cache[combined_hash] = (p, stat)
                 return p, stat
             data_t = self.data_torch[torch.from_numpy(mask).to(self.device)]
+        if _is_constant_t(data_t[:, X]) or _is_constant_t(data_t[:, Y]):
+            p, stat = 1.0, 0.0
+            self.pvalue_cache[combined_hash] = (p, stat)
+            return p, stat
 
         X, Y, condition_set = self._canonical_query(X, Y, condition_set)
         seed = self._test_seed(cache_key)

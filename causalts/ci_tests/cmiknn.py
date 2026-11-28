@@ -15,6 +15,7 @@ import numpy as np
 from numba import jit
 from scipy import spatial, special
 
+from .cit_test import is_constant
 from .independence_tests_base import CondIndTest
 
 
@@ -735,6 +736,8 @@ class CMIKNN(CMIknn):
             y = y.reshape(-1, 1)
         if z is not None and len(z.shape) == 1:
             z = z.reshape(-1, 1)
+        if is_constant(x) or is_constant(y):
+            return 1.0, 0.0
         val, pval = super().run_test_raw(x, y, z)
         return pval, val
 

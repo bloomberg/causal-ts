@@ -59,6 +59,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `kci`, `cmiknn`, `cmiknn-gpu` and `cmiknn-mixed-gpu` return `p = 1` (statistic 0)
+  when a tested variable is constant on the rows used, including after NaN rows are
+  dropped. `kci` raised `RuntimeError` for it when conditioning, and the k-NN tests
+  returned a seed-dependent p-value, sometimes 0. A constant conditioning column, or
+  one constant component of a multivariate X or Y, still runs the full test.
 * `detect_confounded_clusters` (and so `check_tetrads`) tested the same tetrad
   twice and never tested `s02*s13 - s03*s12`, so a quartet could be reported as
   vanishing when that tetrad was significant, and the result depended on column

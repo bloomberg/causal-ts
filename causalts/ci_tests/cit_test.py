@@ -56,6 +56,21 @@ def reject_inf(data, X, Y, condition_set, name):
         raise ValueError(f"{name}: the tested columns contain infinite values")
 
 
+def is_constant(x):
+    """True when a tested variable takes a single value on the rows used.
+
+    ``x`` is one column or a (samples, dim) block; a multivariate variable is
+    constant only when every component is. The range is compared with zero,
+    so a constant such as 0.1 is caught (its centred values or variance can
+    leave round-off) and any represented variation counts. A constant is
+    independent of everything: tests return p = 1 for it instead of feeding
+    it to kernel or neighbour computations that crash or give noise.
+    """
+    x = np.asarray(x)
+    x = x.reshape(len(x), -1)
+    return x.size > 0 and bool((x.max(axis=0) == x.min(axis=0)).all())
+
+
 class CIT_Base(object):
     """Unified CIT_Base (consolidated from former cit_test and cit_base).
 
