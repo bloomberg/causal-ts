@@ -161,11 +161,64 @@ class CausalResult:
         return wrap_graph(self.cg_tig, self._df, self.var_names)
 
     def estimate_effect(self, treatment, outcome, treatment_lag=1, **kwargs):
+        """Estimate the causal effect of treatment(t - lag) on outcome(t).
+
+        Parameters
+        ----------
+        treatment : str
+            Treatment variable name.
+        outcome : str
+            Outcome variable name.
+        treatment_lag : int, default 1
+            Lag of the treatment in time steps.
+        **kwargs
+            Passed to :func:`causalts.effects.effect.estimate_effect`, e.g.
+            ``method``, ``confidence_intervals`` or ``n_bootstraps``.
+
+        Returns
+        -------
+        DoWhy estimate object
+            The estimated effect.
+
+        Notes
+        -----
+        Requires DoWhy (``pip install causalts[dowhy]``).
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.estimate_effect
+        """
         return self._bridge().estimate_effect(
             treatment, outcome, treatment_lag, **kwargs
         )
 
     def fit_scm(self, mechanism_type="auto", force=False):
+        """Fit a structural causal model (SCM) to this result's graph.
+
+        The fitted model is cached on the result per ``mechanism_type``. Later
+        calls with the same ``mechanism_type`` return the cached model without
+        refitting, unless ``force=True``.
+
+        Parameters
+        ----------
+        mechanism_type : str, default "auto"
+            Mechanism type for the fit.
+        force : bool, default False
+            Refit even if a model is cached for ``mechanism_type``.
+
+        Returns
+        -------
+        tuple
+            ``(scm, dag, lagged_df)``.
+
+        Notes
+        -----
+        Requires DoWhy (``pip install causalts[dowhy]``).
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.fit_scm
+        """
         if not force and mechanism_type in self._scm_cache:
             return self._scm_cache[mechanism_type]
         result = self._bridge().fit_scm(mechanism_type=mechanism_type)
@@ -173,12 +226,66 @@ class CausalResult:
         return result
 
     def counterfactual(self, intervention, target, mechanism_type="auto"):
+        """Estimate counterfactual values for target under do(intervention).
+
+        Fits the SCM automatically if not already cached (see :meth:`fit_scm`).
+
+        Parameters
+        ----------
+        intervention : dict
+            Dict of {node: value}, e.g. ``{"X0_lag1": 0.0}``.
+        target : str
+            Current-time variable to query, e.g. ``"X2"``.
+        mechanism_type : str, default "auto"
+            Passed to :meth:`fit_scm`.
+
+        Returns
+        -------
+        pd.Series
+            Counterfactual values for ``target``, one per row of the lag-embedded data.
+
+        Notes
+        -----
+        Requires DoWhy (``pip install causalts[dowhy]``).
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.counterfactual
+        """
         from .effects.scm import counterfactual
 
         scm, _, lagged_df = self.fit_scm(mechanism_type=mechanism_type)
         return counterfactual(scm, lagged_df, intervention=intervention, target=target)
 
     def attribute_anomaly(self, anomaly, target, mechanism_type="auto", n_samples=2000):
+        """Attribute an anomaly in target to its upstream causes.
+
+        Fits the SCM automatically if not already cached (see :meth:`fit_scm`).
+
+        Parameters
+        ----------
+        anomaly : pd.Series or pd.DataFrame
+            Anomalous observation(s).
+        target : str
+            Variable to explain, e.g. ``"X2"``.
+        mechanism_type : str, default "auto"
+            Passed to :meth:`fit_scm`.
+        n_samples : int, default 2000
+            Monte Carlo samples for Shapley attribution.
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns ``[node, variable, lag, mean_attribution]``.
+
+        Notes
+        -----
+        Requires DoWhy (``pip install causalts[dowhy]``).
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.attribute_anomaly
+        """
         from .effects.root_cause import attribute_anomaly
 
         scm, _, lagged_df = self.fit_scm(mechanism_type=mechanism_type)
@@ -187,51 +294,381 @@ class CausalResult:
         )
 
     def falsify(self, **kwargs):
+        """Test whether the graph is consistent with the data's independence structure.
+
+        No ground truth required. Deprecated in favour of
+        :meth:`validate_transition_graph`, which reads the lag embedding correctly.
+
+        Parameters
+        ----------
+        **kwargs
+            Passed to :func:`causalts.effects.validate.falsify_graph`, e.g.
+            ``significance_level``, ``n_permutations`` or ``suggestions``.
+
+        Returns
+        -------
+        dict
+            Falsification results.
+
+        Notes
+        -----
+        Requires DoWhy (``pip install causalts[dowhy]``).
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.falsify
+        """
         return self._bridge().falsify(**kwargs)
 
     def validate_transition_graph(self, **kwargs):
+        """Test the local Markov condition at every current-time node.
+
+        Does not need DoWhy.
+
+        Parameters
+        ----------
+        **kwargs
+            Passed to :func:`causalts.effects.validate.validate_transition_graph`,
+            e.g. ``significance_level`` or ``include_c``.
+
+        Returns
+        -------
+        TransitionValidationResult
+            Test results, including ``rejected`` and ``rejected_nodes``.
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.validate_transition_graph
+        """
         return self._bridge().validate_transition_graph(**kwargs)
 
     def history_sufficiency(self, extra_lags=2, **kwargs):
+        """Test whether history older than the graph's max lag still informs.
+
+        Does not need DoWhy.
+
+        Parameters
+        ----------
+        extra_lags : int, default 2
+            Number of lags beyond the graph's max lag to test.
+        **kwargs
+            Passed to :func:`causalts.effects.validate.history_sufficiency`,
+            e.g. ``significance_level``.
+
+        Returns
+        -------
+        HistorySufficiencyResult
+            Test results for each variable.
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.history_sufficiency
+        """
         return self._bridge().history_sufficiency(extra_lags=extra_lags, **kwargs)
 
     def to_dowhy_transition(self, **kwargs):
+        """Export the one-step transition graph and its lag-embedded data.
+
+        Does not need DoWhy: it only builds the inputs for it.
+
+        Parameters
+        ----------
+        **kwargs
+            Passed to :func:`causalts.effects.export.build_transition_artifacts`,
+            e.g. ``include_c`` or ``cycle_resolution``.
+
+        Returns
+        -------
+        DoWhyArtifacts
+            The graph and data to pass to DoWhy's ``gcm.StructuralCausalModel``.
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.to_dowhy_transition
+        """
         return self._bridge().to_dowhy_transition(**kwargs)
 
     def to_dowhy_identification(self, treatment, outcome, treatment_lag=1, **kwargs):
+        """Export an unrolled graph and data frame for one effect query.
+
+        Does not need DoWhy: it only builds the inputs for it.
+
+        Parameters
+        ----------
+        treatment : str
+            Treatment variable name.
+        outcome : str
+            Outcome variable name.
+        treatment_lag : int, default 1
+            Lag of the treatment in time steps.
+        **kwargs
+            Passed to :func:`causalts.effects.export.build_identification_artifacts`,
+            e.g. ``include_c`` or ``cycle_resolution``.
+
+        Returns
+        -------
+        DoWhyArtifacts
+            The unrolled graph and data for the query.
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.to_dowhy_identification
+        """
         return self._bridge().to_dowhy_identification(
             treatment, outcome, treatment_lag=treatment_lag, **kwargs
         )
 
     def refute_effect(self, treatment, outcome, treatment_lag=1, **kwargs):
+        """Stress-test an estimated effect with one of DoWhy's refuters.
+
+        Parameters
+        ----------
+        treatment : str
+            Treatment variable name.
+        outcome : str
+            Outcome variable name.
+        treatment_lag : int, default 1
+            Lag of the treatment in time steps.
+        **kwargs
+            Passed to :func:`causalts.effects.validate.refute_effect`, e.g.
+            ``method`` or ``estimation_method``.
+
+        Returns
+        -------
+        dict
+            Refutation results.
+
+        Notes
+        -----
+        Requires DoWhy (``pip install causalts[dowhy]``).
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.refute_effect
+        """
         return self._bridge().refute_effect(
             treatment, outcome, treatment_lag=treatment_lag, **kwargs
         )
 
     def sensitivity_analysis(self, treatment, outcome, treatment_lag=1, **kwargs):
+        """How strong would an omitted confounder have to be to overturn the effect?
+
+        Parameters
+        ----------
+        treatment : str
+            Treatment variable name.
+        outcome : str
+            Outcome variable name.
+        treatment_lag : int, default 1
+            Lag of the treatment in time steps.
+        **kwargs
+            Passed to :func:`causalts.effects.validate.sensitivity_analysis`, e.g.
+            ``simulation_method`` or ``estimation_method``.
+
+        Returns
+        -------
+        dict
+            Sensitivity results.
+
+        Notes
+        -----
+        Requires DoWhy (``pip install causalts[dowhy]``).
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.sensitivity_analysis
+        """
         return self._bridge().sensitivity_analysis(
             treatment, outcome, treatment_lag=treatment_lag, **kwargs
         )
 
     def refute_structure(self, **kwargs):
+        """Test structural assumptions: edge dependencies and local Markov conditions.
+
+        No ground truth required.
+
+        Parameters
+        ----------
+        **kwargs
+            Passed to :func:`causalts.effects.validate.refute_structure`, e.g.
+            ``significance_level`` or ``include_c``.
+
+        Returns
+        -------
+        pd.DataFrame
+            One row per structural test.
+
+        Notes
+        -----
+        Requires DoWhy (``pip install causalts[dowhy]``).
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.refute_structure
+        """
         return self._bridge().refute_structure(**kwargs)
 
     def evaluate_model(self, mechanism_type="auto", **kwargs):
+        """Evaluate the fitted mechanisms: fit quality and invertibility.
+
+        No ground truth required.
+
+        Parameters
+        ----------
+        mechanism_type : str, default "auto"
+            Mechanism type for the fit.
+        **kwargs
+            Passed to :func:`causalts.effects.validate.evaluate_model`, e.g.
+            ``evaluate_overall_kl_divergence`` or ``evaluate_causal_structure``.
+
+        Returns
+        -------
+        dict
+            Evaluation results.
+
+        Notes
+        -----
+        Requires DoWhy (``pip install causalts[dowhy]``).
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.evaluate_model
+        """
         return self._bridge().evaluate_model(mechanism_type=mechanism_type, **kwargs)
 
     def arrow_strength(self, target, **kwargs):
+        """Quantify how strongly each parent influences a target.
+
+        Parameters
+        ----------
+        target : str
+            Target variable name.
+        **kwargs
+            Passed to :func:`causalts.effects.influence.arrow_strength`, e.g.
+            ``mechanism_type``.
+
+        Returns
+        -------
+        pd.DataFrame
+            One row per parent, with its ``strength``.
+
+        Notes
+        -----
+        Requires DoWhy (``pip install causalts[dowhy]``).
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.arrow_strength
+        """
         return self._bridge().arrow_strength(target, **kwargs)
 
     def causal_influence(self, target, **kwargs):
+        """Shapley decomposition of target's variability by upstream noise sources.
+
+        Parameters
+        ----------
+        target : str
+            Target variable name.
+        **kwargs
+            Passed to :func:`causalts.effects.influence.causal_influence`, e.g.
+            ``mechanism_type`` or ``num_training_samples``.
+
+        Returns
+        -------
+        pd.DataFrame
+            Share of the target's variability from each upstream noise source.
+
+        Notes
+        -----
+        Requires DoWhy (``pip install causalts[dowhy]``).
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.causal_influence
+        """
         return self._bridge().causal_influence(target, **kwargs)
 
     def parent_relevance(self, target, **kwargs):
+        """Rank direct parents of target by explanatory power.
+
+        Parameters
+        ----------
+        target : str
+            Target variable name.
+        **kwargs
+            Passed to :func:`causalts.effects.influence.parent_relevance`, e.g.
+            ``mechanism_type``.
+
+        Returns
+        -------
+        pd.DataFrame
+            One row per parent, plus a noise entry.
+
+        Notes
+        -----
+        Requires DoWhy (``pip install causalts[dowhy]``).
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.parent_relevance
+        """
         return self._bridge().parent_relevance(target, **kwargs)
 
     def distribution_change(self, data_new, target, **kwargs):
+        """Identify which upstream mechanisms changed between two data sets.
+
+        Parameters
+        ----------
+        data_new : pd.DataFrame
+            New data to compare against this result's data.
+        target : str
+            Target variable name.
+        **kwargs
+            Passed to :func:`causalts.effects.influence.distribution_change`, e.g.
+            ``mechanism_type`` or ``robust``.
+
+        Returns
+        -------
+        pd.DataFrame
+            One row per upstream mechanism.
+
+        Notes
+        -----
+        Requires DoWhy (``pip install causalts[dowhy]``).
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.distribution_change
+        """
         return self._bridge().distribution_change(data_new, target, **kwargs)
 
     def summary(self, mechanism_type="linear", top_k=5):
+        """Print a one-page diagnostic report of the discovered graph.
+
+        Prints edge counts, transition-structure validation and arrow strength
+        for the most-connected node.
+
+        Parameters
+        ----------
+        mechanism_type : str, default "linear"
+            Passed to the arrow-strength step.
+        top_k : int, default 5
+            Number of strongest edges to show.
+
+        Returns
+        -------
+        dict
+            Computed metrics, including ``"transition_validation"`` when that step runs.
+
+        Notes
+        -----
+        The arrow-strength section requires DoWhy (``pip install causalts[dowhy]``).
+        If it fails, the section is skipped and the report says so.
+
+        See Also
+        --------
+        causalts.effects.wrap.WrappedGraph.summary
+        """
         return self._bridge().summary(mechanism_type=mechanism_type, top_k=top_k)
 
     # ------------------------------------------------------------------
