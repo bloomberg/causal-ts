@@ -59,6 +59,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+* `discover --json` listed the C node as `C<index>` (which could clash with a real
+  column) and counted its links in `diagnostics`. C-node edges now take the result's
+  `c_node_names` (made unique against the columns) and carry `"c_node": true`, and
+  `diagnostics` covers the edges between data variables, with the C links summarised
+  as `nonstationary_vars`. `edges_from_graph` and `diagnostics_from_graph` take a new
+  keyword-only `c_names` for this; without it their output is unchanged.
 * `detect_confounded_clusters` (and so `check_tetrads`) tested the same tetrad
   twice and never tested `s02*s13 - s03*s12`, so a quartet could be reported as
   vanishing when that tetrad was significant, and the result depended on column

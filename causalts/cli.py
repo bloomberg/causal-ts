@@ -1232,6 +1232,9 @@ def discover(
         )
         impute = None
 
+    # C-node names of the branch's result graph; None when it has no C columns
+    # (GRACE and the others export the observed variables only).
+    c_node_names = None
     if algorithm in ("cdnots", "cdnots+"):
         label = "CDNOTS+" if algorithm == "cdnots+" else "CDNOTS"
         _log(ctx, f"Running {label}...")
@@ -1260,6 +1263,8 @@ def discover(
 
         np.save(os.path.join(outdir, "estimated_graph.npy"), res.cg_tig)
         summary["output_files"]["graph"] = "estimated_graph.npy"
+        if res.cg_tig.shape[0] > len(var_name_list):
+            c_node_names = list(res.c_node_names or [])
         summary["include_C"] = include_c
         summary["lag_list"] = lag_list_parsed
         if algorithm == "cdnots":
@@ -1333,6 +1338,8 @@ def discover(
         graph = cedar_result.cg_tig
         np.save(os.path.join(outdir, "estimated_graph.npy"), graph)
         summary["output_files"]["graph"] = "estimated_graph.npy"
+        if graph.shape[0] > len(var_name_list):
+            c_node_names = list(cedar_result.c_node_names or [])
 
         if cedar_result.val_matrix is not None:
             np.save(os.path.join(outdir, "val_matrix.npy"), cedar_result.val_matrix)
@@ -1707,8 +1714,14 @@ def discover(
         _g = np.load(_graph_path)
         _pv_path = os.path.join(outdir, "pvalues.npy")
         _pv = np.load(_pv_path) if os.path.exists(_pv_path) else None
-        summary["edges"] = edges_from_graph(_g, var_name_list, _pv)
-        summary["diagnostics"] = diagnostics_from_graph(_g, var_name_list)
+        # Edges touching a C node are labelled and flagged; the diagnostics
+        # cover the edges between data variables.
+        summary["edges"] = edges_from_graph(
+            _g, var_name_list, _pv, c_names=c_node_names
+        )
+        summary["diagnostics"] = diagnostics_from_graph(
+            _g, var_name_list, c_names=c_node_names
+        )
         if is_tigramite:
             # cg_tig renders LPCMCI's o-> (a possible cause) as directed, keeps
             # lagged o-o / x-x, and leaves out lag-0 o-o / x-x, <-> and conflict
